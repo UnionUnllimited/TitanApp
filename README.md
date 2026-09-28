@@ -13,7 +13,7 @@
                                   │  (или App Link https://sub.ваш-домен/<shortUuid>)
                                   ▼
             приложение проверяет домен (whitelist) → качает подписку
-            User-Agent из titan.userAgent + x-hwid, x-device-os, …
+            User-Agent: Xray (временно) + x-hwid, x-device-os, … + x-hwid, x-device-os, …
                                   ▼
           Remnawave отдаёт Xray JSON → список локаций + заголовки
           (profile-title, subscription-userinfo, support-url, announce, …)
@@ -49,7 +49,7 @@ titan.websiteUrl=https://titanvps.ru
 ## Настройка Remnawave
 
 1. **Формат ответа.** В правилах ответа подписки (Subscription → Response Rules) добавьте правило:
-   если `User-Agent` совпадает с `titan.userAgent` (сейчас `Xray`), отдавать **Xray JSON**. Тогда в приложение придут
+   если `User-Agent` содержит `TitanVPS` (пока приложение временно отправляет `Xray`), отдавать **Xray JSON**. Тогда в приложение придут
    полные конфиги с вашей маршрутизацией. Если правила нет, приложение разберёт и обычные
    `vless://` ссылки в base64, но маршрутизация тогда будет стандартная: локальные сети напрямую,
    всё остальное через VPN.

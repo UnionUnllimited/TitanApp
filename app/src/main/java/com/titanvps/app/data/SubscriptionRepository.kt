@@ -77,8 +77,9 @@ class SubscriptionRepository(private val context: Context) {
 
         val request = Request.Builder()
             .url(url)
-            // Remnawave response rules match on this (titan.userAgent in gradle.properties).
-            .header("User-Agent", BuildConfig.USER_AGENT)
+            // TODO: temporary. Switch to our own UA (e.g. "TitanVPS/<version>") once a
+            //  Remnawave response rule for it is set up.
+            .header("User-Agent", "Xray")
             .header("Accept", "application/json, text/plain, */*")
             // Remnawave HWID device limit headers.
             .header("x-hwid", hwid())
