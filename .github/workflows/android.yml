@@ -54,3 +54,16 @@ jobs:
         with:
           name: TitanVPS-debug
           path: app/build/outputs/apk/debug/*.apk
+
+      # Prebuilt core + geo files for local builds in Android Studio
+      # (unzip into the project root, no Go/NDK needed on your machine).
+      - name: Pack native dependencies
+        run: |
+          mkdir -p deps/app/libs deps/app/src/main/assets
+          cp app/libs/libXray.aar deps/app/libs/
+          cp app/src/main/assets/*.dat deps/app/src/main/assets/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TitanVPS-deps
+          path: deps/

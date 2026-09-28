@@ -82,6 +82,10 @@ titan.websiteUrl=https://titanvps.ru
 ./gradlew testDebugUnitTest assembleDebug
 ```
 
+**В Android Studio без Go и NDK.** Скачайте из последнего запуска GitHub Actions архив
+**TitanVPS-deps** и распакуйте его в корень проекта. Он положит `app/libs/libXray.aar`
+и `app/src/main/assets/*.dat`. После этого достаточно нажать Run ▶.
+
 Без локального окружения APK собирает GitHub Actions (`.github/workflows/android.yml`),
 результат лежит в артефакте **TitanVPS-debug**.
 
