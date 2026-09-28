@@ -77,8 +77,8 @@ class SubscriptionRepository(private val context: Context) {
 
         val request = Request.Builder()
             .url(url)
-            // Configure a Remnawave response rule for this User-Agent → Xray JSON.
-            .header("User-Agent", "TitanVPS/${BuildConfig.VERSION_NAME} (Android)")
+            // Remnawave response rules match on this (titan.userAgent in gradle.properties).
+            .header("User-Agent", BuildConfig.USER_AGENT)
             .header("Accept", "application/json, text/plain, */*")
             // Remnawave HWID device limit headers.
             .header("x-hwid", hwid())
@@ -94,9 +94,9 @@ class SubscriptionRepository(private val context: Context) {
                 }
                 when {
                     resp.code == 404 || resp.code == 403 ->
-                        throw SubscriptionException("Подписка не найдена или отключена (${resp.code})")
+                        throw SubscriptionException("Подписка не найдена или отключена (${resp.code}, ${resp.request.url.host})")
                     !resp.isSuccessful ->
-                        throw SubscriptionException("Сервер подписки недоступен (${resp.code})")
+                        throw SubscriptionException("Сервер подписки недоступен (${resp.code}, ${resp.request.url.host})")
                 }
                 SubscriptionHeaders.parse { resp.header(it) } to resp.body.string()
             }
