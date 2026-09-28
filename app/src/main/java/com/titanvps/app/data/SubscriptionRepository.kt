@@ -92,7 +92,7 @@ class SubscriptionRepository(private val context: Context) {
                 }
                 when {
                     resp.code == 404 || resp.code == 403 ->
-                        throw SubscriptionException("Подписка не найдена или отключена")
+                        throw SubscriptionException("Подписка не найдена или отключена (${resp.code})")
                     !resp.isSuccessful ->
                         throw SubscriptionException("Сервер подписки недоступен (${resp.code})")
                 }
