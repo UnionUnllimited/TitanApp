@@ -104,14 +104,25 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             val sub = subscription
-            if (sub == null) WelcomeScreen(busy) else HomeScreen(viewModel, sub, busy, onConnect)
+            if (sub == null) WelcomeScreen(viewModel, busy) else HomeScreen(viewModel, sub, busy, onConnect)
         }
     }
 }
 
 @Composable
-private fun WelcomeScreen(busy: Boolean) {
+private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
     val context = LocalContext.current
+    var showLogin by remember { mutableStateOf(false) }
+
+    if (showLogin) {
+        LoginScreen(
+            finder = viewModel.linkFinder,
+            onSubscription = { url -> showLogin = false; viewModel.activate(url) },
+            onClose = { showLogin = false },
+        )
+        return
+    }
+
     Column(
         Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -122,7 +133,7 @@ private fun WelcomeScreen(busy: Boolean) {
         Text("TitanVPS", fontSize = 32.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Войдите в личный кабинет через Telegram или почту и нажмите «Открыть в TitanVPS»",
+            "Войдите через почту или Telegram — подписка подключится автоматически",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -130,7 +141,7 @@ private fun WelcomeScreen(busy: Boolean) {
         if (busy) {
             CircularProgressIndicator()
         } else {
-            GradientButton("Войти", Icons.AutoMirrored.Filled.Login) { context.openUrl(BuildConfig.WEBSITE_URL) }
+            GradientButton("Войти", Icons.AutoMirrored.Filled.Login) { showLogin = true }
             Spacer(Modifier.height(12.dp))
             OutlinedButton(
                 onClick = { context.openUrl(BuildConfig.TELEGRAM_URL) },

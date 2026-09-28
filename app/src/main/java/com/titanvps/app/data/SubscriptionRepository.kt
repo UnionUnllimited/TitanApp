@@ -22,7 +22,9 @@ class SubscriptionRepository(private val context: Context) {
     class SubscriptionException(message: String) : Exception(message)
 
     private val store = SubscriptionStore(context)
-    val deepLinks = DeepLinks(DeepLinks.parseHosts(BuildConfig.SUB_HOSTS))
+    private val hosts = DeepLinks.parseHosts(BuildConfig.SUB_HOSTS)
+    val deepLinks = DeepLinks(hosts)
+    val linkFinder = SubscriptionLinkFinder(deepLinks, hosts)
 
     private val _subscription = MutableStateFlow(store.load())
     val subscription: StateFlow<Subscription?> = _subscription.asStateFlow()
