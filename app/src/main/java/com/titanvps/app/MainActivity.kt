@@ -44,9 +44,19 @@ class MainActivity : ComponentActivity() {
         handleLink(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.onReturnFromBrowser()
+    }
+
     private fun handleLink(intent: Intent?) {
         val data = intent?.dataString ?: return
-        if (intent.action == Intent.ACTION_VIEW) viewModel.activate(data)
+        if (intent.action != Intent.ACTION_VIEW) return
+        if (data.startsWith("titanvps://auth-done", ignoreCase = true)) {
+            viewModel.onReturnFromBrowser()
+        } else {
+            viewModel.activate(data)
+        }
     }
 
     private fun connect() {

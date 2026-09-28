@@ -27,6 +27,8 @@
   в Remnawave. Приложение подставляет только свой TUN-inbound и перехват DNS.
 - **Лимит устройств (HWID).** Приложение отправляет заголовки `x-hwid` (ANDROID_ID),
   `x-device-os`, `x-ver-os` и `x-device-model`.
+- **Вход через Telegram или по почте** через свой сервер входа (`server/`), ссылку вставлять не нужно.
+- **Пинг** серверов (TCP) в списке локаций работает и при включённом VPN.
 - **Автовыбор** локации по пингу, плитка в шторке (Quick Settings), поддержка Always-on VPN.
 - **Экран подписки** показывает трафик, дату окончания, объявление (`announce`), кнопки
   «Продлить» и «Поддержка».
@@ -40,6 +42,7 @@ titan.subHosts=sub.titanvps.ru          # домены подписки, чер�
 titan.appLinkHost=sub.titanvps.ru       # домен для App Links
 titan.telegramUrl=https://t.me/titanvps_bot
 titan.websiteUrl=https://titanvps.ru
+titan.authUrl=https://auth.titanvps.ru  # сервер входа, см. server/README.md
 ```
 
 Иконка лежит в `app/src/main/res/drawable/ic_launcher_foreground.xml`, цвета в `ui/theme/Theme.kt`.
