@@ -34,7 +34,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,7 +47,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -68,8 +67,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.foundation.text.KeyboardOptions
 import com.titanvps.app.R
 import com.titanvps.app.ui.theme.BrandGradient
 import androidx.compose.ui.text.font.FontWeight
@@ -93,11 +90,6 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
     val busy by viewModel.busy.collectAsState()
     val message by viewModel.message.collectAsState()
     val snackbar = remember { SnackbarHostState() }
-    val context = LocalContext.current
-
-    LaunchedEffect(Unit) {
-        viewModel.openUrl.collect { context.openUrl(it) }
-    }
 
     LaunchedEffect(message) {
         message?.let {
@@ -112,18 +104,14 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             val sub = subscription
-            if (sub == null) WelcomeScreen(viewModel, busy) else HomeScreen(viewModel, sub, busy, onConnect)
+            if (sub == null) WelcomeScreen(busy) else HomeScreen(viewModel, sub, busy, onConnect)
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
+private fun WelcomeScreen(busy: Boolean) {
     val context = LocalContext.current
-    val tgWaiting by viewModel.telegramWaiting.collectAsState()
-    var showEmail by remember { mutableStateOf(false) }
-
     Column(
         Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -134,85 +122,24 @@ private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
         Text("TitanVPS", fontSize = 32.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Войдите, чтобы подключиться к своей подписке",
+            "Войдите в личный кабинет через Telegram или почту и нажмите «Открыть в TitanVPS»",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(32.dp))
-        when {
-            tgWaiting -> {
-                CircularProgressIndicator()
-                Spacer(Modifier.height(16.dp))
-                Text("Подтвердите вход в Telegram и вернитесь в приложение", textAlign = TextAlign.Center)
-                TextButton(onClick = viewModel::cancelTelegram) { Text("Отмена") }
-            }
-            busy -> CircularProgressIndicator()
-            else -> {
-                GradientButton("Войти через Telegram", Icons.AutoMirrored.Filled.Send, viewModel::loginWithTelegram)
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = { showEmail = true }, modifier = Modifier.fillMaxWidth().height(54.dp)) {
-                    Icon(Icons.Default.Email, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Войти по почте")
-                }
-                Spacer(Modifier.height(24.dp))
-                TextButton(onClick = { context.openUrl(BuildConfig.TELEGRAM_URL) }) {
-                    Text("Нет подписки? Оформить в боте")
-                }
-            }
-        }
-    }
-
-    if (showEmail) {
-        ModalBottomSheet(onDismissRequest = { showEmail = false; viewModel.changeEmail() }) {
-            EmailLogin(viewModel, busy)
-        }
-    }
-}
-
-@Composable
-private fun EmailLogin(viewModel: MainViewModel, busy: Boolean) {
-    val codeSentTo by viewModel.codeSentTo.collectAsState()
-    var email by remember { mutableStateOf("") }
-    var code by remember { mutableStateOf("") }
-
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-        Text("Вход по почте", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(16.dp))
-        val sentTo = codeSentTo
-        if (sentTo == null) {
-            OutlinedTextField(
-                value = email,
-                onValueChange = { email = it },
-                label = { Text("Email") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = { viewModel.requestEmailCode(email) },
-                enabled = !busy && email.contains('@'),
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-            ) { if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Text("Получить код") }
+        if (busy) {
+            CircularProgressIndicator()
         } else {
-            Text("Код отправлен на $sentTo", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            GradientButton("Войти", Icons.AutoMirrored.Filled.Login) { context.openUrl(BuildConfig.WEBSITE_URL) }
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = code,
-                onValueChange = { v -> code = v.filter { it.isDigit() }.take(6) },
-                label = { Text("Код из письма") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = { viewModel.verifyEmailCode(code) },
-                enabled = !busy && code.length == 6,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-            ) { if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Text("Войти") }
-            TextButton(onClick = { code = ""; viewModel.changeEmail() }) { Text("Изменить почту") }
+            OutlinedButton(
+                onClick = { context.openUrl(BuildConfig.TELEGRAM_URL) },
+                modifier = Modifier.fillMaxWidth().height(54.dp),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Send, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Открыть Telegram-бот")
+            }
         }
     }
 }

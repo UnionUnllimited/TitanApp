@@ -20,7 +20,6 @@ android {
         buildConfigField("String", "SUB_HOSTS", "\"${prop("titan.subHosts")}\"")
         buildConfigField("String", "TELEGRAM_URL", "\"${prop("titan.telegramUrl")}\"")
         buildConfigField("String", "WEBSITE_URL", "\"${prop("titan.websiteUrl")}\"")
-        buildConfigField("String", "AUTH_URL", "\"${prop("titan.authUrl")}\"")
         manifestPlaceholders["appLinkHost"] = prop("titan.appLinkHost")
 
         ndk {
