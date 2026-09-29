@@ -19,6 +19,7 @@ import com.titanvps.app.TitanApp
 import com.titanvps.app.core.XrayConfigs
 import com.titanvps.app.core.XrayCore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -31,9 +32,15 @@ class TitanVpnService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Mutex()
     private var tun: ParcelFileDescriptor? = null
+    private var watcherJob: Job? = null
+    private val watcher by lazy { WhitelistWatcher(this) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_SWITCH_BYPASS -> {
+                scope.launch { lock.withLock { switchToBypass(auto = false) } }
+                return START_STICKY
+            }
             ACTION_STOP -> {
                 scope.launch { lock.withLock { stopVpn() }; stopSelf() }
                 return START_NOT_STICKY
@@ -84,6 +91,7 @@ class TitanVpnService : VpnService() {
 
             VpnStatus.set(VpnState.Connected(server.name, System.currentTimeMillis()))
             startForegroundCompat(getString(R.string.notification_connected, server.name))
+            startWatcher(server)
         } catch (e: Exception) {
             stopVpn()
             VpnStatus.set(VpnState.Error(e.message ?: "Ошибка подключения"))
@@ -92,7 +100,59 @@ class TitanVpnService : VpnService() {
         }
     }
 
+    /** Watches for mobile whitelist mode while on a regular server. */
+    private fun startWatcher(server: com.titanvps.app.data.Server) {
+        watcherJob?.cancel()
+        val all = TitanApp.get(this).repository.subscription.value?.servers ?: return
+        watcherJob = scope.launch {
+            if (!watcher.awaitWhitelist(server, all)) return@launch
+            if (TitanApp.get(this@TitanVpnService).settings.autoBypass.value) {
+                // Separate job: restarting the VPN cancels this watcher.
+                scope.launch { lock.withLock { switchToBypass(auto = true) } }
+            } else {
+                notifyWhitelist(null)
+            }
+        }
+    }
+
+    private suspend fun switchToBypass(auto: Boolean) {
+        val repo = TitanApp.get(this).repository
+        val all = repo.subscription.value?.servers ?: return
+        val best = watcher.bestBypass(all) ?: return
+        repo.select(best.id)
+        startForegroundCompat(getString(R.string.notification_connecting))
+        startVpn()
+        if (auto) notifyWhitelist(best.name)
+        else getSystemService(NotificationManager::class.java).cancel(ALERT_ID)
+    }
+
+    /** [switchedTo] = null: offer a switch; otherwise tell which bypass server we moved to. */
+    private fun notifyWhitelist(switchedTo: String?) {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel(ALERT_CHANNEL_ID, "Ограничения мобильной сети", NotificationManager.IMPORTANCE_HIGH)
+        )
+        val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val builder = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_shield)
+            .setContentTitle("Мобильный интернет ограничен")
+            .setContentIntent(open)
+            .setAutoCancel(true)
+        if (switchedTo == null) {
+            val switch = PendingIntent.getService(
+                this, 3, Intent(this, TitanVpnService::class.java).setAction(ACTION_SWITCH_BYPASS), PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.setContentText("Похоже, включены белые списки. Переключитесь на «Обходы».")
+                .addAction(0, "Переключить на обход", switch)
+        } else {
+            builder.setContentText("Переключились на «$switchedTo»")
+        }
+        nm.notify(ALERT_ID, builder.build())
+    }
+
     private fun stopVpn() {
+        watcherJob?.cancel()
+        watcherJob = null
         if (tun != null) VpnStatus.set(VpnState.Disconnecting)
         XrayCore.stop()
         runCatching { tun?.close() }
@@ -137,6 +197,9 @@ class TitanVpnService : VpnService() {
     companion object {
         private const val ACTION_START = "com.titanvps.app.START"
         private const val ACTION_STOP = "com.titanvps.app.STOP"
+        private const val ACTION_SWITCH_BYPASS = "com.titanvps.app.SWITCH_BYPASS"
+        private const val ALERT_CHANNEL_ID = "whitelist"
+        private const val ALERT_ID = 2
         private const val CHANNEL_ID = "vpn"
         private const val NOTIFICATION_ID = 1
         private const val MTU = 1500

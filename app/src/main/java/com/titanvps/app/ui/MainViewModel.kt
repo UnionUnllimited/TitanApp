@@ -24,6 +24,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val selectedId = repo.selectedId
     val vpnState = VpnStatus.state
     val excludedApps = settings.excludedApps
+    val autoBypass = settings.autoBypass
+
+    fun setAutoBypass(enabled: Boolean) = settings.setAutoBypass(enabled)
 
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()

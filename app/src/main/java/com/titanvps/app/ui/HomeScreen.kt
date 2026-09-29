@@ -6,6 +6,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SupportAgent
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material3.Switch
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.TextButton
@@ -94,6 +96,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     val pingErrors by viewModel.pingErrors.collectAsState()
     var menu by remember { mutableStateOf(false) }
     var showApps by remember { mutableStateOf(false) }
+    val autoBypass by viewModel.autoBypass.collectAsState()
     var confirmReset by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf<Server?>(null) }
 
@@ -139,6 +142,12 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                                 text = { Text("Исключения приложений") },
                                 leadingIcon = { Icon(Icons.Default.Apps, null) },
                                 onClick = { menu = false; showApps = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Автопереход на обходы") },
+                                leadingIcon = { Icon(Icons.Default.SwapHoriz, null) },
+                                trailingIcon = { Switch(checked = autoBypass, onCheckedChange = null) },
+                                onClick = { viewModel.setAutoBypass(!autoBypass) },
                             )
                             DropdownMenuItem(
                                 text = { Text("Поддержка") },
