@@ -60,8 +60,28 @@ object XrayConfigs {
         val proxyTag = proxy.getString("tag")
         val name = cfg.optString("remarks").ifBlank { "Сервер ${index + 1}" }
         cfg.remove("remarks")
+        // Our TUN inbound replaces the config's inbounds; rules bound to those inbound
+        // tags (e.g. "socks") must follow, or the panel's routing never matches.
+        val inbounds = cfg.optJSONArray("inbounds")
+        val oldTags = (0 until (inbounds?.length() ?: 0))
+            .mapNotNull { inbounds!!.optJSONObject(it)?.optString("tag")?.takeIf { t -> t.isNotEmpty() } }
+            .toSet()
         cfg.remove("inbounds")
+        retargetInboundRules(cfg, oldTags)
         return Server(id = "json-$index-${name.hashCode()}", name = name, xrayJson = cfg.toString(), proxyTag = proxyTag)
+    }
+
+    private fun retargetInboundRules(cfg: JSONObject, oldTags: Set<String>) {
+        if (oldTags.isEmpty()) return
+        val rules = cfg.optJSONObject("routing")?.optJSONArray("rules") ?: return
+        for (i in 0 until rules.length()) {
+            val rule = rules.optJSONObject(i) ?: continue
+            val tags = rule.optJSONArray("inboundTag") ?: continue
+            val list = (0 until tags.length()).map { tags.getString(it) }
+            if (list.none { it in oldTags }) continue
+            val mapped = (list.filterNot { it in oldTags } + TUN_TAG).distinct()
+            rule.put("inboundTag", JSONArray(mapped))
+        }
     }
 
     private fun defaultConfig(proxy: JSONObject): JSONObject = JSONObject()

@@ -76,12 +76,7 @@ class SubscriptionRepository(private val context: Context) {
     private suspend fun fetch(url: String): Subscription = withContext(Dispatchers.IO) {
         if (!deepLinks.isAllowed(url)) throw SubscriptionException("Недопустимый адрес подписки")
 
-        // Remnawave serves Xray JSON (with the panel's routing rules) at /<key>/json
-        // regardless of User-Agent; fall back to the plain link if that's unavailable.
-        val (info, body) = runCatching { download(jsonVariant(url)) }
-            .getOrNull()
-            ?.takeIf { XrayConfigs.isXrayJson(it.second) }
-            ?: download(url)
+        val (info, body) = download(url)
 
         // Full Xray JSON (keeps server-side routing); anything else, or JSON we
         // can't use, goes through libXray's parser (links, base64, Xray JSON nodes).
@@ -133,14 +128,6 @@ class SubscriptionRepository(private val context: Context) {
         } catch (e: IOException) {
             throw SubscriptionException("Нет соединения с сервером подписки")
         }
-    }
-
-    /** https://host/sub/KEY?x → https://host/sub/KEY/json?x */
-    private fun jsonVariant(url: String): String {
-        val base = url.substringBefore('?').trimEnd('/')
-        val query = url.substringAfter('?', "")
-        val json = if (base.endsWith("/json")) base else "$base/json"
-        return if (query.isEmpty()) json else "$json?$query"
     }
 
     @SuppressLint("HardwareIds")

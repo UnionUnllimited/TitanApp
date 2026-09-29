@@ -78,4 +78,20 @@ class XrayConfigsTest {
         assertEquals("proxy", servers[0].proxyTag)
         assertEquals("proxy", JSONObject(servers[0].xrayJson).getJSONArray("outbounds").getJSONObject(0).getString("tag"))
     }
+
+    @Test
+    fun rulesBoundToOldInboundsFollowTun() {
+        val body = """{"remarks":"RU direct","inbounds":[{"tag":"socks","protocol":"socks"},{"tag":"http","protocol":"http"}],
+            "outbounds":[{"tag":"proxy","protocol":"vless"},{"tag":"direct","protocol":"freedom"}],
+            "routing":{"rules":[
+              {"type":"field","inboundTag":["socks","http"],"domain":["geosite:category-ru"],"outboundTag":"direct"},
+              {"type":"field","inboundTag":["api"],"outboundTag":"api"},
+              {"type":"field","ip":["geoip:ru"],"outboundTag":"direct"}]}}"""
+        val cfg = JSONObject(XrayConfigs.serversFromXrayJson(body)[0].xrayJson)
+        val rules = cfg.getJSONObject("routing").getJSONArray("rules")
+        assertEquals(XrayConfigs.TUN_TAG, rules.getJSONObject(0).getJSONArray("inboundTag").getString(0))
+        assertEquals(1, rules.getJSONObject(0).getJSONArray("inboundTag").length())
+        assertEquals("api", rules.getJSONObject(1).getJSONArray("inboundTag").getString(0))
+        assertFalse(rules.getJSONObject(2).has("inboundTag"))
+    }
 }
