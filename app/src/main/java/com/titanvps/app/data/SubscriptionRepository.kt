@@ -77,9 +77,8 @@ class SubscriptionRepository(private val context: Context) {
 
         val request = Request.Builder()
             .url(url)
-            // TODO: temporary. Switch to our own UA (e.g. "TitanVPS/<version>") once a
-            //  Remnawave response rule for it is set up.
-            .header("User-Agent", "Xray")
+            // Remnawave response rules match on this User-Agent.
+            .header("User-Agent", "TitanVPS/${BuildConfig.VERSION_NAME} (Android)")
             .header("Accept", "application/json, text/plain, */*")
             // Remnawave HWID device limit headers.
             .header("x-hwid", hwid())
