@@ -68,12 +68,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Personal cabinet: the panel's profile-web-page-url (the same link Happ opens with ⓘ).
+     * Personal cabinet: the panel's profile-web-page-url (the same link Happ opens with ⓘ),
+     * otherwise the Telegram bot.
      * Re-fetched first, since it can be a short-lived magic link.
      */
     fun openCabinet() = launchBusy {
         runCatching { repo.refresh() }
-        _openUrl.send(subscription.value?.info?.webPageUrl ?: BuildConfig.CABINET_URL)
+        _openUrl.send(subscription.value?.info?.webPageUrl ?: BuildConfig.TELEGRAM_URL)
     }
 
     fun disconnect() = TitanVpnService.stop(getApplication<Application>())

@@ -41,7 +41,6 @@
 titan.subHosts=api1.titanvps.su,api2.titanvps.online   # единственные разрешённые домены ключей
 titan.appLinkHost=sub.titanvps.ru       # домен для App Links
 titan.telegramUrl=https://t.me/titanvps_bot
-titan.websiteUrl=https://titanvps.ru
 ```
 
 Иконка лежит в `app/src/main/res/drawable/ic_launcher_foreground.xml`, цвета в `ui/theme/Theme.kt`.
