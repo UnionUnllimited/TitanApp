@@ -156,7 +156,7 @@ private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
 }
 
 @Composable
-private fun GradientButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+internal fun GradientButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -174,256 +174,21 @@ private fun GradientButton(text: String, icon: androidx.compose.ui.graphics.vect
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boolean, onConnect: () -> Unit) {
-    val context = LocalContext.current
-    val state by viewModel.vpnState.collectAsState()
-    val selectedId by viewModel.selectedId.collectAsState()
-    val pings by viewModel.pings.collectAsState()
-    val pinging by viewModel.pinging.collectAsState()
-    var showServers by remember { mutableStateOf(false) }
-    val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
-    var menu by remember { mutableStateOf(false) }
-
-    Column(
-        Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(R.drawable.logo), null, Modifier.size(36.dp))
-            Spacer(Modifier.width(10.dp))
-            Text(sub.info.title ?: "TitanVPS", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            IconButton(onClick = { viewModel.refresh() }, enabled = !busy) {
-                if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                else Icon(Icons.Default.Refresh, "Обновить")
-            }
-            Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Меню") }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Выйти из аккаунта") },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, null) },
-                        onClick = { menu = false; viewModel.logout() },
-                    )
-                }
-            }
-        }
-
-        sub.info.announce?.let {
-            Spacer(Modifier.height(12.dp))
-            Surface(shape = RoundedCornerShape(14.dp), color = Brand.copy(alpha = 0.15f), modifier = Modifier.fillMaxWidth()) {
-                Text(it, Modifier.padding(14.dp), fontSize = 14.sp)
-            }
-        }
-
-        Spacer(Modifier.height(40.dp))
-        ConnectButton(state) {
-            when (state) {
-                is VpnState.Connected, VpnState.Connecting -> viewModel.disconnect()
-                VpnState.Disconnecting -> Unit
-                else -> onConnect()
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-        StatusText(state)
-
-        Spacer(Modifier.height(36.dp))
-        Card(onClick = { viewModel.pingAll(); showServers = true }) {
-            Icon(Icons.Default.Public, null, tint = Brand)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Локация", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(selected?.name ?: "—", fontWeight = FontWeight.Medium)
-            }
-            selected?.let { pings[it.id] }?.let { PingLabel(it); Spacer(Modifier.width(8.dp)) }
-            Icon(Icons.Default.KeyboardArrowDown, null)
-        }
-
-        Spacer(Modifier.height(12.dp))
-        UsageCard(sub)
-
-        Spacer(Modifier.height(16.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
-                onClick = { context.openUrl(sub.info.webPageUrl ?: BuildConfig.WEBSITE_URL) },
-                modifier = Modifier.weight(1f).height(48.dp),
-            ) { Text("Продлить") }
-            OutlinedButton(
-                onClick = { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) },
-                modifier = Modifier.weight(1f).height(48.dp),
-            ) { Text("Поддержка") }
-        }
-    }
-
-    if (showServers) {
-        ModalBottomSheet(onDismissRequest = { showServers = false }) {
-            LazyColumn(Modifier.padding(bottom = 24.dp)) {
-                item {
-                    Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Локации", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        TextButton(onClick = viewModel::pingAll, enabled = !pinging) {
-                            if (pinging) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            else { Icon(Icons.Default.Bolt, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Пинг") }
-                        }
-                    }
-                }
-                items(sub.servers, key = { it.id }) { s ->
-                    ServerRow(s.name, pings[s.id], pinging && pings[s.id] == null, s.id == selected?.id, Icons.Default.Public) {
-                        viewModel.select(s.id); showServers = false
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ConnectButton(state: VpnState, onClick: () -> Unit) {
-    val color by animateColorAsState(
-        when (state) {
-            is VpnState.Connected -> Connected
-            VpnState.Connecting, VpnState.Disconnecting -> Brand.copy(alpha = 0.6f)
-            else -> Brand
-        },
-        label = "connect",
-    )
-    Box(
-        Modifier
-            .size(200.dp)
-            .clip(CircleShape)
-            .background(color.copy(alpha = 0.12f))
-            .then(
-                if (state is VpnState.Connected || state == VpnState.Connecting || state == VpnState.Disconnecting)
-                    Modifier.border(3.dp, color, CircleShape)
-                else Modifier.border(3.dp, BrandGradient, CircleShape)
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (state == VpnState.Connecting || state == VpnState.Disconnecting) {
-            CircularProgressIndicator(Modifier.size(200.dp), color = color, strokeWidth = 3.dp)
-        }
-        Icon(Icons.Default.PowerSettingsNew, "Подключить", tint = color, modifier = Modifier.size(84.dp))
-    }
-}
-
-@Composable
-private fun StatusText(state: VpnState) {
-    when (state) {
-        is VpnState.Connected -> {
-            var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-            LaunchedEffect(state.since) {
-                while (true) { now = System.currentTimeMillis(); delay(1000) }
-            }
-            Text("Защищено", color = Connected, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Text("${state.serverName} · ${formatDuration(now - state.since)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        VpnState.Connecting -> Text("Подключение…", fontSize = 20.sp)
-        VpnState.Disconnecting -> Text("Отключение…", fontSize = 20.sp)
-        VpnState.Disconnected -> Text("Не подключено", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        is VpnState.Error -> Text(state.message, fontSize = 16.sp, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-    }
-}
-
-@Composable
-private fun UsageCard(sub: Subscription) {
-    val info = sub.info
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Row {
-                Text("Трафик", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    if (info.totalBytes > 0) "${formatBytes(info.usedBytes)} / ${formatBytes(info.totalBytes)}"
-                    else "${formatBytes(info.usedBytes)} / ∞"
-                )
-            }
-            if (info.totalBytes > 0) {
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { (info.usedBytes.toFloat() / info.totalBytes).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            Row {
-                Text("Подписка до", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(formatExpiry(info.expireAt))
-            }
-        }
-    }
-}
-
-@Composable
-private fun Card(onClick: () -> Unit, content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick),
-    ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, content = content)
-    }
-}
-
-@Composable
-private fun ServerRow(
-    name: String,
-    ping: Long?,
-    pending: Boolean,
-    selected: Boolean,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = Brand)
-        Spacer(Modifier.width(16.dp))
-        Text(name, Modifier.weight(1f))
-        when {
-            pending -> {
-                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(12.dp))
-            }
-            ping != null -> {
-                PingLabel(ping)
-                Spacer(Modifier.width(12.dp))
-            }
-        }
-        if (selected) Icon(Icons.Default.Check, null, tint = Brand)
-    }
-}
-
-@Composable
-private fun PingLabel(ms: Long) {
-    Text(
-        if (ms >= 0) "$ms мс" else "таймаут",
-        fontSize = 13.sp,
-        color = when {
-            ms < 0 -> MaterialTheme.colorScheme.error
-            ms < 150 -> Connected
-            ms < 300 -> Color(0xFFF59E0B)
-            else -> MaterialTheme.colorScheme.error
-        },
-    )
-}
-
-private fun android.content.Context.openUrl(url: String) {
+internal fun android.content.Context.openUrl(url: String) {
     runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
 
-private fun formatDuration(ms: Long): String {
+internal fun formatDuration(ms: Long): String {
     val s = TimeUnit.MILLISECONDS.toSeconds(ms)
     return "%02d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
 }
 
-private fun formatBytes(bytes: Long): String {
+internal fun formatBytes(bytes: Long): String {
     val gb = bytes / 1024.0 / 1024.0 / 1024.0
     return if (gb >= 1) "%.1f ГБ".format(gb) else "%.0f МБ".format(bytes / 1024.0 / 1024.0)
 }
 
-private fun formatExpiry(expireAt: Long): String {
+internal fun formatExpiry(expireAt: Long): String {
     if (expireAt <= 0) return "бессрочно"
     val date = SimpleDateFormat("d MMM yyyy", Locale("ru")).format(Date(expireAt * 1000))
     val days = TimeUnit.SECONDS.toDays(expireAt - System.currentTimeMillis() / 1000)
