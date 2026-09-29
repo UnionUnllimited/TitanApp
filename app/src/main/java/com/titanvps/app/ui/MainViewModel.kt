@@ -80,7 +80,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _pinging.value = true
             _pings.value = emptyMap()
             try {
-                withTimeoutOrNull(90_000) {
+                withTimeoutOrNull(150_000) {
                     PingClient.ping(getApplication<Application>(), servers).collect { event ->
                         when (event) {
                             is PingClient.Event.Partial -> _pings.value = _pings.value + event.delays

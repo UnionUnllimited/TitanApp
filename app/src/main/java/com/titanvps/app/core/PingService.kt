@@ -34,7 +34,15 @@ class PingService : Service() {
                 var firstError: String? = null
                 // Small batches so results show up progressively, like in Happ.
                 for (chunk in items.chunked(CHUNK)) {
-                    val pings = XrayCore.ping(chunk.map { it.getString("json") to it.getString("tag") }, TIMEOUT_SEC)
+                    val batch = chunk.map { it.getString("json") to it.getString("tag") }
+                    // Two passes: the first warms up DNS/routes on the server side, the best
+                    // successful value counts (a single cold request overstates latency).
+                    val first = XrayCore.ping(batch, TIMEOUT_SEC)
+                    val second = XrayCore.ping(batch, TIMEOUT_SEC)
+                    val pings = first.zip(second).map { (a, b) ->
+                        val ok = listOf(a.first, b.first).filter { it >= 0 }
+                        if (ok.isNotEmpty()) ok.min() to null else a
+                    }
                     anyOk = anyOk || pings.any { it.first >= 0 }
                     if (firstError == null) firstError = pings.firstNotNullOfOrNull { it.second }
                     receiver?.send(RESULT_PARTIAL, Bundle().apply {
@@ -67,7 +75,7 @@ class PingService : Service() {
         const val KEY_ERROR = "error"
         const val RESULT_PARTIAL = 1
         const val RESULT_DONE = 0
-        private const val TIMEOUT_SEC = 5
-        private const val CHUNK = 4
+        private const val TIMEOUT_SEC = 4
+        private const val CHUNK = 6
     }
 }
