@@ -20,6 +20,17 @@ class ServerGroupsTest {
     }
 
     @Test
+    fun everythingAfterFirstBypassIsBypass() {
+        val all = listOf(s("🇦🇱 БЕЗЛИМИТНЫЕ"), s("🇫🇮 Финляндия"), s("🇷🇺 Обход 1"), s("🇷🇺 Обход 2"),
+            s("🇦🇱 ⚡ АВТО | Самые быстрые"), s("🇦🇱 СЕРВЕР ДЛЯ"), s("🇦🇱 ОБНОВЛЕНИЯ ПОДПИСКИ"))
+        val groups = ServerGroups.split(all).toMap()
+        assertEquals(listOf("🇦🇱 БЕЗЛИМИТНЫЕ", "🇫🇮 Финляндия"), groups[Group.SERVERS]!!.map { it.name })
+        assertEquals(5, groups[Group.BYPASS]!!.size)
+        assertEquals(Group.BYPASS, ServerGroups.groupOf(all.last(), all))
+        assertEquals(Group.SERVERS, ServerGroups.groupOf(all[1], all))
+    }
+
+    @Test
     fun emptyGroupsAreHidden() {
         assertEquals(listOf(Group.SERVERS), ServerGroups.split(listOf(s("Финляндия"))).map { it.first })
     }

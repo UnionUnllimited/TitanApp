@@ -5,12 +5,25 @@ object ServerGroups {
 
     enum class Group(val title: String) { SERVERS("Серверы"), BYPASS("Обходы") }
 
-    fun groupOf(server: Server): Group =
-        if (server.name.contains("обход", ignoreCase = true)) Group.BYPASS else Group.SERVERS
+    private fun isBypassName(server: Server) = server.name.contains("обход", ignoreCase = true)
+
+    /**
+     * The subscription lists regular servers first, then the bypass section. Everything
+     * from the first "обход" entry on (its own АВТО, info entries, …) is the bypass tab.
+     */
+    fun groupOf(server: Server, all: List<Server>): Group {
+        val first = all.indexOfFirst(::isBypassName)
+        val index = all.indexOfFirst { it.id == server.id }
+        return if (first >= 0 && index >= first) Group.BYPASS else Group.SERVERS
+    }
 
     /** Non-empty groups in display order. */
-    fun split(servers: List<Server>): List<Pair<Group, List<Server>>> =
-        Group.entries.map { g -> g to servers.filter { groupOf(it) == g } }.filter { it.second.isNotEmpty() }
+    fun split(servers: List<Server>): List<Pair<Group, List<Server>>> {
+        val first = servers.indexOfFirst(::isBypassName)
+        val bypass = if (first >= 0) servers.drop(first) else emptyList()
+        val regular = if (first >= 0) servers.take(first) else servers
+        return listOf(Group.SERVERS to regular, Group.BYPASS to bypass).filter { it.second.isNotEmpty() }
+    }
 
     /** Leading flag emoji (two regional indicators) and the rest of the name. */
     fun splitFlag(name: String): Pair<String?, String> {

@@ -90,7 +90,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
     val groups = remember(sub.servers) { ServerGroups.split(sub.servers) }
     var tab by rememberSaveable(sub.servers) {
-        mutableStateOf(selected?.let { ServerGroups.groupOf(it) } ?: groups.firstOrNull()?.first ?: Group.SERVERS)
+        mutableStateOf(selected?.let { ServerGroups.groupOf(it, sub.servers) } ?: groups.firstOrNull()?.first ?: Group.SERVERS)
     }
     val tabServers = groups.firstOrNull { it.first == tab }?.second ?: groups.firstOrNull()?.second.orEmpty()
 
