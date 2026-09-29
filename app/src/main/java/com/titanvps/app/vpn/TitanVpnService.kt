@@ -63,8 +63,9 @@ class TitanVpnService : VpnService() {
                 .addRoute("0.0.0.0", 0)
                 .addAddress("fdfe:dcba:9876::1", 126)
                 .addRoute("::", 0)
-                // Any address inside the tunnel works: port 53 is hijacked to Xray DNS.
-                .addDnsServer("1.1.1.1")
+                // Port 53 is hijacked to Xray DNS. A private address (not 1.1.1.1) so Chrome
+                // doesn't auto-upgrade to its own DoH and bypass the panel's DNS/routing.
+                .addDnsServer("172.19.0.2")
                 // Our own sockets (Xray, subscription fetch) bypass the tunnel → no loops.
                 .addDisallowedApplication(packageName)
                 .apply {

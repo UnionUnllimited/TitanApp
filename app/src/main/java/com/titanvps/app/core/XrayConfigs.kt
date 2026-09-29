@@ -15,6 +15,7 @@ object XrayConfigs {
 
     const val TUN_TAG = "tun-in"
     const val DNS_OUT_TAG = "dns-out"
+    private const val SNIFFING_KEY = "_titanSniffing"
     private const val PROXY_TAG = "proxy"
     private val SERVICE_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
 
@@ -66,6 +67,9 @@ object XrayConfigs {
         val oldTags = (0 until (inbounds?.length() ?: 0))
             .mapNotNull { inbounds!!.optJSONObject(it)?.optString("tag")?.takeIf { t -> t.isNotEmpty() } }
             .toSet()
+        // Keep the panel's sniffing settings for our TUN inbound (routeOnly etc.).
+        (0 until (inbounds?.length() ?: 0)).firstNotNullOfOrNull { inbounds!!.optJSONObject(it)?.optJSONObject("sniffing") }
+            ?.let { cfg.put(SNIFFING_KEY, it) }
         cfg.remove("inbounds")
         retargetInboundRules(cfg, oldTags)
         return Server(id = "json-$index-${name.hashCode()}", name = name, xrayJson = cfg.toString(), proxyTag = proxyTag)
@@ -141,6 +145,15 @@ object XrayConfigs {
     fun buildRunConfig(serverJson: String, tunFd: Int, assetDir: String, mtu: Int): String {
         val cfg = JSONObject(serverJson)
 
+        // The panel's sniffing if it had one. Default routeOnly=false: the destination
+        // becomes the sniffed domain, so "direct" re-resolves it and falls back to IPv4
+        // instead of dialing an unreachable IPv6 address (ERR_CONNECTION_CLOSED).
+        val sniffing = (cfg.remove(SNIFFING_KEY) as? JSONObject)?.put("enabled", true)
+            ?: JSONObject()
+                .put("enabled", true)
+                .put("destOverride", JSONArray().put("http").put("tls").put("quic"))
+                .put("routeOnly", false)
+
         cfg.put("env", (cfg.optJSONObject("env") ?: JSONObject())
             .put("xray.tun.fd", tunFd.toString())
             .put("xray.location.asset", assetDir))
@@ -150,10 +163,7 @@ object XrayConfigs {
                 .put("tag", TUN_TAG)
                 .put("protocol", "tun")
                 .put("settings", JSONObject().put("name", "titan0").put("mtu", mtu))
-                .put("sniffing", JSONObject()
-                    .put("enabled", true)
-                    .put("destOverride", JSONArray().put("http").put("tls").put("quic"))
-                    .put("routeOnly", true))
+                .put("sniffing", sniffing)
         ))
 
         if (!cfg.has("dns")) {

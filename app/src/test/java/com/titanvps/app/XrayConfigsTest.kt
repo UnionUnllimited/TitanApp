@@ -107,4 +107,19 @@ class XrayConfigsTest {
         assertEquals(listOf("bal", "bal-2"), XrayConfigs.pingTags(json, "bal", max = 2))
         assertEquals(listOf("proxy"), XrayConfigs.pingTags("""{"outbounds":[{"tag":"proxy","protocol":"vless"}]}""", "proxy"))
     }
+
+    @Test
+    fun tunUsesPanelSniffing() {
+        val body = """{"inbounds":[{"tag":"socks","protocol":"socks","sniffing":{"enabled":true,"destOverride":["http","tls","quic"],"routeOnly":false}}],
+            "outbounds":[{"tag":"proxy","protocol":"vless"}]}"""
+        val server = XrayConfigs.serversFromXrayJson(body)[0]
+        val run = JSONObject(XrayConfigs.buildRunConfig(server.xrayJson, 3, "/a", 1500))
+        val sniff = run.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing")
+        assertFalse(sniff.getBoolean("routeOnly"))
+        assertFalse(run.has("_titanSniffing"))
+        // Default without panel sniffing: routeOnly=false as well.
+        val plain = XrayConfigs.serversFromXrayJson("""{"outbounds":[{"tag":"proxy","protocol":"vless"}]}""")[0]
+        val run2 = JSONObject(XrayConfigs.buildRunConfig(plain.xrayJson, 3, "/a", 1500))
+        assertFalse(run2.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing").getBoolean("routeOnly"))
+    }
 }
