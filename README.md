@@ -13,7 +13,7 @@
                                   │  (или App Link https://sub.ваш-домен/<shortUuid>)
                                   ▼
             приложение проверяет домен (whitelist) → качает подписку
-            User-Agent: TitanVPS/x.y (Android) + x-hwid, x-device-os, … + x-hwid, x-device-os, …
+            User-Agent: TitanVPS/x.y (Android) + x-hwid, x-device-os, …
                                   ▼
           Remnawave отдаёт Xray JSON → список локаций + заголовки
           (profile-title, subscription-userinfo, support-url, announce, …)
