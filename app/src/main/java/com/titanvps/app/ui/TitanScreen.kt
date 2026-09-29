@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
@@ -263,12 +264,12 @@ private fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boolea
                         Text("Локации", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         TextButton(onClick = viewModel::pingAll, enabled = !pinging) {
                             if (pinging) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                            else { Icon(Icons.Default.Refresh, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Пинг") }
+                            else { Icon(Icons.Default.Bolt, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Пинг") }
                         }
                     }
                 }
                 items(sub.servers, key = { it.id }) { s ->
-                    ServerRow(s.name, pings[s.id], s.id == selected?.id, Icons.Default.Public) {
+                    ServerRow(s.name, pings[s.id], pinging && pings[s.id] == null, s.id == selected?.id, Icons.Default.Public) {
                         viewModel.select(s.id); showServers = false
                     }
                 }
@@ -368,6 +369,7 @@ private fun Card(onClick: () -> Unit, content: @Composable androidx.compose.foun
 private fun ServerRow(
     name: String,
     ping: Long?,
+    pending: Boolean,
     selected: Boolean,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     onClick: () -> Unit,
@@ -379,9 +381,15 @@ private fun ServerRow(
         Icon(icon, null, tint = Brand)
         Spacer(Modifier.width(16.dp))
         Text(name, Modifier.weight(1f))
-        ping?.let {
-            PingLabel(it)
-            Spacer(Modifier.width(12.dp))
+        when {
+            pending -> {
+                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+            }
+            ping != null -> {
+                PingLabel(ping)
+                Spacer(Modifier.width(12.dp))
+            }
         }
         if (selected) Icon(Icons.Default.Check, null, tint = Brand)
     }
@@ -390,10 +398,10 @@ private fun ServerRow(
 @Composable
 private fun PingLabel(ms: Long) {
     Text(
-        if (ms > 0) "$ms мс" else "нет связи",
+        if (ms >= 0) "$ms мс" else "таймаут",
         fontSize = 13.sp,
         color = when {
-            ms <= 0 -> MaterialTheme.colorScheme.error
+            ms < 0 -> MaterialTheme.colorScheme.error
             ms < 150 -> Connected
             ms < 300 -> Color(0xFFF59E0B)
             else -> MaterialTheme.colorScheme.error

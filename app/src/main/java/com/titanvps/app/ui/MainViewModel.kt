@@ -11,6 +11,7 @@ import com.titanvps.app.vpn.VpnStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -71,16 +72,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _message.value = null
     }
 
+    /** Real ping through every server; results arrive progressively. */
     fun pingAll() {
         val servers = subscription.value?.servers ?: return
         if (_pinging.value) return
         viewModelScope.launch {
             _pinging.value = true
+            _pings.value = emptyMap()
             try {
-                val result = PingClient.ping(getApplication<Application>(), servers)
-                _pings.value = result.delays
-                result.error?.let { _message.value = "Пинг не выполнен: $it" }
+                withTimeoutOrNull(90_000) {
+                    PingClient.ping(getApplication<Application>(), servers).collect { event ->
+                        when (event) {
+                            is PingClient.Event.Partial -> _pings.value = _pings.value + event.delays
+                            is PingClient.Event.Done -> event.error?.let { _message.value = "Пинг не выполнен: $it" }
+                        }
+                    }
+                }
             } finally {
+                // Anything still unanswered counts as a timeout.
+                _pings.value = servers.associate { it.id to -1L } + _pings.value
                 _pinging.value = false
             }
         }

@@ -26,20 +26,28 @@ class PingService : Service() {
         val receiver = intent?.let { IntentCompat.getParcelableExtra(it, EXTRA_RECEIVER, ResultReceiver::class.java) }
         val path = intent?.getStringExtra(EXTRA_FILE)
         executor.execute {
-            val result = Bundle()
             try {
                 val arr = JSONArray(File(path!!).readText())
                 val items = (0 until arr.length()).map { arr.getJSONObject(it) }
                 XrayCore.ensurePingDns()
-                val pings = XrayCore.ping(items.map { it.getString("json") to it.getString("tag") }, TIMEOUT_SEC)
-                result.putStringArray(KEY_IDS, items.map { it.getString("id") }.toTypedArray())
-                result.putLongArray(KEY_DELAYS, pings.map { it.first }.toLongArray())
-                // Nothing answered: pass the first error so the user can see why.
-                if (pings.none { it.first >= 0 }) result.putString(KEY_ERROR, pings.firstNotNullOfOrNull { it.second })
-                receiver?.send(0, result)
+                var anyOk = false
+                var firstError: String? = null
+                // Small batches so results show up progressively, like in Happ.
+                for (chunk in items.chunked(CHUNK)) {
+                    val pings = XrayCore.ping(chunk.map { it.getString("json") to it.getString("tag") }, TIMEOUT_SEC)
+                    anyOk = anyOk || pings.any { it.first >= 0 }
+                    if (firstError == null) firstError = pings.firstNotNullOfOrNull { it.second }
+                    receiver?.send(RESULT_PARTIAL, Bundle().apply {
+                        putStringArray(KEY_IDS, chunk.map { it.getString("id") }.toTypedArray())
+                        putLongArray(KEY_DELAYS, pings.map { it.first }.toLongArray())
+                    })
+                }
+                receiver?.send(RESULT_DONE, Bundle().apply {
+                    // Nothing answered: pass the first error so the user can see why.
+                    if (!anyOk) putString(KEY_ERROR, firstError)
+                })
             } catch (e: Exception) {
-                result.putString(KEY_ERROR, e.message)
-                receiver?.send(1, result)
+                receiver?.send(RESULT_DONE, Bundle().apply { putString(KEY_ERROR, e.message ?: e.toString()) })
             }
             stopSelf(startId)
         }
@@ -57,6 +65,9 @@ class PingService : Service() {
         const val KEY_IDS = "ids"
         const val KEY_DELAYS = "delays"
         const val KEY_ERROR = "error"
+        const val RESULT_PARTIAL = 1
+        const val RESULT_DONE = 0
         private const val TIMEOUT_SEC = 5
+        private const val CHUNK = 4
     }
 }
