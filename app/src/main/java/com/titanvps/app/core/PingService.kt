@@ -6,15 +6,24 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.ResultReceiver
 import androidx.core.content.IntentCompat
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
- * Runs in its own process (":ping"): libXray allows only one Xray per process and
- * rejects pingBatch while the VPN core runs, so pinging here works with the VPN on.
- * The ping is a real HTTP request through each server, so every protocol
- * (VLESS, Hysteria2, Trojan, …) is measured the same way.
+ * Pings every server through Xray, in its own process (":ping") so it works while the
+ * VPN core runs (libXray allows one core per process).
+ *
+ * Like Happ / v2rayNG: one temporary core with a local SOCKS port per server; through
+ * each port we open a connection with a warm-up request and time a second request on
+ * the same connection. That is the real round trip through the server, without the
+ * one-off handshakes. Falls back to libXray's pingBatch if the core can't start.
  */
 class PingService : Service() {
 
@@ -30,29 +39,10 @@ class PingService : Service() {
                 val arr = JSONArray(File(path!!).readText())
                 val items = (0 until arr.length()).map { arr.getJSONObject(it) }
                 XrayCore.ensurePingDns()
-                var anyOk = false
-                var firstError: String? = null
-                // Small batches so results show up progressively, like in Happ.
-                for (chunk in items.chunked(CHUNK)) {
-                    val batch = chunk.map { it.getString("json") to it.getString("tag") }
-                    // Pass 1 (HTTPS) warms the path and works everywhere; pass 2 (plain HTTP)
-                    // is closer to the real latency. Use HTTP when it answered, else HTTPS.
-                    val https = runCatching { XrayCore.ping(batch, TIMEOUT_SEC, XrayCore.PING_URL_HTTPS) }
-                        .getOrElse { e -> List(batch.size) { -1L to (e.message ?: e.toString()) } }
-                    val http = runCatching { XrayCore.ping(batch, TIMEOUT_SEC, XrayCore.PING_URL_HTTP) }
-                        .getOrElse { List(batch.size) { -1L to null } }
-                    val pings = https.zip(http).map { (s, h) -> if (h.first >= 0) h else s }
-                    anyOk = anyOk || pings.any { it.first >= 0 }
-                    if (firstError == null) firstError = pings.firstNotNullOfOrNull { it.second }
-                    receiver?.send(RESULT_PARTIAL, Bundle().apply {
-                        putStringArray(KEY_IDS, chunk.map { it.getString("id") }.toTypedArray())
-                        putLongArray(KEY_DELAYS, pings.map { it.first }.toLongArray())
-                        putStringArray(KEY_ERRORS, pings.map { it.second.orEmpty() }.toTypedArray())
-                    })
-                }
+                val anyOk = runCatching { pingViaSocks(items, receiver) }
+                    .getOrElse { pingBatchFallback(items, receiver) }
                 receiver?.send(RESULT_DONE, Bundle().apply {
-                    // Nothing answered: pass the first error so the user can see why.
-                    if (!anyOk) putString(KEY_ERROR, firstError)
+                    if (!anyOk) putString(KEY_ERROR, "серверы не ответили")
                 })
             } catch (e: Exception) {
                 receiver?.send(RESULT_DONE, Bundle().apply { putString(KEY_ERROR, e.message ?: e.toString()) })
@@ -60,6 +50,73 @@ class PingService : Service() {
             stopSelf(startId)
         }
         return START_NOT_STICKY
+    }
+
+    private fun pingViaSocks(items: List<JSONObject>, receiver: ResultReceiver?): Boolean {
+        val ports = XrayCore.freePorts(items.size)
+        val config = PingConfig.build(items.map { PingConfig.Item(it.getString("json"), it.getString("tag")) }, ports)
+        XrayCore.runPlain(config)
+        try {
+            val pool = Executors.newFixedThreadPool(minOf(items.size, PARALLEL))
+            val futures = items.mapIndexed { i, item ->
+                pool.submit<Long> {
+                    val delay = measure(ports[i])
+                    send(receiver, item.getString("id"), delay)
+                    delay
+                }
+            }
+            val results = futures.map { runCatching { it.get() }.getOrDefault(-1L) }
+            pool.shutdown()
+            return results.any { it >= 0 }
+        } finally {
+            XrayCore.stopPlain()
+        }
+    }
+
+    /** Warm-up request, then time a second request over the same (kept-alive) connection. */
+    private fun measure(port: Int): Long {
+        val client = OkHttpClient.Builder()
+            .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+            .connectTimeout(TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
+            .readTimeout(TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
+            .callTimeout(TIMEOUT_SEC + 2L, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false)
+            .build()
+        val request = Request.Builder().url(PING_URL).build()
+        return try {
+            val warmStart = System.nanoTime()
+            client.newCall(request).execute().use { it.body.bytes() }
+            val warm = (System.nanoTime() - warmStart) / 1_000_000
+            runCatching {
+                val start = System.nanoTime()
+                client.newCall(request).execute().use { it.body.bytes() }
+                (System.nanoTime() - start) / 1_000_000
+            }.getOrDefault(warm).coerceAtLeast(1)
+        } catch (e: Exception) {
+            -1L
+        } finally {
+            client.connectionPool.evictAll()
+            client.dispatcher.executorService.shutdown()
+        }
+    }
+
+    private fun pingBatchFallback(items: List<JSONObject>, receiver: ResultReceiver?): Boolean {
+        var anyOk = false
+        for (chunk in items.chunked(BATCH_LIMIT)) {
+            val pings = runCatching {
+                XrayCore.ping(chunk.map { it.getString("json") to it.getString("tag") }, TIMEOUT_SEC)
+            }.getOrElse { List(chunk.size) { -1L to null } }
+            chunk.zip(pings).forEach { (item, p) -> send(receiver, item.getString("id"), p.first) }
+            anyOk = anyOk || pings.any { it.first >= 0 }
+        }
+        return anyOk
+    }
+
+    private fun send(receiver: ResultReceiver?, id: String, delay: Long) {
+        receiver?.send(RESULT_PARTIAL, Bundle().apply {
+            putStringArray(KEY_IDS, arrayOf(id))
+            putLongArray(KEY_DELAYS, longArrayOf(delay))
+        })
     }
 
     override fun onDestroy() {
@@ -73,10 +130,11 @@ class PingService : Service() {
         const val KEY_IDS = "ids"
         const val KEY_DELAYS = "delays"
         const val KEY_ERROR = "error"
-        const val KEY_ERRORS = "errors"
         const val RESULT_PARTIAL = 1
         const val RESULT_DONE = 0
-        private const val TIMEOUT_SEC = 4
-        private const val CHUNK = 5 // libXray pingBatch accepts at most 5 configs per call
+        private const val PING_URL = "https://www.gstatic.com/generate_204"
+        private const val TIMEOUT_SEC = 5
+        private const val PARALLEL = 8
+        private const val BATCH_LIMIT = 5 // libXray pingBatch accepts at most 5 configs per call
     }
 }

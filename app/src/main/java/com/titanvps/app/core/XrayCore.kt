@@ -14,9 +14,7 @@ import org.json.JSONObject
  */
 object XrayCore {
 
-    /** Plain HTTP: no extra TLS handshake inside the tunnel, closest to the real latency. */
-    const val PING_URL_HTTP = "http://www.gstatic.com/generate_204"
-    /** HTTPS fallback for servers that block plain HTTP. */
+    /** Probe URL for the pingBatch fallback. */
     const val PING_URL_HTTPS = "https://www.gstatic.com/generate_204"
 
     class XrayException(message: String) : Exception(message)
@@ -76,6 +74,21 @@ object XrayCore {
             if (r != null && r.optBoolean("success")) r.optLong("delay") to null
             else -1L to (r?.optString("error")?.takeIf { it.isNotBlank() } ?: "нет ответа")
         }
+    }
+
+    fun freePorts(count: Int): List<Int> {
+        val data = invoke("getFreePorts", JSONObject().put("count", count)) as JSONObject
+        val arr = data.getJSONArray("ports")
+        return (0 until arr.length()).map { arr.getInt(it) }
+    }
+
+    /** Runs a config as-is (ping process only: no DNS/dialer setup, see [ensurePingDns]). */
+    fun runPlain(configJson: String) {
+        invoke("runXray", JSONObject().put("xrayJson", configJson))
+    }
+
+    fun stopPlain() {
+        runCatching { invoke("stopXray") }
     }
 
     fun start(configJson: String, protect: (Int) -> Boolean) {
