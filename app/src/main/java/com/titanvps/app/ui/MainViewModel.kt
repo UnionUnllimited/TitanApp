@@ -77,7 +77,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _pinging.value = true
             try {
-                _pings.value = PingClient.ping(getApplication<Application>(), servers)
+                val result = PingClient.ping(getApplication<Application>(), servers)
+                _pings.value = result.delays
+                result.error?.let { _message.value = "Пинг не выполнен: $it" }
             } finally {
                 _pinging.value = false
             }

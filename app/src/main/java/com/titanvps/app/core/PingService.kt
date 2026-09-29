@@ -30,9 +30,12 @@ class PingService : Service() {
             try {
                 val arr = JSONArray(File(path!!).readText())
                 val items = (0 until arr.length()).map { arr.getJSONObject(it) }
-                val delays = XrayCore.ping(items.map { it.getString("json") to it.getString("tag") }, TIMEOUT_SEC)
+                XrayCore.ensurePingDns()
+                val pings = XrayCore.ping(items.map { it.getString("json") to it.getString("tag") }, TIMEOUT_SEC)
                 result.putStringArray(KEY_IDS, items.map { it.getString("id") }.toTypedArray())
-                result.putLongArray(KEY_DELAYS, delays.toLongArray())
+                result.putLongArray(KEY_DELAYS, pings.map { it.first }.toLongArray())
+                // Nothing answered: pass the first error so the user can see why.
+                if (pings.none { it.first >= 0 }) result.putString(KEY_ERROR, pings.firstNotNullOfOrNull { it.second })
                 receiver?.send(0, result)
             } catch (e: Exception) {
                 result.putString(KEY_ERROR, e.message)

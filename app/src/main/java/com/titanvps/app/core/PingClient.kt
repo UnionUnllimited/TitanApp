@@ -16,11 +16,14 @@ import org.json.JSONObject
 import java.io.File
 import kotlin.coroutines.resume
 
-/** Asks [PingService] (separate process) for real delays. Result: serverId → ms, -1 = unreachable. */
+/** Asks [PingService] (separate process) for real delays. */
 object PingClient {
 
-    suspend fun ping(context: Context, servers: List<Server>): Map<String, Long> {
-        if (servers.isEmpty()) return emptyMap()
+    /** serverId → ms (-1 = unreachable), plus an error message if the whole batch failed. */
+    data class Result(val delays: Map<String, Long>, val error: String? = null)
+
+    suspend fun ping(context: Context, servers: List<Server>): Result {
+        if (servers.isEmpty()) return Result(emptyMap())
         val failed = servers.associate { it.id to -1L }
         val file = File(context.cacheDir, "ping-${System.nanoTime()}.json")
         withContext(Dispatchers.IO) {
@@ -36,8 +39,10 @@ object PingClient {
                             val ids = data?.getStringArray(PingService.KEY_IDS)
                             val delays = data?.getLongArray(PingService.KEY_DELAYS)
                             val result = if (resultCode == 0 && ids != null && delays != null) {
-                                failed + ids.zip(delays.toList()).toMap()
-                            } else failed
+                                Result(failed + ids.zip(delays.toList()).toMap(), data.getString(PingService.KEY_ERROR))
+                            } else {
+                                Result(failed, data?.getString(PingService.KEY_ERROR) ?: "неизвестная ошибка")
+                            }
                             if (cont.isActive) cont.resume(result)
                         }
                     }
@@ -47,7 +52,7 @@ object PingClient {
                             .putExtra(PingService.EXTRA_RECEIVER, receiver)
                     )
                 }
-            } ?: failed
+            } ?: Result(failed, "нет ответа от процесса пинга")
         } finally {
             file.delete()
         }
