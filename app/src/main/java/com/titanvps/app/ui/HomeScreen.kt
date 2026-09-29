@@ -152,6 +152,19 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
             item { UsageCard(sub) }
 
             item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(
+                        onClick = { context.openUrl(sub.info.webPageUrl ?: BuildConfig.WEBSITE_URL) },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                    ) { Text("Продлить") }
+                    OutlinedButton(
+                        onClick = { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                    ) { Text("Поддержка") }
+                }
+            }
+
+            item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(groups, key = { it.first }) { (group, list) ->
@@ -174,20 +187,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                 )
             }
 
-            item {
-                Spacer(Modifier.height(4.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        onClick = { context.openUrl(sub.info.webPageUrl ?: BuildConfig.WEBSITE_URL) },
-                        modifier = Modifier.weight(1f).height(48.dp),
-                    ) { Text("Продлить") }
-                    OutlinedButton(
-                        onClick = { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) },
-                        modifier = Modifier.weight(1f).height(48.dp),
-                    ) { Text("Поддержка") }
-                }
-                Spacer(Modifier.height(16.dp))
-            }
+            item { Spacer(Modifier.height(16.dp)) }
         }
     }
 }
