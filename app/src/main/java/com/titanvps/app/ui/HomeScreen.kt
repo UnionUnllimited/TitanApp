@@ -16,6 +16,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -121,11 +127,14 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
         onRefresh = { viewModel.refresh() },
         modifier = Modifier.fillMaxSize().safeDrawingPadding(),
     ) {
-        LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val wide = maxWidth >= 720.dp
+            // Scales with the screen: small phones get a smaller button, tablets don't get a huge one.
+            val connectSize = (if (wide) maxWidth * 0.25f else maxWidth * 0.5f).coerceIn(140.dp, 220.dp)
+            val padding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+            val spacing = Arrangement.spacedBy(10.dp)
+
+            val topItems: LazyListScope.() -> Unit = {
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Image(painterResource(R.drawable.logo), null, Modifier.size(32.dp))
@@ -180,7 +189,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
             item {
                 Spacer(Modifier.height(8.dp))
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    ConnectButton(state) {
+                    ConnectButton(state, connectSize) {
                         when (state) {
                             is VpnState.Connected, VpnState.Connecting -> viewModel.disconnect()
                             VpnState.Disconnecting -> Unit
@@ -198,18 +207,20 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = { context.openUrl(BuildConfig.TELEGRAM_URL) },
-                        modifier = Modifier.weight(1f).height(48.dp),
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp),
-                    ) { Text("Продлить", maxLines = 1) }
+                    ) { Text("Продлить", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     OutlinedButton(
                         onClick = viewModel::openCabinet,
                         enabled = !busy,
-                        modifier = Modifier.weight(1f).height(48.dp),
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp),
-                    ) { Text("Личный кабинет", maxLines = 1) }
+                    ) { Text("Личный кабинет", maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             }
 
+            }
+            val serverItems: LazyListScope.() -> Unit = {
             item {
                 // Equal-width tabs so nothing gets clipped on narrow screens / big fonts.
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -231,7 +242,25 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                 )
             }
 
-            item { Spacer(Modifier.height(16.dp)) }
+                item { Spacer(Modifier.height(16.dp)) }
+            }
+
+            if (wide) {
+                // Tablets / unfolded foldables / landscape: controls left, locations right.
+                Row(Modifier.widthIn(max = 1200.dp).fillMaxSize().align(Alignment.TopCenter)) {
+                    LazyColumn(Modifier.weight(1f).fillMaxHeight(), contentPadding = padding, verticalArrangement = spacing) { topItems() }
+                    LazyColumn(Modifier.weight(1.2f).fillMaxHeight(), contentPadding = padding, verticalArrangement = spacing) { serverItems() }
+                }
+            } else {
+                LazyColumn(
+                    Modifier.fillMaxHeight().widthIn(max = 640.dp).fillMaxWidth().align(Alignment.TopCenter),
+                    contentPadding = padding,
+                    verticalArrangement = spacing,
+                ) {
+                    topItems()
+                    serverItems()
+                }
+            }
         }
     }
 
@@ -308,7 +337,7 @@ private fun ServerDetailsSheet(
 }
 
 @Composable
-private fun ConnectButton(state: VpnState, onClick: () -> Unit) {
+private fun ConnectButton(state: VpnState, size: Dp, onClick: () -> Unit) {
     val color by animateColorAsState(
         when (state) {
             is VpnState.Connected -> Connected
@@ -319,7 +348,7 @@ private fun ConnectButton(state: VpnState, onClick: () -> Unit) {
     )
     Box(
         Modifier
-            .size(200.dp)
+            .size(size)
             .clip(CircleShape)
             .background(color.copy(alpha = 0.12f))
             .then(
@@ -331,9 +360,9 @@ private fun ConnectButton(state: VpnState, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         if (state == VpnState.Connecting || state == VpnState.Disconnecting) {
-            CircularProgressIndicator(Modifier.size(200.dp), color = color, strokeWidth = 3.dp)
+            CircularProgressIndicator(Modifier.size(size), color = color, strokeWidth = 3.dp)
         }
-        Icon(Icons.Default.PowerSettingsNew, "Подключить", tint = color, modifier = Modifier.size(84.dp))
+        Icon(Icons.Default.PowerSettingsNew, "Подключить", tint = color, modifier = Modifier.size(size * 0.42f))
     }
 }
 
@@ -377,13 +406,23 @@ private fun TabChip(title: String, count: Int, selected: Boolean, modifier: Modi
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        Text(title, maxLines = 1, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(8.dp))
+        Text(
+            title,
+            modifier = Modifier.weight(1f, fill = false),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(6.dp))
         Box(
-            Modifier.clip(CircleShape).background(if (selected) Brand else MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 8.dp, vertical = 2.dp),
-        ) { Text("$count", fontSize = 12.sp, color = Color.White) }
+            Modifier
+                .widthIn(min = 24.dp)
+                .clip(CircleShape)
+                .background(if (selected) Brand else MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = 7.dp, vertical = 2.dp),
+            contentAlignment = Alignment.Center,
+        ) { Text("$count", fontSize = 12.sp, color = Color.White, maxLines = 1, softWrap = false) }
     }
 }
 

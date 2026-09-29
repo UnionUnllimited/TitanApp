@@ -6,7 +6,9 @@ import android.graphics.drawable.Drawable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -71,7 +73,8 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+    Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.TopCenter) {
+    Column(Modifier.widthIn(max = 640.dp).fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
             Text("Исключения приложений", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -118,4 +121,5 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
         }
     }
+}
 }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -118,10 +119,11 @@ private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
     val clipboard = LocalClipboardManager.current
     var key by remember { mutableStateOf("") }
 
+    // Centered, width-capped and scrollable: fits small phones, landscape and tablets.
+    Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) {
     Column(
-        Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
+        Modifier.widthIn(max = 480.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
     ) {
         Image(painterResource(R.drawable.logo), null, Modifier.size(120.dp))
         Spacer(Modifier.height(20.dp))
@@ -162,6 +164,7 @@ private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
         TextButton(onClick = { context.openUrl(BuildConfig.TELEGRAM_URL) }) {
             Text("Нет ключа? Получить в боте")
         }
+    }
     }
 }
 
