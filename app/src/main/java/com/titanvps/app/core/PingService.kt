@@ -48,6 +48,7 @@ class PingService : Service() {
                     receiver?.send(RESULT_PARTIAL, Bundle().apply {
                         putStringArray(KEY_IDS, chunk.map { it.getString("id") }.toTypedArray())
                         putLongArray(KEY_DELAYS, pings.map { it.first }.toLongArray())
+                        putStringArray(KEY_ERRORS, pings.map { it.second.orEmpty() }.toTypedArray())
                     })
                 }
                 receiver?.send(RESULT_DONE, Bundle().apply {
@@ -73,6 +74,7 @@ class PingService : Service() {
         const val KEY_IDS = "ids"
         const val KEY_DELAYS = "delays"
         const val KEY_ERROR = "error"
+        const val KEY_ERRORS = "errors"
         const val RESULT_PARTIAL = 1
         const val RESULT_DONE = 0
         private const val TIMEOUT_SEC = 4

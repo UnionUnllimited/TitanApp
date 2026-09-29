@@ -84,6 +84,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     val selectedId by viewModel.selectedId.collectAsState()
     val pings by viewModel.pings.collectAsState()
     val pinging by viewModel.pinging.collectAsState()
+    val pingErrors by viewModel.pingErrors.collectAsState()
     var menu by remember { mutableStateOf(false) }
 
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
@@ -166,6 +167,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                 ServerCard(
                     server = s,
                     ping = pings[s.id],
+                    error = pingErrors[s.id],
                     pending = pinging && pings[s.id] == null,
                     selected = s.id == selected?.id,
                     onClick = { viewModel.select(s.id) },
@@ -287,7 +289,7 @@ private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ServerCard(server: Server, ping: Long?, pending: Boolean, selected: Boolean, onClick: () -> Unit) {
+private fun ServerCard(server: Server, ping: Long?, error: String?, pending: Boolean, selected: Boolean, onClick: () -> Unit) {
     val (flag, name) = remember(server.name) { ServerGroups.splitFlag(server.name) }
     val shape = RoundedCornerShape(18.dp)
     Row(
@@ -303,7 +305,12 @@ private fun ServerCard(server: Server, ping: Long?, pending: Boolean, selected: 
         if (flag != null) Text(flag, fontSize = 26.sp)
         else Icon(Icons.Default.Public, null, tint = Brand, modifier = Modifier.size(26.dp))
         Spacer(Modifier.width(14.dp))
-        Text(name, Modifier.weight(1f), fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.weight(1f)) {
+            Text(name, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (error != null && (ping ?: 0) < 0) {
+                Text(error, fontSize = 11.sp, color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
         Spacer(Modifier.width(8.dp))
         when {
             pending -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)

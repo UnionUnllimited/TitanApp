@@ -18,8 +18,8 @@ import java.io.File
 object PingClient {
 
     sealed interface Event {
-        /** serverId → ms, -1 = timeout / unreachable. */
-        data class Partial(val delays: Map<String, Long>) : Event
+        /** serverId → ms (-1 = timeout / unreachable) and serverId → error text for failures. */
+        data class Partial(val delays: Map<String, Long>, val errors: Map<String, String>) : Event
         /** Batch finished; [error] is set when nothing answered. */
         data class Done(val error: String?) : Event
     }
@@ -35,7 +35,9 @@ object PingClient {
                 if (resultCode == PingService.RESULT_PARTIAL) {
                     val ids = data?.getStringArray(PingService.KEY_IDS) ?: return
                     val delays = data.getLongArray(PingService.KEY_DELAYS) ?: return
-                    trySend(Event.Partial(ids.zip(delays.toList()).toMap()))
+                    val errors = data.getStringArray(PingService.KEY_ERRORS)
+                    val errorMap = if (errors != null) ids.zip(errors.toList()).filter { it.second.isNotEmpty() }.toMap() else emptyMap()
+                    trySend(Event.Partial(ids.zip(delays.toList()).toMap(), errorMap))
                 } else {
                     trySend(Event.Done(data?.getString(PingService.KEY_ERROR)))
                     close()
