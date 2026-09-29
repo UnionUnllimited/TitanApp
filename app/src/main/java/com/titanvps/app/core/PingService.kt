@@ -35,14 +35,13 @@ class PingService : Service() {
                 // Small batches so results show up progressively, like in Happ.
                 for (chunk in items.chunked(CHUNK)) {
                     val batch = chunk.map { it.getString("json") to it.getString("tag") }
-                    // Two passes: the first warms up DNS/routes on the server side, the best
-                    // successful value counts (a single cold request overstates latency).
-                    val first = XrayCore.ping(batch, TIMEOUT_SEC)
-                    val second = XrayCore.ping(batch, TIMEOUT_SEC)
-                    val pings = first.zip(second).map { (a, b) ->
-                        val ok = listOf(a.first, b.first).filter { it >= 0 }
-                        if (ok.isNotEmpty()) ok.min() to null else a
-                    }
+                    // Pass 1 (HTTPS) warms the path and works everywhere; pass 2 (plain HTTP)
+                    // is closer to the real latency. Use HTTP when it answered, else HTTPS.
+                    val https = runCatching { XrayCore.ping(batch, TIMEOUT_SEC, XrayCore.PING_URL_HTTPS) }
+                        .getOrElse { e -> List(batch.size) { -1L to (e.message ?: e.toString()) } }
+                    val http = runCatching { XrayCore.ping(batch, TIMEOUT_SEC, XrayCore.PING_URL_HTTP) }
+                        .getOrElse { List(batch.size) { -1L to null } }
+                    val pings = https.zip(http).map { (s, h) -> if (h.first >= 0) h else s }
                     anyOk = anyOk || pings.any { it.first >= 0 }
                     if (firstError == null) firstError = pings.firstNotNullOfOrNull { it.second }
                     receiver?.send(RESULT_PARTIAL, Bundle().apply {

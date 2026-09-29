@@ -14,7 +14,10 @@ import org.json.JSONObject
  */
 object XrayCore {
 
-    private const val PING_URL = "http://www.gstatic.com/generate_204"
+    /** Plain HTTP: no extra TLS handshake inside the tunnel, closest to the real latency. */
+    const val PING_URL_HTTP = "http://www.gstatic.com/generate_204"
+    /** HTTPS fallback for servers that block plain HTTP. */
+    const val PING_URL_HTTPS = "https://www.gstatic.com/generate_204"
 
     class XrayException(message: String) : Exception(message)
 
@@ -57,7 +60,7 @@ object XrayCore {
     }
 
     /** Delay in ms per item (-1 on failure) and the per-item error text. */
-    fun ping(items: List<Pair<String, String>>, timeoutSec: Int = 5): List<Pair<Long, String?>> {
+    fun ping(items: List<Pair<String, String>>, timeoutSec: Int = 5, url: String = PING_URL_HTTPS): List<Pair<Long, String?>> {
         val configs = JSONArray()
         items.forEach { (json, tag) -> configs.put(JSONObject().put("xrayJson", json).put("outboundTag", tag)) }
         val data = invoke(
@@ -65,9 +68,7 @@ object XrayCore {
             JSONObject()
                 .put("configs", configs)
                 .put("timeout", timeoutSec)
-                // Plain HTTP: no extra TLS handshake inside the tunnel, so the number
-                // reflects the server's latency (same approach as Happ / v2rayNG).
-                .put("url", PING_URL),
+                .put("url", url),
         ) as JSONObject
         val results = data.optJSONArray("results") ?: JSONArray()
         return (0 until items.size).map { i ->
