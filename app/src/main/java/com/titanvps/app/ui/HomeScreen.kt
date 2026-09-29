@@ -107,7 +107,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Image(painterResource(R.drawable.logo), null, Modifier.size(32.dp))
                     Spacer(Modifier.width(10.dp))
-                    Text(sub.info.title ?: "TitanVPS", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text("Titan VPS", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     IconButton(onClick = { viewModel.refresh() }, enabled = !busy) {
                         if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         else Icon(Icons.Default.Refresh, "Обновить подписку")
@@ -128,7 +128,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
             sub.info.announce?.let {
                 item {
                     Surface(shape = RoundedCornerShape(14.dp), color = Brand.copy(alpha = 0.15f), modifier = Modifier.fillMaxWidth()) {
-                        Text(it, Modifier.padding(14.dp), fontSize = 14.sp)
+                        Text(it, Modifier.padding(horizontal = 12.dp, vertical = 10.dp), fontSize = 12.sp, lineHeight = 16.sp)
                     }
                 }
             }
