@@ -35,6 +35,9 @@ import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -112,45 +115,52 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
 @Composable
 private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
     val context = LocalContext.current
-    var showLogin by remember { mutableStateOf(false) }
-
-    if (showLogin) {
-        LoginScreen(
-            finder = viewModel.linkFinder,
-            onSubscription = { url -> showLogin = false; viewModel.activate(url) },
-            onClose = { showLogin = false },
-        )
-        return
-    }
+    val clipboard = LocalClipboardManager.current
+    var key by remember { mutableStateOf("") }
 
     Column(
         Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Image(painterResource(R.drawable.logo), null, Modifier.size(128.dp))
+        Image(painterResource(R.drawable.logo), null, Modifier.size(120.dp))
         Spacer(Modifier.height(20.dp))
         Text("TitanVPS", fontSize = 32.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Войдите через почту или Telegram — подписка подключится автоматически",
+            "Вставьте ключ подписки из бота или личного кабинета",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(24.dp))
+        OutlinedTextField(
+            value = key,
+            onValueChange = { key = it.trim() },
+            label = { Text("Ключ") },
+            placeholder = { Text("https://api1.titanvps.su/…") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { clipboard.getText()?.text?.trim()?.let { key = it } },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+        ) {
+            Icon(Icons.Default.ContentPaste, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Вставить из буфера")
+        }
+        Spacer(Modifier.height(12.dp))
         if (busy) {
             CircularProgressIndicator()
         } else {
-            GradientButton("Войти", Icons.AutoMirrored.Filled.Login) { showLogin = true }
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = { context.openUrl(BuildConfig.TELEGRAM_URL) },
-                modifier = Modifier.fillMaxWidth().height(54.dp),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Send, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Открыть Telegram-бот")
+            GradientButton("Подключить", Icons.AutoMirrored.Filled.Login) {
+                if (key.isNotBlank()) viewModel.activate(key)
             }
+        }
+        Spacer(Modifier.height(16.dp))
+        TextButton(onClick = { context.openUrl(BuildConfig.TELEGRAM_URL) }) {
+            Text("Нет ключа? Получить в боте")
         }
     }
 }

@@ -18,7 +18,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = TitanApp.get(app).repository
 
     val subscription = repo.subscription
-    val linkFinder = repo.linkFinder
     val selectedId = repo.selectedId
     val vpnState = VpnStatus.state
 

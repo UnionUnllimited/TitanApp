@@ -54,10 +54,11 @@ class SubscriptionRepository(private val context: Context) {
         return age > TimeUnit.HOURS.toMillis(sub.info.updateIntervalHours.toLong())
     }
 
-    /** Activates the app with a link from our bot / site. */
+    /** Activates the app with a pasted key or a titanvps:// / App Link. */
     suspend fun activate(link: String): Subscription {
         val url = deepLinks.extractSubscriptionUrl(link)
-            ?: throw SubscriptionException("Ссылка не относится к TitanVPS")
+            ?: linkFinder.find(link)
+            ?: throw SubscriptionException("Это не ключ TitanVPS")
         return fetch(url)
     }
 
