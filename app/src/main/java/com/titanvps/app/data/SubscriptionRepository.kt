@@ -76,7 +76,7 @@ class SubscriptionRepository(private val context: Context) {
     private suspend fun fetch(url: String): Subscription = withContext(Dispatchers.IO) {
         if (!deepLinks.isAllowed(url)) throw SubscriptionException("Недопустимый адрес подписки")
 
-        val (info, body) = download(url)
+        val (info, body) = downloadWithFallback(url)
 
         // Full Xray JSON (keeps server-side routing); anything else, or JSON we
         // can't use, goes through libXray's parser (links, base64, Xray JSON nodes).
@@ -97,6 +97,29 @@ class SubscriptionRepository(private val context: Context) {
     }
 
     private fun withoutHidden(sub: Subscription) = sub.copy(servers = sub.servers.filterNot(ServerGroups::isHidden))
+
+    /**
+     * Tries the key's own host first, then the same path on our other subscription
+     * hosts (api1 ↔ api2), so a blocked or down domain doesn't break updates.
+     */
+    private fun downloadWithFallback(url: String): Pair<SubscriptionInfo, String> {
+        var firstError: Exception? = null
+        for (candidate in listOf(url) + alternates(url)) {
+            try {
+                return download(candidate)
+            } catch (e: SubscriptionException) {
+                if (firstError == null) firstError = e
+            }
+        }
+        throw firstError ?: SubscriptionException("Сервер подписки недоступен")
+    }
+
+    /** Same URL on the other allowed hosts. */
+    private fun alternates(url: String): List<String> {
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return emptyList()
+        val host = uri.host?.lowercase() ?: return emptyList()
+        return hosts.filter { it != host }.map { url.replaceFirst(uri.rawAuthority, it) }
+    }
 
     private fun download(url: String): Pair<SubscriptionInfo, String> {
         val request = Request.Builder()

@@ -10,6 +10,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import com.titanvps.app.ui.MainViewModel
 import com.titanvps.app.ui.TitanScreen
 import com.titanvps.app.ui.theme.TitanTheme
@@ -31,6 +35,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         if (savedInstanceState == null) handleLink(intent)
+
+        // A newly added key connects immediately; starting our VPN makes Android
+        // disconnect any other VPN app (only one VPN can be active).
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.connectRequests.collect { connect() }
+            }
+        }
 
         setContent {
             TitanTheme {

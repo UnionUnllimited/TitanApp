@@ -53,9 +53,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------ subscription
 
+    /** Fired after a key is added: connect right away (Android then turns other VPNs off). */
+    private val _connectRequests = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+    val connectRequests = _connectRequests.receiveAsFlow()
+
     fun activate(link: String) = launchBusy {
+        val first = repo.subscription.value == null
         repo.activate(link)
         _message.value = "Подписка подключена"
+        if (first || vpnState.value !is VpnState.Connected) _connectRequests.send(Unit)
         pingAll()
     }
 
