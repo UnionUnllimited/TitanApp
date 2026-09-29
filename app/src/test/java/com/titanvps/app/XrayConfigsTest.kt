@@ -94,4 +94,17 @@ class XrayConfigsTest {
         assertEquals("api", rules.getJSONObject(1).getJSONArray("inboundTag").getString(0))
         assertFalse(rules.getJSONObject(2).has("inboundTag"))
     }
+
+    @Test
+    fun pingTagsFollowCatchAllBalancer() {
+        val json = """{"outbounds":[{"tag":"bal","protocol":"vless"},{"tag":"bal-2","protocol":"vless"},
+            {"tag":"bal-3","protocol":"hysteria"},{"tag":"yt-ru1","protocol":"vless"},{"tag":"direct","protocol":"freedom"}],
+            "routing":{"balancers":[{"tag":"BAL-LTE","selector":["bal"]},{"tag":"yt_balancer","selector":["yt-ru"]}],
+            "rules":[{"domain":["domain:youtube.com"],"balancerTag":"yt_balancer"},
+                     {"domain":["regexp:\\.ru$"],"outboundTag":"direct"},
+                     {"network":"tcp,udp","balancerTag":"BAL-LTE"}]}}"""
+        assertEquals(listOf("bal", "bal-2", "bal-3"), XrayConfigs.pingTags(json, "bal"))
+        assertEquals(listOf("bal", "bal-2"), XrayConfigs.pingTags(json, "bal", max = 2))
+        assertEquals(listOf("proxy"), XrayConfigs.pingTags("""{"outbounds":[{"tag":"proxy","protocol":"vless"}]}""", "proxy"))
+    }
 }

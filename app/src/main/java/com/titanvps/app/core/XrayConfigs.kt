@@ -71,6 +71,34 @@ object XrayConfigs {
         return Server(id = "json-$index-${name.hashCode()}", name = name, xrayJson = cfg.toString(), proxyTag = proxyTag)
     }
 
+    /**
+     * Outbounds worth pinging for a server. Configs that route the catch-all rule to a
+     * balancer (e.g. BAL-LTE over bal, bal-2, …) are measured on its members — the
+     * balancer picks a live one, so one dead member mustn't show the server as down.
+     */
+    fun pingTags(serverJson: String, proxyTag: String, max: Int = 4): List<String> {
+        val cfg = runCatching { JSONObject(serverJson) }.getOrNull() ?: return listOf(proxyTag)
+        val routing = cfg.optJSONObject("routing") ?: return listOf(proxyTag)
+        val rules = routing.optJSONArray("rules") ?: return listOf(proxyTag)
+        // The last rule that sends traffic to a balancer without domain/ip conditions.
+        val balancerTag = (0 until rules.length()).mapNotNull { rules.optJSONObject(it) }
+            .lastOrNull { r ->
+                r.optString("balancerTag").isNotEmpty() && !r.has("domain") && !r.has("ip") &&
+                    !r.has("port") && !r.has("protocol")
+            }?.optString("balancerTag") ?: return listOf(proxyTag)
+        val balancers = routing.optJSONArray("balancers") ?: return listOf(proxyTag)
+        val balancer = (0 until balancers.length()).mapNotNull { balancers.optJSONObject(it) }
+            .firstOrNull { it.optString("tag") == balancerTag } ?: return listOf(proxyTag)
+        val selectors = balancer.optJSONArray("selector")?.let { a -> (0 until a.length()).map { a.getString(it) } }
+            .orEmpty()
+        val outbounds = cfg.optJSONArray("outbounds") ?: return listOf(proxyTag)
+        val members = (0 until outbounds.length()).mapNotNull { outbounds.optJSONObject(it) }
+            .filter { it.optString("protocol") !in SERVICE_PROTOCOLS }
+            .map { it.optString("tag") }
+            .filter { tag -> tag.isNotEmpty() && selectors.any { tag.startsWith(it) } }
+        return members.take(max).ifEmpty { listOf(proxyTag) }
+    }
+
     private fun retargetInboundRules(cfg: JSONObject, oldTags: Set<String>) {
         if (oldTags.isEmpty()) return
         val rules = cfg.optJSONObject("routing")?.optJSONArray("rules") ?: return

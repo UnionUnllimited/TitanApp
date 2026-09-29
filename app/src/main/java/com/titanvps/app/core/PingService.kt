@@ -58,31 +58,44 @@ class PingService : Service() {
      * isn't reported as a timeout.
      */
     private fun pingViaSocks(items: List<JSONObject>, receiver: ResultReceiver?): Boolean {
-        val ports = XrayCore.freePorts(items.size)
-        val config = PingConfig.build(items.map { PingConfig.Item(it.getString("json"), it.getString("tag")) }, ports)
-        XrayCore.runPlain(config)
-        val results = LongArray(items.size) { -1L }
+        // One probe per balancer member (up to 4 per server); a server's ping is its best member.
+        data class Probe(val server: Int, val json: String, val tag: String)
+        val probes = items.flatMapIndexed { i, item ->
+            val json = item.getString("json")
+            XrayConfigs.pingTags(json, item.getString("tag")).map { Probe(i, json, it) }
+        }
+        val ports = XrayCore.freePorts(probes.size)
+        XrayCore.runPlain(PingConfig.build(probes.map { PingConfig.Item(it.json, it.tag) }, ports))
+
+        val best = LongArray(items.size) { -1L }
         val errors = arrayOfNulls<String>(items.size)
+        val remaining = IntArray(items.size).also { r -> probes.forEach { r[it.server]++ } }
+        val lock = Any()
         try {
-            val pool = Executors.newFixedThreadPool(minOf(items.size, PARALLEL))
-            items.indices.map { i ->
+            val pool = Executors.newFixedThreadPool(minOf(probes.size, PARALLEL))
+            probes.mapIndexed { p, probe ->
                 pool.submit {
-                    var r = measure(ports[i], TIMEOUT_SEC)
-                    if (r.first < 0) r = measure(ports[i], RETRY_TIMEOUT_SEC)
-                    results[i] = r.first
-                    errors[i] = r.second
-                    if (r.first >= 0) send(receiver, items[i].getString("id"), r.first, null)
+                    var r = measure(ports[p], TIMEOUT_SEC)
+                    if (r.first < 0) r = measure(ports[p], RETRY_TIMEOUT_SEC)
+                    synchronized(lock) {
+                        val i = probe.server
+                        if (r.first >= 0 && (best[i] < 0 || r.first < best[i])) best[i] = r.first
+                        if (r.first < 0 && errors[i] == null) errors[i] = r.second
+                        remaining[i]--
+                        // Report a server as soon as all its members are measured.
+                        if (remaining[i] == 0 && best[i] >= 0) send(receiver, items[i].getString("id"), best[i], null)
+                    }
                 }
             }.forEach { runCatching { it.get() } }
             pool.shutdown()
         } finally {
             XrayCore.stopPlain()
         }
-        val failed = items.indices.filter { results[it] < 0 }
+        val failed = items.indices.filter { best[it] < 0 }
         val fallbackOk = if (failed.isNotEmpty()) {
             pingBatchFallback(failed.map { items[it] }, receiver) { idx -> "proxy: ${errors[failed[idx]]}" }
         } else false
-        return results.any { it >= 0 } || fallbackOk
+        return best.any { it >= 0 } || fallbackOk
     }
 
     /** Warm-up request, then time a second request over the same (kept-alive) connection. */
@@ -157,7 +170,7 @@ class PingService : Service() {
         private const val PING_URL = "https://www.gstatic.com/generate_204"
         private const val TIMEOUT_SEC = 5
         private const val RETRY_TIMEOUT_SEC = 10
-        private const val PARALLEL = 8
+        private const val PARALLEL = 12
         private const val BATCH_LIMIT = 5 // libXray pingBatch accepts at most 5 configs per call
     }
 }
