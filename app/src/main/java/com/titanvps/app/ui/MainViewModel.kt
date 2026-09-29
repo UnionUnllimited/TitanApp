@@ -16,10 +16,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = TitanApp.get(app).repository
+    private val settings = TitanApp.get(app).settings
 
     val subscription = repo.subscription
     val selectedId = repo.selectedId
     val vpnState = VpnStatus.state
+    val excludedApps = settings.excludedApps
 
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
@@ -74,16 +76,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Real ping through every server; results arrive progressively. */
     fun pingAll() {
         val servers = subscription.value?.servers ?: return
+        ping(servers, clear = true)
+    }
+
+    /** Ping a single server (long press on a location). */
+    fun pingOne(serverId: String) {
+        val server = subscription.value?.servers?.firstOrNull { it.id == serverId } ?: return
+        _pings.value = _pings.value - serverId
+        ping(listOf(server), clear = false)
+    }
+
+    private fun ping(servers: List<com.titanvps.app.data.Server>, clear: Boolean) {
         if (_pinging.value) return
         viewModelScope.launch {
             _pinging.value = true
-            _pings.value = emptyMap()
+            if (clear) _pings.value = emptyMap()
             try {
                 withTimeoutOrNull(150_000) {
                     PingClient.ping(getApplication<Application>(), servers).collect { event ->
                         when (event) {
                             is PingClient.Event.Partial -> _pings.value = _pings.value + event.delays
-                            is PingClient.Event.Done -> event.error?.let { _message.value = "Пинг не выполнен: $it" }
+                            is PingClient.Event.Done -> if (clear) event.error?.let { _message.value = "Пинг не выполнен: $it" }
                         }
                     }
                 }
@@ -93,6 +106,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _pinging.value = false
             }
         }
+    }
+
+    // ------------------------------------------------------------ settings
+
+    fun setExcluded(packageName: String, excluded: Boolean) = settings.setExcluded(packageName, excluded)
+
+    /** Resets app settings (excluded apps, chosen server); the key stays. */
+    fun resetSettings() {
+        settings.reset()
+        subscription.value?.servers?.firstOrNull()?.let { repo.select(it.id) }
+        _message.value = "Настройки сброшены"
+        if (vpnState.value is VpnState.Connected) TitanVpnService.start(getApplication<Application>())
+    }
+
+    /** Re-applies settings that need a reconnect (e.g. excluded apps). */
+    fun reconnectIfConnected() {
+        if (vpnState.value is VpnState.Connected) TitanVpnService.start(getApplication<Application>())
     }
 
     private fun launchBusy(silent: Boolean = false, block: suspend () -> Unit) {

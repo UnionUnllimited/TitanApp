@@ -67,6 +67,12 @@ class TitanVpnService : VpnService() {
                 .addDnsServer("1.1.1.1")
                 // Our own sockets (Xray, subscription fetch) bypass the tunnel → no loops.
                 .addDisallowedApplication(packageName)
+                .apply {
+                    // Apps the user excluded from the VPN.
+                    TitanApp.get(this@TitanVpnService).settings.excludedApps.value.forEach { pkg ->
+                        runCatching { addDisallowedApplication(pkg) }
+                    }
+                }
                 .setBlocking(false)
                 .apply { if (Build.VERSION.SDK_INT >= 29) setMetered(false) }
                 .establish() ?: error("Нет разрешения на VPN")

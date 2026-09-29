@@ -1,6 +1,14 @@
 package com.titanvps.app.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.SupportAgent
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,7 +27,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -76,7 +83,7 @@ import com.titanvps.app.ui.theme.Connected
 import com.titanvps.app.vpn.VpnState
 import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boolean, onConnect: () -> Unit) {
     val context = LocalContext.current
@@ -85,6 +92,14 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     val pings by viewModel.pings.collectAsState()
     val pinging by viewModel.pinging.collectAsState()
     var menu by remember { mutableStateOf(false) }
+    var showApps by remember { mutableStateOf(false) }
+    var confirmReset by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf<Server?>(null) }
+
+    if (showApps) {
+        AppsScreen(viewModel) { showApps = false; viewModel.reconnectIfConnected() }
+        return
+    }
 
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
     val groups = remember(sub.servers) { ServerGroups.split(sub.servers) }
@@ -115,6 +130,21 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Меню") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Исключения приложений") },
+                                leadingIcon = { Icon(Icons.Default.Apps, null) },
+                                onClick = { menu = false; showApps = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Поддержка") },
+                                leadingIcon = { Icon(Icons.Default.SupportAgent, null) },
+                                onClick = { menu = false; context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Сброс настроек") },
+                                leadingIcon = { Icon(Icons.Default.RestartAlt, null) },
+                                onClick = { menu = false; confirmReset = true },
+                            )
                             DropdownMenuItem(
                                 text = { Text("Выйти из аккаунта") },
                                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, null) },
@@ -148,29 +178,29 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
 
             item { StatusBlock(state, selected, selected?.let { pings[it.id] }) }
 
-            item { UsageCard(sub) }
+            item { UsageCard(sub, bypass = tab == Group.BYPASS) { context.openUrl(BuildConfig.TELEGRAM_URL) } }
 
             item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { context.openUrl(sub.info.webPageUrl ?: BuildConfig.WEBSITE_URL) },
+                        onClick = { context.openUrl(BuildConfig.TELEGRAM_URL) },
                         modifier = Modifier.weight(1f).height(48.dp),
-                    ) { Text("Продлить") }
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                    ) { Text("Продлить", maxLines = 1) }
                     OutlinedButton(
-                        onClick = { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) },
+                        onClick = { context.openUrl(sub.info.webPageUrl ?: BuildConfig.CABINET_URL) },
                         modifier = Modifier.weight(1f).height(48.dp),
-                    ) { Text("Поддержка") }
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                    ) { Text("Личный кабинет", maxLines = 1) }
                 }
             }
 
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(groups, key = { it.first }) { (group, list) ->
-                            TabChip(group.title, list.size, group == tab) { tab = group }
-                        }
+                // Equal-width tabs so nothing gets clipped on narrow screens / big fonts.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    groups.forEach { (group, list) ->
+                        TabChip(group.title, list.size, group == tab, Modifier.weight(1f)) { tab = group }
                     }
-                    Spacer(Modifier.width(8.dp))
                     PingButton(pinging, viewModel::pingAll)
                 }
             }
@@ -182,10 +212,76 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                     pending = pinging && pings[s.id] == null,
                     selected = s.id == selected?.id,
                     onClick = { viewModel.select(s.id) },
+                    onLongClick = { details = s },
                 )
             }
 
             item { Spacer(Modifier.height(16.dp)) }
+        }
+    }
+
+    details?.let { server ->
+        ServerDetailsSheet(
+            server = server,
+            ping = pings[server.id],
+            pinging = pinging,
+            selected = server.id == selected?.id,
+            onPing = { viewModel.pingOne(server.id) },
+            onSelect = { viewModel.select(server.id); details = null },
+            onDismiss = { details = null },
+        )
+    }
+
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Сбросить настройки?") },
+            text = { Text("Исключения приложений и выбранный сервер вернутся к исходным. Ключ останется.") },
+            confirmButton = { TextButton(onClick = { confirmReset = false; viewModel.resetSettings() }) { Text("Сбросить") } },
+            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Отмена") } },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ServerDetailsSheet(
+    server: Server,
+    ping: Long?,
+    pinging: Boolean,
+    selected: Boolean,
+    onPing: () -> Unit,
+    onSelect: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val (flag, name) = remember(server.name) { ServerGroups.splitFlag(server.name) }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (flag != null) Text(flag, fontSize = 32.sp)
+                Spacer(Modifier.width(12.dp))
+                Text(name, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(20.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Пинг", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                when {
+                    pinging && ping == null -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    ping != null -> PingDot(ping)
+                    else -> Text("—")
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = onPing, enabled = !pinging, modifier = Modifier.weight(1f).height(48.dp)) {
+                    Icon(Icons.Default.Speed, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Пинг")
+                }
+                Button(onClick = onSelect, enabled = !selected, modifier = Modifier.weight(1f).height(48.dp)) {
+                    Text(if (selected) "Выбран" else "Выбрать")
+                }
+            }
         }
     }
 }
@@ -246,20 +342,21 @@ private fun StatusBlock(state: VpnState, server: Server?, ping: Long?) {
 }
 
 @Composable
-private fun TabChip(title: String, count: Int, selected: Boolean, onClick: () -> Unit) {
+private fun TabChip(title: String, count: Int, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val shape = RoundedCornerShape(24.dp)
     Row(
-        Modifier
+        modifier
             .clip(shape)
             .then(
                 if (selected) Modifier.background(MaterialTheme.colorScheme.surfaceVariant).border(1.dp, Brand, shape)
                 else Modifier.background(MaterialTheme.colorScheme.surface)
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
     ) {
-        Text(title, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        Text(title, maxLines = 1, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(8.dp))
         Box(
@@ -279,15 +376,14 @@ private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (pinging) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-        else Icon(Icons.Default.Speed, null, Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
-        Text("Пинг", fontWeight = FontWeight.SemiBold)
+        if (pinging) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+        else Icon(Icons.Default.Speed, "Пинг", Modifier.size(20.dp))
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ServerCard(server: Server, ping: Long?, pending: Boolean, selected: Boolean, onClick: () -> Unit) {
+private fun ServerCard(server: Server, ping: Long?, pending: Boolean, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     val (flag, name) = remember(server.name) { ServerGroups.splitFlag(server.name) }
     val shape = RoundedCornerShape(18.dp)
     Row(
@@ -296,7 +392,7 @@ private fun ServerCard(server: Server, ping: Long?, pending: Boolean, selected: 
             .clip(shape)
             .background(if (selected) Connected.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface)
             .then(if (selected) Modifier.border(1.dp, Connected.copy(alpha = 0.6f), shape) else Modifier)
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -333,32 +429,40 @@ private fun PingDot(ms: Long) {
     }
 }
 
-/** Traffic limit applies only to bypass servers; regular ones are unlimited. */
+/**
+ * Regular servers are unlimited; only bypass servers are metered, so the traffic
+ * counter is shown on the Обходы tab only.
+ */
 @Composable
-private fun UsageCard(sub: Subscription) {
+private fun UsageCard(sub: Subscription, bypass: Boolean, onBuyTraffic: () -> Unit) {
     val info = sub.info
     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
-            Row {
-                Text("Трафик на обходы", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    if (info.totalBytes > 0) "${formatBytes(info.usedBytes)} / ${formatBytes(info.totalBytes)}"
-                    else "${formatBytes(info.usedBytes)} / ∞"
-                )
+            if (bypass) {
+                Row {
+                    Text("Трафик на обходы", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        if (info.totalBytes > 0) "${formatBytes(info.usedBytes)} / ${formatBytes(info.totalBytes)}"
+                        else "${formatBytes(info.usedBytes)} / ∞"
+                    )
+                }
+                if (info.totalBytes > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { (info.usedBytes.toFloat() / info.totalBytes).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = onBuyTraffic, modifier = Modifier.fillMaxWidth().height(42.dp)) {
+                    Text("Докупить ГБ")
+                }
+            } else {
+                Row {
+                    Text("Трафик", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Безлимит", color = Connected, fontWeight = FontWeight.SemiBold)
+                }
             }
-            if (info.totalBytes > 0) {
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { (info.usedBytes.toFloat() / info.totalBytes).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Лимит только для серверов «Обходы». Остальные серверы — без ограничений.",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             Spacer(Modifier.height(12.dp))
             Row {
                 Text("Подписка до", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -367,4 +471,3 @@ private fun UsageCard(sub: Subscription) {
         }
     }
 }
-
