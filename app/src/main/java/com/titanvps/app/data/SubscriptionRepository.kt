@@ -26,7 +26,7 @@ class SubscriptionRepository(private val context: Context) {
     val deepLinks = DeepLinks(hosts)
     val linkFinder = SubscriptionLinkFinder(deepLinks, hosts)
 
-    private val _subscription = MutableStateFlow(store.load())
+    private val _subscription = MutableStateFlow(store.load()?.let(::withoutHidden))
     val subscription: StateFlow<Subscription?> = _subscription.asStateFlow()
 
     private val _selectedId = MutableStateFlow(store.selectedServerId)
@@ -116,12 +116,15 @@ class SubscriptionRepository(private val context: Context) {
         }
         if (servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")
 
-        val sub = Subscription(url, info, servers, System.currentTimeMillis())
+        val sub = withoutHidden(Subscription(url, info, servers, System.currentTimeMillis()))
+        if (sub.servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")
         store.save(sub)
         _subscription.value = sub
         if (servers.none { it.id == _selectedId.value }) select(servers.first().id)
         sub
     }
+
+    private fun withoutHidden(sub: Subscription) = sub.copy(servers = sub.servers.filterNot(ServerGroups::isHidden))
 
     @SuppressLint("HardwareIds")
     private fun hwid(): String =

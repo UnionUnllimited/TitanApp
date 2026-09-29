@@ -41,6 +41,13 @@ class ServerGroupsTest {
     }
 
     @Test
+    fun unlimitedHeaderIsHidden() {
+        assert(ServerGroups.isHidden(s("🇦🇱 👇БЕЗЛИМИТНЫЕ👇")))
+        assert(!ServerGroups.isHidden(s("🇦🇱 👇ЛИМИТНЫЕ ОСТ:1004.00 GB")))
+        assert(!ServerGroups.isHidden(s("🇩🇪 Германия 1")))
+    }
+
+    @Test
     fun emptyGroupsAreHidden() {
         assertEquals(listOf(Group.SERVERS), ServerGroups.split(listOf(s("Финляндия"))).map { it.first })
     }

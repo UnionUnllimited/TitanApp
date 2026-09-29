@@ -5,6 +5,9 @@ object ServerGroups {
 
     enum class Group(val title: String) { SERVERS("Серверы"), BYPASS("Обходы") }
 
+    /** Section headers from the subscription that shouldn't be shown as servers. */
+    fun isHidden(server: Server): Boolean = "безлимит" in server.name.lowercase()
+
     /** Start of the bypass section: its "ЛИМИТНЫЕ …" header or the first "обход" server. */
     private fun isBypassName(server: Server): Boolean {
         val n = server.name.lowercase()
