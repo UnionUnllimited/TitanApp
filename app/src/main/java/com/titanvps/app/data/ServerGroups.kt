@@ -5,11 +5,15 @@ object ServerGroups {
 
     enum class Group(val title: String) { SERVERS("Серверы"), BYPASS("Обходы") }
 
-    private fun isBypassName(server: Server) = server.name.contains("обход", ignoreCase = true)
+    /** Start of the bypass section: its "ЛИМИТНЫЕ …" header or the first "обход" server. */
+    private fun isBypassName(server: Server): Boolean {
+        val n = server.name.lowercase()
+        return "обход" in n || ("лимитн" in n && "безлимит" !in n)
+    }
 
     /**
      * The subscription lists regular servers first, then the bypass section. Everything
-     * from the first "обход" entry on (its own АВТО, info entries, …) is the bypass tab.
+     * from its start (the "ЛИМИТНЫЕ" header, its own АВТО, info entries, …) is the bypass tab.
      */
     fun groupOf(server: Server, all: List<Server>): Group {
         val first = all.indexOfFirst(::isBypassName)

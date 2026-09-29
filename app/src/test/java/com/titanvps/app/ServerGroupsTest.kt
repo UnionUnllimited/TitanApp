@@ -31,6 +31,16 @@ class ServerGroupsTest {
     }
 
     @Test
+    fun limitedHeaderStartsBypassButUnlimitedDoesNot() {
+        val all = listOf(s("🇦🇱 👇БЕЗЛИМИТНЫЕ👇"), s("🇩🇪 Германия 1"),
+            s("🇦🇱 👇ЛИМИТНЫЕ ОСТ:1004.00 GB"), s("🇦🇱 ⚡ АВТО | Самые быстрые"), s("🇷🇺 Обход 1"))
+        val groups = ServerGroups.split(all).toMap()
+        assertEquals(2, groups[Group.SERVERS]!!.size)
+        assertEquals(listOf("🇦🇱 👇ЛИМИТНЫЕ ОСТ:1004.00 GB", "🇦🇱 ⚡ АВТО | Самые быстрые", "🇷🇺 Обход 1"),
+            groups[Group.BYPASS]!!.map { it.name })
+    }
+
+    @Test
     fun emptyGroupsAreHidden() {
         assertEquals(listOf(Group.SERVERS), ServerGroups.split(listOf(s("Финляндия"))).map { it.first })
     }
