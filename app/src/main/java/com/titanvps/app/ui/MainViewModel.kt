@@ -3,6 +3,7 @@ package com.titanvps.app.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.titanvps.app.BuildConfig
 import com.titanvps.app.TitanApp
 import com.titanvps.app.core.PingClient
 import com.titanvps.app.vpn.TitanVpnService
@@ -10,6 +11,7 @@ import com.titanvps.app.vpn.VpnState
 import com.titanvps.app.vpn.VpnStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -25,6 +27,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
+
+    /** URLs the UI should open in the browser. */
+    private val _openUrl = kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.BUFFERED)
+    val openUrl = _openUrl.receiveAsFlow()
 
     private val _message = MutableStateFlow<String?>(null)
     val message = _message.asStateFlow()
@@ -59,6 +65,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         repo.select(serverId)
         // Reconnect on the new server if we're online.
         if (vpnState.value is VpnState.Connected) TitanVpnService.start(getApplication<Application>())
+    }
+
+    /**
+     * Personal cabinet: the panel's profile-web-page-url (the same link Happ opens with ⓘ).
+     * Re-fetched first, since it can be a short-lived magic link.
+     */
+    fun openCabinet() = launchBusy {
+        runCatching { repo.refresh() }
+        _openUrl.send(subscription.value?.info?.webPageUrl ?: BuildConfig.CABINET_URL)
     }
 
     fun disconnect() = TitanVpnService.stop(getApplication<Application>())

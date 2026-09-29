@@ -96,6 +96,10 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     var confirmReset by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf<Server?>(null) }
 
+    LaunchedEffect(Unit) {
+        viewModel.openUrl.collect { context.openUrl(it) }
+    }
+
     if (showApps) {
         AppsScreen(viewModel) { showApps = false; viewModel.reconnectIfConnected() }
         return
@@ -188,7 +192,8 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                         contentPadding = PaddingValues(horizontal = 8.dp),
                     ) { Text("Продлить", maxLines = 1) }
                     OutlinedButton(
-                        onClick = { context.openUrl(sub.info.webPageUrl ?: BuildConfig.CABINET_URL) },
+                        onClick = viewModel::openCabinet,
+                        enabled = !busy,
                         modifier = Modifier.weight(1f).height(48.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp),
                     ) { Text("Личный кабинет", maxLines = 1) }
