@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -107,6 +108,10 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                     Image(painterResource(R.drawable.logo), null, Modifier.size(32.dp))
                     Spacer(Modifier.width(10.dp))
                     Text(sub.info.title ?: "TitanVPS", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { viewModel.refresh() }, enabled = !busy) {
+                        if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Default.Refresh, "Обновить подписку")
+                    }
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Меню") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -118,13 +123,6 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                         }
                     }
                 }
-                Text(
-                    "Потяните вниз, чтобы обновить подписку",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
 
             sub.info.announce?.let {
