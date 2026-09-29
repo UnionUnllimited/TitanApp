@@ -52,34 +52,42 @@ class PingService : Service() {
         return START_NOT_STICKY
     }
 
+    /**
+     * Returns true if anything answered. Servers that fail get one retry with a longer
+     * timeout, then libXray's pingBatch as a last resort, so a slow first handshake
+     * isn't reported as a timeout.
+     */
     private fun pingViaSocks(items: List<JSONObject>, receiver: ResultReceiver?): Boolean {
         val ports = XrayCore.freePorts(items.size)
         val config = PingConfig.build(items.map { PingConfig.Item(it.getString("json"), it.getString("tag")) }, ports)
         XrayCore.runPlain(config)
+        val results = LongArray(items.size) { -1L }
         try {
             val pool = Executors.newFixedThreadPool(minOf(items.size, PARALLEL))
-            val futures = items.mapIndexed { i, item ->
-                pool.submit<Long> {
-                    val delay = measure(ports[i])
-                    send(receiver, item.getString("id"), delay)
-                    delay
+            items.indices.map { i ->
+                pool.submit {
+                    var delay = measure(ports[i], TIMEOUT_SEC)
+                    if (delay < 0) delay = measure(ports[i], RETRY_TIMEOUT_SEC)
+                    results[i] = delay
+                    if (delay >= 0) send(receiver, items[i].getString("id"), delay)
                 }
-            }
-            val results = futures.map { runCatching { it.get() }.getOrDefault(-1L) }
+            }.forEach { runCatching { it.get() } }
             pool.shutdown()
-            return results.any { it >= 0 }
         } finally {
             XrayCore.stopPlain()
         }
+        val failed = items.indices.filter { results[it] < 0 }.map { items[it] }
+        val fallbackOk = if (failed.isNotEmpty()) pingBatchFallback(failed, receiver) else false
+        return results.any { it >= 0 } || fallbackOk
     }
 
     /** Warm-up request, then time a second request over the same (kept-alive) connection. */
-    private fun measure(port: Int): Long {
+    private fun measure(port: Int, timeoutSec: Int): Long {
         val client = OkHttpClient.Builder()
             .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
-            .connectTimeout(TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
-            .readTimeout(TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
-            .callTimeout(TIMEOUT_SEC + 2L, TimeUnit.SECONDS)
+            .connectTimeout(timeoutSec.toLong(), TimeUnit.SECONDS)
+            .readTimeout(timeoutSec.toLong(), TimeUnit.SECONDS)
+            .callTimeout(timeoutSec + 2L, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
             .build()
         val request = Request.Builder().url(PING_URL).build()
@@ -104,7 +112,7 @@ class PingService : Service() {
         var anyOk = false
         for (chunk in items.chunked(BATCH_LIMIT)) {
             val pings = runCatching {
-                XrayCore.ping(chunk.map { it.getString("json") to it.getString("tag") }, TIMEOUT_SEC)
+                XrayCore.ping(chunk.map { it.getString("json") to it.getString("tag") }, RETRY_TIMEOUT_SEC)
             }.getOrElse { List(chunk.size) { -1L to null } }
             chunk.zip(pings).forEach { (item, p) -> send(receiver, item.getString("id"), p.first) }
             anyOk = anyOk || pings.any { it.first >= 0 }
@@ -134,6 +142,7 @@ class PingService : Service() {
         const val RESULT_DONE = 0
         private const val PING_URL = "https://www.gstatic.com/generate_204"
         private const val TIMEOUT_SEC = 5
+        private const val RETRY_TIMEOUT_SEC = 10
         private const val PARALLEL = 8
         private const val BATCH_LIMIT = 5 // libXray pingBatch accepts at most 5 configs per call
     }
