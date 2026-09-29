@@ -80,7 +80,7 @@ object XrayConfigs {
      * balancer (e.g. BAL-LTE over bal, bal-2, …) are measured on its members — the
      * balancer picks a live one, so one dead member mustn't show the server as down.
      */
-    fun pingTags(serverJson: String, proxyTag: String, max: Int = 4): List<String> {
+    fun pingTags(serverJson: String, proxyTag: String, max: Int = 100): List<String> {
         val cfg = runCatching { JSONObject(serverJson) }.getOrNull() ?: return listOf(proxyTag)
         val routing = cfg.optJSONObject("routing") ?: return listOf(proxyTag)
         val rules = routing.optJSONArray("rules") ?: return listOf(proxyTag)
@@ -101,6 +101,21 @@ object XrayConfigs {
             .map { it.optString("tag") }
             .filter { tag -> tag.isNotEmpty() && selectors.any { tag.startsWith(it) } }
         return members.take(max).ifEmpty { listOf(proxyTag) }
+    }
+
+    /**
+     * Identity of an outbound regardless of its tag, so the same node that appears in
+     * several configs (a country and АВТО) is pinged once.
+     */
+    fun endpointKey(serverJson: String, tag: String): String? {
+        val outbounds = runCatching { JSONObject(serverJson).getJSONArray("outbounds") }.getOrNull() ?: return null
+        val byTag = (0 until outbounds.length()).mapNotNull { outbounds.optJSONObject(it) }.associateBy { it.optString("tag") }
+        val ob = byTag[tag] ?: return null
+        val copy = JSONObject(ob.toString()).apply { remove("tag") }
+        // Include what it dials through (dialerProxy), otherwise two chains could collide.
+        val via = ob.optJSONObject("streamSettings")?.optJSONObject("sockopt")?.optString("dialerProxy")
+            ?.takeIf { it.isNotEmpty() }?.let { byTag[it] }?.let { JSONObject(it.toString()).apply { remove("tag") } }
+        return copy.toString() + (via?.toString() ?: "")
     }
 
     private fun retargetInboundRules(cfg: JSONObject, oldTags: Set<String>) {

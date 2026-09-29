@@ -57,33 +57,47 @@ class PingService : Service() {
      * timeout, then libXray's pingBatch as a last resort, so a slow first handshake
      * isn't reported as a timeout.
      */
+    /**
+     * Every server is measured on all members of its balancer; identical nodes shared
+     * between configs (a country and АВТО) are pinged once. A server's ping is its best
+     * member — what the balancer itself would pick.
+     */
     private fun pingViaSocks(items: List<JSONObject>, receiver: ResultReceiver?): Boolean {
-        // One probe per balancer member (up to 4 per server); a server's ping is its best member.
-        data class Probe(val server: Int, val json: String, val tag: String)
-        val probes = items.flatMapIndexed { i, item ->
+        data class Probe(val json: String, val tag: String)
+        val probes = LinkedHashMap<String, Probe>()           // endpoint key -> first config using it
+        val serverKeys = items.map { item ->
             val json = item.getString("json")
-            XrayConfigs.pingTags(json, item.getString("tag")).map { Probe(i, json, it) }
+            XrayConfigs.pingTags(json, item.getString("tag")).mapNotNull { tag ->
+                val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
+                if (key !in probes && probes.size < MAX_PROBES) probes[key] = Probe(json, tag)
+                key.takeIf { it in probes }
+            }.distinct()
         }
-        val ports = XrayCore.freePorts(probes.size)
-        XrayCore.runPlain(PingConfig.build(probes.map { PingConfig.Item(it.json, it.tag) }, ports))
+        val keys = probes.keys.toList()
+        val ports = XrayCore.freePorts(keys.size)
+        XrayCore.runPlain(PingConfig.build(keys.map { probes.getValue(it).let { p -> PingConfig.Item(p.json, p.tag) } }, ports))
 
+        val result = HashMap<String, Long>()
         val best = LongArray(items.size) { -1L }
-        val errors = arrayOfNulls<String>(items.size)
-        val remaining = IntArray(items.size).also { r -> probes.forEach { r[it.server]++ } }
+        val remaining = IntArray(items.size) { serverKeys[it].size }
+        val serversByKey = HashMap<String, MutableList<Int>>().also { m ->
+            serverKeys.forEachIndexed { i, ks -> ks.forEach { m.getOrPut(it) { mutableListOf() }.add(i) } }
+        }
         val lock = Any()
         try {
-            val pool = Executors.newFixedThreadPool(minOf(probes.size, PARALLEL))
-            probes.mapIndexed { p, probe ->
+            val pool = Executors.newFixedThreadPool(minOf(keys.size.coerceAtLeast(1), PARALLEL))
+            keys.mapIndexed { p, key ->
                 pool.submit {
                     var r = measure(ports[p], TIMEOUT_SEC)
                     if (r.first < 0) r = measure(ports[p], RETRY_TIMEOUT_SEC)
                     synchronized(lock) {
-                        val i = probe.server
-                        if (r.first >= 0 && (best[i] < 0 || r.first < best[i])) best[i] = r.first
-                        if (r.first < 0 && errors[i] == null) errors[i] = r.second
-                        remaining[i]--
-                        // Report a server as soon as all its members are measured.
-                        if (remaining[i] == 0 && best[i] >= 0) send(receiver, items[i].getString("id"), best[i], null)
+                        result[key] = r.first
+                        for (i in serversByKey[key].orEmpty()) {
+                            if (r.first >= 0 && (best[i] < 0 || r.first < best[i])) best[i] = r.first
+                            remaining[i]--
+                            // Report a server as soon as all its members are measured.
+                            if (remaining[i] == 0 && best[i] >= 0) send(receiver, items[i].getString("id"), best[i], null)
+                        }
                     }
                 }
             }.forEach { runCatching { it.get() } }
@@ -92,9 +106,7 @@ class PingService : Service() {
             XrayCore.stopPlain()
         }
         val failed = items.indices.filter { best[it] < 0 }
-        val fallbackOk = if (failed.isNotEmpty()) {
-            pingBatchFallback(failed.map { items[it] }, receiver) { idx -> "proxy: ${errors[failed[idx]]}" }
-        } else false
+        val fallbackOk = if (failed.isNotEmpty()) pingBatchFallback(failed.map { items[it] }, receiver) else false
         return best.any { it >= 0 } || fallbackOk
     }
 
@@ -170,7 +182,8 @@ class PingService : Service() {
         private const val PING_URL = "https://www.gstatic.com/generate_204"
         private const val TIMEOUT_SEC = 5
         private const val RETRY_TIMEOUT_SEC = 10
-        private const val PARALLEL = 12
+        private const val PARALLEL = 16
+        private const val MAX_PROBES = 200
         private const val BATCH_LIMIT = 5 // libXray pingBatch accepts at most 5 configs per call
     }
 }

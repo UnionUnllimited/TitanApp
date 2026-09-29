@@ -123,4 +123,13 @@ class XrayConfigsTest {
         val run2 = JSONObject(XrayConfigs.buildRunConfig(plain.xrayJson, 3, "/a", 1500))
         assertFalse(run2.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing").getBoolean("routeOnly"))
     }
+
+    @Test
+    fun sameNodeUnderDifferentTagsHasSameKey() {
+        val country = """{"outbounds":[{"tag":"bal-3","protocol":"vless","settings":{"address":"de1.example.com","port":443}}]}"""
+        val auto = """{"outbounds":[{"tag":"bal-17","protocol":"vless","settings":{"address":"de1.example.com","port":443}},
+            {"tag":"bal-18","protocol":"vless","settings":{"address":"fi1.example.com","port":443}}]}"""
+        assertEquals(XrayConfigs.endpointKey(country, "bal-3"), XrayConfigs.endpointKey(auto, "bal-17"))
+        assertTrue(XrayConfigs.endpointKey(auto, "bal-17") != XrayConfigs.endpointKey(auto, "bal-18"))
+    }
 }
