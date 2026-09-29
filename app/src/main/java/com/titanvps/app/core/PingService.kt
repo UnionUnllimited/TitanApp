@@ -77,6 +77,6 @@ class PingService : Service() {
         const val RESULT_PARTIAL = 1
         const val RESULT_DONE = 0
         private const val TIMEOUT_SEC = 4
-        private const val CHUNK = 6
+        private const val CHUNK = 5 // libXray pingBatch accepts at most 5 configs per call
     }
 }
