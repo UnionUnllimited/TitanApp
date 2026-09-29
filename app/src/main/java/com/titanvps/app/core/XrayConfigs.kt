@@ -20,13 +20,16 @@ object XrayConfigs {
 
     /** Returns true if the body looks like Xray JSON (object or array of configs). */
     fun isXrayJson(body: String): Boolean {
-        val t = body.trimStart()
+        val t = clean(body)
         return t.startsWith("{") || t.startsWith("[")
     }
 
+    /** Strips a UTF-8 BOM and surrounding whitespace. */
+    fun clean(body: String): String = body.removePrefix("\uFEFF").trim()
+
     /** Parses one Xray config or an array of them (Remnawave "Xray JSON" response). */
     fun serversFromXrayJson(body: String): List<Server> {
-        val t = body.trim()
+        val t = clean(body)
         val configs = if (t.startsWith("[")) {
             val arr = JSONArray(t)
             (0 until arr.length()).map { arr.getJSONObject(it) }
@@ -48,11 +51,13 @@ object XrayConfigs {
     private fun serverFromConfig(src: JSONObject, index: Int): Server? {
         val cfg = JSONObject(src.toString())
         val outbounds = cfg.optJSONArray("outbounds") ?: return null
-        val proxyTag = (0 until outbounds.length())
+        val proxy = (0 until outbounds.length())
             .map { outbounds.getJSONObject(it) }
             .firstOrNull { it.optString("protocol") !in SERVICE_PROTOCOLS }
-            ?.optString("tag")?.takeIf { it.isNotEmpty() }
             ?: return null
+        // Remnawave may omit the tag; ping and routing need one.
+        if (proxy.optString("tag").isEmpty()) proxy.put("tag", PROXY_TAG)
+        val proxyTag = proxy.getString("tag")
         val name = cfg.optString("remarks").ifBlank { "Сервер ${index + 1}" }
         cfg.remove("remarks")
         cfg.remove("inbounds")

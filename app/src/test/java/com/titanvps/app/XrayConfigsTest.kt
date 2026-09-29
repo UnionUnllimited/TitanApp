@@ -68,4 +68,14 @@ class XrayConfigsTest {
         val outbounds = cfg.getJSONArray("outbounds")
         assertTrue((0 until outbounds.length()).any { outbounds.getJSONObject(it).getString("tag") == XrayConfigs.DNS_OUT_TAG })
     }
+
+    @Test
+    fun handlesBomAndUntaggedProxy() {
+        val body = "\uFEFF" + """{"remarks":"🇫🇮 Hysteria","outbounds":[{"protocol":"hysteria","settings":{"version":2,"address":"fi.example.com","port":443}},{"tag":"direct","protocol":"freedom"}]}"""
+        assertTrue(XrayConfigs.isXrayJson(body))
+        val servers = XrayConfigs.serversFromXrayJson(body)
+        assertEquals(1, servers.size)
+        assertEquals("proxy", servers[0].proxyTag)
+        assertEquals("proxy", JSONObject(servers[0].xrayJson).getJSONArray("outbounds").getJSONObject(0).getString("tag"))
+    }
 }

@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.titanvps.app.TitanApp
-import com.titanvps.app.core.TcpPing
+import com.titanvps.app.core.PingClient
 import com.titanvps.app.vpn.TitanVpnService
 import com.titanvps.app.vpn.VpnState
 import com.titanvps.app.vpn.VpnStatus
@@ -52,7 +52,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pingAll()
     }
 
-    fun select(serverId: String?) {
+    fun select(serverId: String) {
         if (serverId == repo.selectedId.value) return
         repo.select(serverId)
         // Reconnect on the new server if we're online.
@@ -77,7 +77,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _pinging.value = true
             try {
-                _pings.value = TcpPing.pingAll(servers)
+                _pings.value = PingClient.ping(getApplication<Application>(), servers)
             } finally {
                 _pinging.value = false
             }

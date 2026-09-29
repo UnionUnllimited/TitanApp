@@ -18,7 +18,6 @@ import com.titanvps.app.R
 import com.titanvps.app.TitanApp
 import com.titanvps.app.core.XrayConfigs
 import com.titanvps.app.core.XrayCore
-import com.titanvps.app.data.Server
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,7 +54,7 @@ class TitanVpnService : VpnService() {
         try {
             if (repo.subscription.value == null) error("Приложение не активировано")
             if (repo.isStale()) runCatching { repo.refresh() }
-            val server = repo.selectedServer() ?: pickBestServer()
+            val server = repo.selectedServer() ?: error("В подписке нет серверов")
 
             val pfd = Builder()
                 .setSession(getString(R.string.app_name))
@@ -84,18 +83,6 @@ class TitanVpnService : VpnService() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
-    }
-
-    /** "Auto" mode: lowest latency server; falls back to the first one. */
-    private fun pickBestServer(): Server {
-        val servers = TitanApp.get(this).repository.subscription.value!!.servers
-        if (servers.size == 1) return servers.first()
-        val delays = runCatching { XrayCore.ping(servers.map { it.xrayJson to it.proxyTag }) }
-            .getOrElse { List(servers.size) { -1L } }
-        return servers.zip(delays)
-            .filter { it.second > 0 }
-            .minByOrNull { it.second }?.first
-            ?: servers.first()
     }
 
     private fun stopVpn() {

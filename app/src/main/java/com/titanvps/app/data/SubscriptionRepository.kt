@@ -42,10 +42,10 @@ class SubscriptionRepository(private val context: Context) {
         _selectedId.value = serverId
     }
 
-    /** null selection = automatic (lowest ping). */
+    /** Selected server, or the first one if nothing (valid) is selected. */
     fun selectedServer(): Server? {
         val sub = _subscription.value ?: return null
-        return sub.servers.firstOrNull { it.id == _selectedId.value }
+        return sub.servers.firstOrNull { it.id == _selectedId.value } ?: sub.servers.firstOrNull()
     }
 
     fun isStale(): Boolean {
@@ -105,17 +105,20 @@ class SubscriptionRepository(private val context: Context) {
             throw SubscriptionException("Нет соединения с сервером подписки")
         }
 
-        val servers = if (XrayConfigs.isXrayJson(body)) {
-            XrayConfigs.serversFromXrayJson(body)
-        } else {
-            XrayConfigs.serversFromOutbounds(XrayCore.convertShareLinks(body))
+        // Full Xray JSON (keeps server-side routing); anything else, or JSON we
+        // can't use, goes through libXray's parser (links, base64, Xray JSON nodes).
+        val servers = runCatching {
+            if (XrayConfigs.isXrayJson(body)) XrayConfigs.serversFromXrayJson(body) else emptyList()
+        }.getOrDefault(emptyList()).ifEmpty {
+            runCatching { XrayConfigs.serversFromOutbounds(XrayCore.convertShareLinks(XrayConfigs.clean(body))) }
+                .getOrElse { throw SubscriptionException("Не удалось разобрать подписку: ${it.message}") }
         }
         if (servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")
 
         val sub = Subscription(url, info, servers, System.currentTimeMillis())
         store.save(sub)
         _subscription.value = sub
-        if (servers.none { it.id == _selectedId.value }) select(null)
+        if (servers.none { it.id == _selectedId.value }) select(servers.first().id)
         sub
     }
 

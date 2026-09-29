@@ -61,6 +61,11 @@
         </service>
 
         <service
+            android:name=".core.PingService"
+            android:exported="false"
+            android:process=":ping" />
+
+        <service
             android:name=".vpn.VpnTileService"
             android:exported="true"
             android:icon="@drawable/ic_shield"

@@ -27,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
@@ -183,6 +182,7 @@ private fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boolea
     val pings by viewModel.pings.collectAsState()
     val pinging by viewModel.pinging.collectAsState()
     var showServers by remember { mutableStateOf(false) }
+    val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
     var menu by remember { mutableStateOf(false) }
 
     Column(
@@ -228,13 +228,12 @@ private fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boolea
         StatusText(state)
 
         Spacer(Modifier.height(36.dp))
-        val selected = sub.servers.firstOrNull { it.id == selectedId }
         Card(onClick = { viewModel.pingAll(); showServers = true }) {
-            Icon(if (selected == null) Icons.Default.Bolt else Icons.Default.Public, null, tint = Brand)
+            Icon(Icons.Default.Public, null, tint = Brand)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("Локация", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(selected?.name ?: "Автовыбор (самый быстрый)", fontWeight = FontWeight.Medium)
+                Text(selected?.name ?: "—", fontWeight = FontWeight.Medium)
             }
             selected?.let { pings[it.id] }?.let { PingLabel(it); Spacer(Modifier.width(8.dp)) }
             Icon(Icons.Default.KeyboardArrowDown, null)
@@ -268,13 +267,8 @@ private fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boolea
                         }
                     }
                 }
-                item {
-                    ServerRow("Автовыбор (самый быстрый)", null, selectedId == null, Icons.Default.Bolt) {
-                        viewModel.select(null); showServers = false
-                    }
-                }
                 items(sub.servers, key = { it.id }) { s ->
-                    ServerRow(s.name, pings[s.id], s.id == selectedId, Icons.Default.Public) {
+                    ServerRow(s.name, pings[s.id], s.id == selected?.id, Icons.Default.Public) {
                         viewModel.select(s.id); showServers = false
                     }
                 }
