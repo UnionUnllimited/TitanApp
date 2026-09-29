@@ -64,6 +64,7 @@ class XrayConfigsTest {
         assertEquals(XrayConfigs.DNS_OUT_TAG, rules.getJSONObject(0).getString("outboundTag"))
         assertEquals(2, rules.length()) // server rule kept after the DNS hijack
         assertTrue(cfg.has("dns"))
+        assertEquals("UseIPv4", cfg.getJSONObject("dns").getString("queryStrategy"))
 
         val outbounds = cfg.getJSONArray("outbounds")
         assertTrue((0 until outbounds.length()).any { outbounds.getJSONObject(it).getString("tag") == XrayConfigs.DNS_OUT_TAG })

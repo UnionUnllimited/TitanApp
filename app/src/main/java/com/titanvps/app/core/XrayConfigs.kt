@@ -169,6 +169,9 @@ object XrayConfigs {
         if (!cfg.has("dns")) {
             cfg.put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8")))
         }
+        // IPv4 answers only (like Happ by default): apps never try IPv6, which breaks
+        // "direct" routes on networks without IPv6.
+        cfg.getJSONObject("dns").put("queryStrategy", "UseIPv4")
 
         val outbounds = cfg.getJSONArray("outbounds")
         val hasDnsOut = (0 until outbounds.length()).any { outbounds.getJSONObject(it).optString("tag") == DNS_OUT_TAG }
