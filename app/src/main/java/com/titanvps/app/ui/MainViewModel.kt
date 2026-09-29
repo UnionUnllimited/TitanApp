@@ -39,6 +39,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _pings = MutableStateFlow<Map<String, Long>>(emptyMap())
     val pings = _pings.asStateFlow()
 
+    /** serverId → why its ping failed (shown in the long-press sheet only). */
+    private val _pingErrors = MutableStateFlow<Map<String, String>>(emptyMap())
+    val pingErrors = _pingErrors.asStateFlow()
+
     private val _pinging = MutableStateFlow(false)
     val pinging = _pinging.asStateFlow()
 
@@ -107,11 +111,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _pinging.value = true
             if (clear) _pings.value = emptyMap()
+            _pingErrors.value = _pingErrors.value - servers.map { it.id }.toSet()
             try {
                 withTimeoutOrNull(150_000) {
                     PingClient.ping(getApplication<Application>(), servers).collect { event ->
                         when (event) {
-                            is PingClient.Event.Partial -> _pings.value = _pings.value + event.delays
+                            is PingClient.Event.Partial -> {
+                                _pings.value = _pings.value + event.delays
+                                _pingErrors.value = _pingErrors.value + event.errors
+                            }
                             is PingClient.Event.Done -> if (clear) event.error?.let { _message.value = "Пинг не выполнен: $it" }
                         }
                     }

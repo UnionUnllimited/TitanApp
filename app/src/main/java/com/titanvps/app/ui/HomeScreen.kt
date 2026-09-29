@@ -91,6 +91,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     val selectedId by viewModel.selectedId.collectAsState()
     val pings by viewModel.pings.collectAsState()
     val pinging by viewModel.pinging.collectAsState()
+    val pingErrors by viewModel.pingErrors.collectAsState()
     var menu by remember { mutableStateOf(false) }
     var showApps by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
@@ -229,6 +230,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
         ServerDetailsSheet(
             server = server,
             ping = pings[server.id],
+            error = pingErrors[server.id],
             pinging = pinging,
             selected = server.id == selected?.id,
             onPing = { viewModel.pingOne(server.id) },
@@ -253,6 +255,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
 private fun ServerDetailsSheet(
     server: Server,
     ping: Long?,
+    error: String?,
     pinging: Boolean,
     selected: Boolean,
     onPing: () -> Unit,
@@ -275,6 +278,10 @@ private fun ServerDetailsSheet(
                     ping != null -> PingDot(ping)
                     else -> Text("—")
                 }
+            }
+            if (error != null && (ping ?: 0) < 0) {
+                Spacer(Modifier.height(8.dp))
+                Text("Причина: $error", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
             }
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
