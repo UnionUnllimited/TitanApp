@@ -76,35 +76,12 @@ class SubscriptionRepository(private val context: Context) {
     private suspend fun fetch(url: String): Subscription = withContext(Dispatchers.IO) {
         if (!deepLinks.isAllowed(url)) throw SubscriptionException("Недопустимый адрес подписки")
 
-        val request = Request.Builder()
-            .url(url)
-            // TODO: temporary. Switch to our own UA (e.g. "TitanVPS/<version>") once a
-            //  Remnawave response rule for it is set up.
-            .header("User-Agent", "Xray")
-            .header("Accept", "application/json, text/plain, */*")
-            // Remnawave HWID device limit headers.
-            .header("x-hwid", hwid())
-            .header("x-device-os", "Android")
-            .header("x-ver-os", Build.VERSION.RELEASE ?: "")
-            .header("x-device-model", "${Build.MANUFACTURER} ${Build.MODEL}")
-            .build()
-
-        val (info, body) = try {
-            http.newCall(request).execute().use { resp ->
-                if (!deepLinks.isAllowed(resp.request.url.toString())) {
-                    throw SubscriptionException("Недопустимый адрес подписки")
-                }
-                when {
-                    resp.code == 404 || resp.code == 403 ->
-                        throw SubscriptionException("Подписка не найдена или отключена (${resp.code}, ${resp.request.url.host})")
-                    !resp.isSuccessful ->
-                        throw SubscriptionException("Сервер подписки недоступен (${resp.code}, ${resp.request.url.host})")
-                }
-                SubscriptionHeaders.parse { resp.header(it) } to resp.body.string()
-            }
-        } catch (e: IOException) {
-            throw SubscriptionException("Нет соединения с сервером подписки")
-        }
+        // Remnawave serves Xray JSON (with the panel's routing rules) at /<key>/json
+        // regardless of User-Agent; fall back to the plain link if that's unavailable.
+        val (info, body) = runCatching { download(jsonVariant(url)) }
+            .getOrNull()
+            ?.takeIf { XrayConfigs.isXrayJson(it.second) }
+            ?: download(url)
 
         // Full Xray JSON (keeps server-side routing); anything else, or JSON we
         // can't use, goes through libXray's parser (links, base64, Xray JSON nodes).
@@ -120,11 +97,51 @@ class SubscriptionRepository(private val context: Context) {
         if (sub.servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")
         store.save(sub)
         _subscription.value = sub
-        if (servers.none { it.id == _selectedId.value }) select(servers.first().id)
+        if (sub.servers.none { it.id == _selectedId.value }) select(sub.servers.first().id)
         sub
     }
 
     private fun withoutHidden(sub: Subscription) = sub.copy(servers = sub.servers.filterNot(ServerGroups::isHidden))
+
+    private fun download(url: String): Pair<SubscriptionInfo, String> {
+        val request = Request.Builder()
+            .url(url)
+            // TODO: temporary. Switch to our own UA (e.g. "TitanVPS/<version>") once a
+            //  Remnawave response rule for it is set up.
+            .header("User-Agent", "Xray")
+            .header("Accept", "application/json, text/plain, */*")
+            // Remnawave HWID device limit headers.
+            .header("x-hwid", hwid())
+            .header("x-device-os", "Android")
+            .header("x-ver-os", Build.VERSION.RELEASE ?: "")
+            .header("x-device-model", "${Build.MANUFACTURER} ${Build.MODEL}")
+            .build()
+
+        return try {
+            http.newCall(request).execute().use { resp ->
+                if (!deepLinks.isAllowed(resp.request.url.toString())) {
+                    throw SubscriptionException("Недопустимый адрес подписки")
+                }
+                when {
+                    resp.code == 404 || resp.code == 403 ->
+                        throw SubscriptionException("Подписка не найдена или отключена (${resp.code}, ${resp.request.url.host})")
+                    !resp.isSuccessful ->
+                        throw SubscriptionException("Сервер подписки недоступен (${resp.code}, ${resp.request.url.host})")
+                }
+                SubscriptionHeaders.parse { resp.header(it) } to resp.body.string()
+            }
+        } catch (e: IOException) {
+            throw SubscriptionException("Нет соединения с сервером подписки")
+        }
+    }
+
+    /** https://host/sub/KEY?x → https://host/sub/KEY/json?x */
+    private fun jsonVariant(url: String): String {
+        val base = url.substringBefore('?').trimEnd('/')
+        val query = url.substringAfter('?', "")
+        val json = if (base.endsWith("/json")) base else "$base/json"
+        return if (query.isEmpty()) json else "$json?$query"
+    }
 
     @SuppressLint("HardwareIds")
     private fun hwid(): String =
