@@ -16,6 +16,8 @@ object XrayConfigs {
     const val TUN_TAG = "tun-in"
     const val DNS_OUT_TAG = "dns-out"
     private const val SNIFFING_KEY = "_titanSniffing"
+    const val ACCESS_LOG = "xray-access.log"
+    const val ERROR_LOG = "xray-error.log"
     private const val PROXY_TAG = "proxy"
     private val SERVICE_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
 
@@ -157,8 +159,17 @@ object XrayConfigs {
      * Final config: our TUN inbound (fd from VpnService), DNS hijack, asset dir.
      * Everything else (outbounds, routing, dns) comes from the server.
      */
-    fun buildRunConfig(serverJson: String, tunFd: Int, assetDir: String, mtu: Int): String {
+    fun buildRunConfig(serverJson: String, tunFd: Int, assetDir: String, mtu: Int, logDir: String? = null): String {
         val cfg = JSONObject(serverJson)
+
+        // Access log shows every connection and where routing sent it (direct/proxy/block);
+        // error log shows why something failed. Both are read by the diagnostics screen.
+        if (logDir != null) {
+            cfg.put("log", JSONObject()
+                .put("loglevel", "warning")
+                .put("access", "$logDir/$ACCESS_LOG")
+                .put("error", "$logDir/$ERROR_LOG"))
+        }
 
         // The panel's sniffing if it had one. Default routeOnly=false: the destination
         // becomes the sniffed domain, so "direct" re-resolves it and falls back to IPv4

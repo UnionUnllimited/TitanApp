@@ -63,6 +63,10 @@ class TitanVpnService : VpnService() {
             if (repo.isStale()) runCatching { repo.refresh() }
             val server = repo.selectedServer() ?: error("В подписке нет серверов")
 
+            // Resolver for "direct" traffic: the carrier's/router's own DNS (like Happ), since
+            // foreign resolvers such as 1.1.1.1 are often blocked on Russian mobile networks.
+            val underlyingDns = underlyingDnsServer()
+
             val pfd = Builder()
                 .setSession(getString(R.string.app_name))
                 .setMtu(MTU)
@@ -87,8 +91,11 @@ class TitanVpnService : VpnService() {
                 .establish() ?: error("Нет разрешения на VPN")
             tun = pfd
 
-            val config = XrayConfigs.buildRunConfig(server.xrayJson, pfd.fd, TitanApp.get(this).assetDir, MTU)
-            XrayCore.start(config) { fd -> protect(fd) }
+            val logDir = cacheDir.absolutePath
+            java.io.File(logDir, XrayConfigs.ACCESS_LOG).writeText("")
+            java.io.File(logDir, XrayConfigs.ERROR_LOG).writeText("")
+            val config = XrayConfigs.buildRunConfig(server.xrayJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir)
+            XrayCore.start(config, underlyingDns) { fd -> protect(fd) }
 
             VpnStatus.set(VpnState.Connected(server.name, System.currentTimeMillis()))
             startForegroundCompat(getString(R.string.notification_connected, server.name))
@@ -99,6 +106,14 @@ class TitanVpnService : VpnService() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
+    }
+
+    /** First IPv4 DNS of the physical network (before our VPN is up), else Yandex DNS. */
+    private fun underlyingDnsServer(): String {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java)
+        val servers = cm?.activeNetwork?.let { cm.getLinkProperties(it) }?.dnsServers.orEmpty()
+        val v4 = servers.firstOrNull { it is java.net.Inet4Address && !it.isLoopbackAddress }
+        return (v4?.hostAddress ?: "77.88.8.8") + ":53"
     }
 
     /** Watches for mobile whitelist mode while on a regular server. */

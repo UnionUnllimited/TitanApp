@@ -91,12 +91,13 @@ object XrayCore {
         runCatching { invoke("stopXray") }
     }
 
-    fun start(configJson: String, protect: (Int) -> Boolean) {
+    /** [dns] is the resolver Go uses for "direct" and server hostnames, e.g. the carrier's DNS. */
+    fun start(configJson: String, dns: String, protect: (Int) -> Boolean) {
         val controller = object : DialerController {
             override fun protectFd(fd: Long): Boolean = protect(fd.toInt())
         }
         // Go resolver must use a protected socket, not the VPN's loopback DNS.
-        LibXray.setDNS(controller, "1.1.1.1:53")
+        LibXray.setDNS(controller, dns)
         LibXray.registerDialerController(controller)
         invoke("runXray", JSONObject().put("xrayJson", configJson))
     }

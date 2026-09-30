@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -102,12 +103,18 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     val pingErrors by viewModel.pingErrors.collectAsState()
     var menu by remember { mutableStateOf(false) }
     var showApps by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
     val autoBypass by viewModel.autoBypass.collectAsState()
     var confirmReset by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf<Server?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.openUrl.collect { context.openUrl(it) }
+    }
+
+    if (showDiagnostics) {
+        DiagnosticsScreen { showDiagnostics = false }
+        return
     }
 
     if (showApps) {
@@ -162,6 +169,11 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                                 text = { Text("Поддержка") },
                                 leadingIcon = { Icon(Icons.Default.SupportAgent, null) },
                                 onClick = { menu = false; context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Диагностика") },
+                                leadingIcon = { Icon(Icons.Default.BugReport, null) },
+                                onClick = { menu = false; showDiagnostics = true },
                             )
                             DropdownMenuItem(
                                 text = { Text("Сброс настроек") },
