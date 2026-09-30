@@ -3,6 +3,7 @@ package com.titanvps.app
 import android.app.Application
 import android.content.Context
 import com.titanvps.app.data.AppSettings
+import com.titanvps.app.data.NetworkMonitor
 import com.titanvps.app.data.SubscriptionRepository
 import java.io.File
 
@@ -14,6 +15,9 @@ class TitanApp : Application() {
     lateinit var settings: AppSettings
         private set
 
+    lateinit var network: NetworkMonitor
+        private set
+
     /** Directory with geoip.dat / geosite.dat for Xray routing rules. */
     val assetDir: String get() = File(filesDir, "xray").absolutePath
 
@@ -21,6 +25,7 @@ class TitanApp : Application() {
         super.onCreate()
         repository = SubscriptionRepository(this)
         settings = AppSettings(this)
+        network = NetworkMonitor(this)
         copyGeoAssets()
     }
 

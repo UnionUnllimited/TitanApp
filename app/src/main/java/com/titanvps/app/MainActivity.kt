@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connect() {
+        if (!viewModel.canConnect()) return
         val prepare = VpnService.prepare(this)
         if (prepare != null) vpnPermission.launch(prepare) else TitanVpnService.start(this)
     }

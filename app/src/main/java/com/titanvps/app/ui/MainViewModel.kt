@@ -29,6 +29,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val autoConnect = settings.autoConnect
     val notifications = settings.notifications
     val favorites = settings.favorites
+    val onMobile = TitanApp.get(app).network.onMobile
+
+    /** Bypass servers are for mobile internet only; tells the user why otherwise. */
+    fun canConnect(): Boolean {
+        val sub = subscription.value ?: return true
+        val server = sub.servers.firstOrNull { it.id == selectedId.value } ?: sub.servers.firstOrNull() ?: return true
+        val bypass = com.titanvps.app.data.ServerGroups.groupOf(server, sub.servers) == com.titanvps.app.data.ServerGroups.Group.BYPASS
+        if (bypass && !TitanApp.get(getApplication<Application>()).network.current()) {
+            _message.value = com.titanvps.app.data.NetworkMonitor.BYPASS_WIFI_MESSAGE
+            return false
+        }
+        return true
+    }
+
+    fun explainBypassOnWifi() {
+        _message.value = com.titanvps.app.data.NetworkMonitor.BYPASS_WIFI_MESSAGE
+    }
 
     fun setTheme(mode: com.titanvps.app.data.ThemeMode) = settings.setTheme(mode)
     fun setAutoConnect(enabled: Boolean) = settings.setAutoConnect(enabled)

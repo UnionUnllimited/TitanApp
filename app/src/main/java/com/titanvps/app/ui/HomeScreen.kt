@@ -29,7 +29,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Info
@@ -39,8 +38,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.outlined.StarBorder
-import androidx.activity.compose.BackHandler
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LocalContentColor
@@ -68,6 +67,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -98,7 +98,7 @@ private fun isAuto(s: Server) = s.name.lowercase().let { "авто" in it || "au
 
 /**
  * Главная, as in the mockup: a server list with a big "Подключиться" button at the
- * bottom. "Обходы" (bypass servers) open as their own page with a back arrow.
+ * bottom and a Серверы | Обходы switcher on top. Обходы work on mobile data only.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,6 +110,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     val pinging by viewModel.pinging.collectAsState()
     val pingErrors by viewModel.pingErrors.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
+    val onMobile by viewModel.onMobile.collectAsState()
     var details by remember { mutableStateOf<Server?>(null) }
 
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
@@ -120,9 +121,8 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     if (groups[page].isNullOrEmpty()) page = Group.SERVERS
     var filter by rememberSaveable { mutableStateOf(Filter.ALL) }
     var query by rememberSaveable { mutableStateOf("") }
-    val bypassCount = groups[Group.BYPASS]?.size ?: 0
-
-    BackHandler(enabled = page == Group.BYPASS) { page = Group.SERVERS }
+    val bypassLocked = page == Group.BYPASS && !onMobile
+    val selectedLocked = !onMobile && selected != null && ServerGroups.groupOf(selected, sub.servers) == Group.BYPASS
 
     val shown = groups[page].orEmpty().filter { s ->
         (query.isBlank() || s.name.contains(query.trim(), ignoreCase = true)) &&
@@ -135,10 +135,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
 
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.widthIn(max = 640.dp).fillMaxWidth().align(Alignment.CenterHorizontally).padding(horizontal = 4.dp)) {
-            TopBar(
-                title = if (page == Group.BYPASS) "Обходы" else "Серверы",
-                onBack = if (page == Group.BYPASS) ({ page = Group.SERVERS }) else null,
-            ) {
+            TopBar(title = "Главная") {
                 IconButton(onClick = { viewModel.refresh() }, enabled = !busy) {
                     if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                     else Icon(Icons.Default.Refresh, "Обновить подписку")
@@ -152,14 +149,30 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                if (groups.size > 1) {
+                    item {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            groups.forEach { (group, list) ->
+                                TabChip(group.title, list.size, group == page, Modifier.weight(1f)) {
+                                    if (page != group) { page = group; filter = Filter.ALL; query = "" }
+                                }
+                            }
+                        }
+                    }
+                }
                 if (page == Group.BYPASS) {
-                    item { InfoBanner("Для ограничений мобильного интернета") }
+                    if (!onMobile) item { WifiWarning() }
+                    else item { InfoBanner("Для ограничений мобильного интернета") }
                     item { RemainingTrafficCard(sub) { context.openUrl(BuildConfig.TELEGRAM_URL) } }
                 } else {
                     sub.info.announce?.let { item { InfoBanner(it) } }
-                    if (bypassCount > 0) {
-                        item { BypassEntryCard(bypassCount) { page = Group.BYPASS; filter = Filter.ALL; query = "" } }
-                    }
                 }
                 item {
                     OutlinedTextField(
@@ -200,7 +213,8 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                         pending = pinging && pings[s.id] == null,
                         selected = s.id == selected?.id,
                         favorite = s.name in favorites,
-                        onClick = { viewModel.select(s.id) },
+                        locked = bypassLocked,
+                        onClick = { if (bypassLocked) viewModel.explainBypassOnWifi() else viewModel.select(s.id) },
                         onLongClick = { details = s },
                     )
                 }
@@ -208,7 +222,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
             }
         }
 
-        ConnectBar(state, selected, Modifier.widthIn(max = 640.dp).fillMaxWidth().align(Alignment.CenterHorizontally)) {
+        ConnectBar(state, selected, selectedLocked, Modifier.widthIn(max = 640.dp).fillMaxWidth().align(Alignment.CenterHorizontally)) {
             when (state) {
                 is VpnState.Connected, VpnState.Connecting -> viewModel.disconnect()
                 VpnState.Disconnecting -> Unit
@@ -225,6 +239,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
             pinging = pinging,
             selected = server.id == selected?.id,
             favorite = server.name in favorites,
+            locked = !onMobile && ServerGroups.groupOf(server, sub.servers) == Group.BYPASS,
             onPing = { viewModel.pingOne(server.id) },
             onFavorite = { viewModel.toggleFavorite(server.name) },
             onSelect = { viewModel.select(server.id); details = null },
@@ -235,7 +250,7 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
 
 /** Big bottom button from the mockup, with connection state and timer. */
 @Composable
-private fun ConnectBar(state: VpnState, server: Server?, modifier: Modifier, onClick: () -> Unit) {
+private fun ConnectBar(state: VpnState, server: Server?, locked: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Column(modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
         when (state) {
             is VpnState.Connected -> {
@@ -251,7 +266,11 @@ private fun ConnectBar(state: VpnState, server: Server?, modifier: Modifier, onC
                 state.message, color = MaterialTheme.colorScheme.error, fontSize = 13.sp,
                 modifier = Modifier.padding(bottom = 8.dp, start = 4.dp),
             )
-            else -> Unit
+            else -> if (locked) Text(
+                "Обходы недоступны на Wi-Fi — выберите сервер во вкладке «Серверы»",
+                color = MaterialTheme.colorScheme.error, fontSize = 13.sp,
+                modifier = Modifier.padding(bottom = 8.dp, start = 4.dp),
+            )
         }
         val connected = state is VpnState.Connected
         Button(
@@ -282,21 +301,46 @@ private fun ConnectBar(state: VpnState, server: Server?, modifier: Modifier, onC
     }
 }
 
-/** Entry to the Обходы page from the main list. */
+/** One half of the Серверы | Обходы switcher. */
 @Composable
-private fun BypassEntryCard(count: Int, onClick: () -> Unit) {
+private fun TabChip(title: String, count: Int, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val bg by animateColorAsState(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, label = "tab")
+    Row(
+        modifier
+            .clip(RoundedCornerShape(11.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+        Text(title, color = color, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1)
+        Spacer(Modifier.width(6.dp))
+        Text("$count", color = color.copy(alpha = 0.7f), fontSize = 13.sp, maxLines = 1)
+    }
+}
+
+/** Shown on the Обходы tab while the phone is on Wi-Fi. */
+@Composable
+private fun WifiWarning() {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick),
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Обходы", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                Text("Для ограничений мобильного интернета", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+            Icon(Icons.Default.Wifi, null, Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text("Недоступно на Wi-Fi", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Обходы работают только через мобильный интернет и нужны при его ограничениях. " +
+                        "На Wi-Fi подключиться к ним нельзя — выберите сервер во вкладке «Серверы».",
+                    fontSize = 13.sp,
+                )
             }
-            Text("$count", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -391,6 +435,7 @@ private fun ServerCard(
     pending: Boolean,
     selected: Boolean,
     favorite: Boolean,
+    locked: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -404,6 +449,7 @@ private fun ServerCard(
             .background(if (selected) primary.copy(alpha = if (light) 0.08f else 0.10f) else MaterialTheme.colorScheme.surface)
             .border(if (selected) 1.5.dp else 1.dp, if (selected) primary else MaterialTheme.colorScheme.outlineVariant, shape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .alpha(if (locked) 0.45f else 1f)
             .heightIn(min = 60.dp)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -460,6 +506,7 @@ private fun ServerDetailsSheet(
     pinging: Boolean,
     selected: Boolean,
     favorite: Boolean,
+    locked: Boolean,
     onPing: () -> Unit,
     onFavorite: () -> Unit,
     onSelect: () -> Unit,
@@ -499,8 +546,8 @@ private fun ServerDetailsSheet(
                     Spacer(Modifier.width(6.dp))
                     Text("Пинг")
                 }
-                Button(onClick = onSelect, enabled = !selected, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
-                    Text(if (selected) "Выбран" else "Выбрать")
+                Button(onClick = onSelect, enabled = !selected && !locked, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+                    Text(if (selected) "Выбран" else if (locked) "Только моб. сеть" else "Выбрать")
                 }
             }
         }

@@ -23,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -61,7 +62,12 @@ class TitanVpnService : VpnService() {
         try {
             if (repo.subscription.value == null) error("Приложение не активировано")
             if (repo.isStale()) runCatching { repo.refresh() }
-            val server = repo.selectedServer() ?: error("В подписке нет серверов")
+            var server = repo.selectedServer() ?: error("В подписке нет серверов")
+            // Bypass servers only on mobile data (tile / always-on can start us on Wi-Fi).
+            val all = repo.subscription.value!!.servers
+            if (isBypass(server, all) && !TitanApp.get(this).network.current()) {
+                regularServer(all)?.let { server = it; repo.select(it.id); notifyWifiSwitch(it.name) }
+            }
 
             // Resolver for "direct" traffic: the carrier's/router's own DNS (like Happ), since
             // foreign resolvers such as 1.1.1.1 are often blocked on Russian mobile networks.
@@ -100,12 +106,62 @@ class TitanVpnService : VpnService() {
             VpnStatus.set(VpnState.Connected(server.name, System.currentTimeMillis()))
             startForegroundCompat(getString(R.string.notification_connected, server.name))
             startWatcher(server)
+            watchWifi(server, all)
         } catch (e: Exception) {
             stopVpn()
             VpnStatus.set(VpnState.Error(e.message ?: "Ошибка подключения"))
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
+    }
+
+    private var wifiJob: Job? = null
+
+    private fun isBypass(server: com.titanvps.app.data.Server, all: List<com.titanvps.app.data.Server>) =
+        com.titanvps.app.data.ServerGroups.groupOf(server, all) == com.titanvps.app.data.ServerGroups.Group.BYPASS
+
+    /** A regular server to fall back to: its АВТО entry if there is one. */
+    private fun regularServer(all: List<com.titanvps.app.data.Server>): com.titanvps.app.data.Server? {
+        val regular = com.titanvps.app.data.ServerGroups.split(all).toMap()[com.titanvps.app.data.ServerGroups.Group.SERVERS].orEmpty()
+        return regular.firstOrNull { "авто" in it.name.lowercase() } ?: regular.firstOrNull()
+    }
+
+    /** Connected via a bypass server and the phone moved to Wi-Fi: move to a regular server. */
+    private fun watchWifi(server: com.titanvps.app.data.Server, all: List<com.titanvps.app.data.Server>) {
+        wifiJob?.cancel()
+        if (!isBypass(server, all)) return
+        wifiJob = scope.launch {
+            TitanApp.get(this@TitanVpnService).network.onMobile.first { !it }
+            val target = regularServer(all) ?: return@launch
+            // Separate job: restarting the VPN cancels this one.
+            scope.launch {
+                lock.withLock {
+                    TitanApp.get(this@TitanVpnService).repository.select(target.id)
+                    startVpn()
+                    notifyWifiSwitch(target.name)
+                }
+            }
+        }
+    }
+
+    private fun notifyWifiSwitch(to: String) {
+        if (!TitanApp.get(this).settings.notifications.value) return
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel(ALERT_CHANNEL_ID, "Ограничения мобильной сети", NotificationManager.IMPORTANCE_HIGH)
+        )
+        val open = PendingIntent.getActivity(this, 4, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        nm.notify(
+            ALERT_ID,
+            NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_shield)
+                .setContentTitle("Обходы недоступны на Wi-Fi")
+                .setContentText("Обходы работают только через мобильный интернет. Переключили на «$to».")
+                .setStyle(NotificationCompat.BigTextStyle().bigText("Обходы работают только через мобильный интернет. Переключили на «$to»."))
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build()
+        )
     }
 
     /** First IPv4 DNS of the physical network (before our VPN is up), else Yandex DNS. */
@@ -168,6 +224,8 @@ class TitanVpnService : VpnService() {
     }
 
     private fun stopVpn() {
+        wifiJob?.cancel()
+        wifiJob = null
         watcherJob?.cancel()
         watcherJob = null
         if (tun != null) VpnStatus.set(VpnState.Disconnecting)
