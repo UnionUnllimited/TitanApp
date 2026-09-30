@@ -58,10 +58,10 @@ internal fun ProfileScreen(
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(
-            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ScreenTitle("Настройки")
+            TopBar("Настройки", onBack = onOpenHome)
 
             SectionCard(title = "Оформление") {
                 Row(
@@ -90,24 +90,21 @@ internal fun ProfileScreen(
             }
 
             SectionCard(title = "Подключение") {
-                ToggleRow("Автоподключение", autoConnect, subtitle = "Подключаться при запуске приложения") { viewModel.setAutoConnect(it) }
-                NavRow("Выбор сервера", value = selected?.name ?: "—", onClick = onOpenHome)
+                ToggleRow("Автоподключение", autoConnect) { viewModel.setAutoConnect(it) }
+                NavRow(
+                    "Выбор сервера",
+                    value = selected?.let { if ("авто" in it.name.lowercase()) "Автоматически" else it.name.trim() } ?: "—",
+                    onClick = onOpenHome,
+                )
                 NavRow("Раздельное туннелирование", onClick = onOpenApps)
-                ToggleRow(
-                    "Автопереход на обходы",
-                    autoBypass,
-                    subtitle = "Если мобильный интернет включил белые списки",
-                    divider = false,
-                ) { viewModel.setAutoBypass(it) }
+                ToggleRow("Автопереход на обходы", autoBypass, divider = false) { viewModel.setAutoBypass(it) }
             }
 
             SectionCard(title = "Приложение") {
                 NavRow("Язык", value = "Русский", onClick = {})
                 ToggleRow("Уведомления", notifications) { viewModel.setNotifications(it) }
                 NavRow("Поддержка") { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) }
-                NavRow("О приложении") { about = true }
-                NavRow("Сброс настроек") { confirmReset = true }
-                NavRow("Выйти из аккаунта", titleColor = MaterialTheme.colorScheme.error, divider = false) { confirmLogout = true }
+                NavRow("О приложении", divider = false) { about = true }
             }
 
             Text(
@@ -121,12 +118,21 @@ internal fun ProfileScreen(
     }
 
     if (about) {
+        // "О приложении": version plus the less frequent actions (not in the main list).
         AlertDialog(
             onDismissRequest = { about = false },
             title = { Text("Titan VPS") },
-            text = { Text("Версия ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\nЯдро: Xray") },
-            confirmButton = { TextButton(onClick = { about = false }) { Text("OK") } },
-            dismissButton = { TextButton(onClick = { about = false; onOpenDiagnostics() }) { Text("Диагностика") } },
+            text = {
+                Column {
+                    Text("Версия ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ядро Xray", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { about = false; onOpenDiagnostics() }) { Text("Диагностика") }
+                    TextButton(onClick = { about = false; confirmReset = true }) { Text("Сброс настроек") }
+                    TextButton(onClick = { about = false; confirmLogout = true }) {
+                        Text("Выйти из аккаунта", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { about = false }) { Text("Закрыть") } },
         )
     }
     if (confirmReset) {

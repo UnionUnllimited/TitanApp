@@ -1,6 +1,7 @@
 package com.titanvps.app.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -12,9 +13,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -24,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -123,11 +127,27 @@ internal fun InfoBanner(text: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** Screen title row as in the mockups. */
+/**
+ * Top bar from the mockups: "‹ Title" with an optional action on the right.
+ * Dark theme: title next to the arrow; light theme: title centered.
+ */
 @Composable
-internal fun ScreenTitle(title: String, trailing: @Composable () -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, Modifier.weight(1f), fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        trailing()
+internal fun TopBar(
+    title: String,
+    onBack: (() -> Unit)? = null,
+    action: @Composable () -> Unit = {},
+) {
+    val centered = MaterialTheme.colorScheme.background.luminance() > 0.5f
+    Box(Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+        Row(Modifier.align(Alignment.CenterStart), verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Назад", Modifier.size(30.dp)) }
+            } else {
+                Spacer(Modifier.width(12.dp))
+            }
+            if (!centered) Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        }
+        if (centered) Text(title, Modifier.align(Alignment.Center), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Box(Modifier.align(Alignment.CenterEnd)) { action() }
     }
 }

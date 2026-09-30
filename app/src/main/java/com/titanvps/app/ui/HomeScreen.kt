@@ -29,7 +29,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -37,7 +40,10 @@ import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -64,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -87,6 +94,12 @@ import kotlinx.coroutines.delay
 
 private enum class Filter(val title: String) { ALL("Все"), AUTO("Авто"), FAVORITES("Избранное") }
 
+private fun isAuto(s: Server) = s.name.lowercase().let { "авто" in it || "auto" in it }
+
+/**
+ * Главная, as in the mockup: a server list with a big "Подключиться" button at the
+ * bottom. "Обходы" (bypass servers) open as their own page with a back arrow.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boolean, onConnect: () -> Unit) {
@@ -100,83 +113,60 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     var details by remember { mutableStateOf<Server?>(null) }
 
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
-    val groups = remember(sub.servers) { ServerGroups.split(sub.servers) }
-    var tab by rememberSaveable(sub.servers) {
-        mutableStateOf(selected?.let { ServerGroups.groupOf(it, sub.servers) } ?: groups.firstOrNull()?.first ?: Group.SERVERS)
+    val groups = remember(sub.servers) { ServerGroups.split(sub.servers).toMap() }
+    var page by rememberSaveable(sub.servers) {
+        mutableStateOf(selected?.let { ServerGroups.groupOf(it, sub.servers) } ?: Group.SERVERS)
     }
+    if (groups[page].isNullOrEmpty()) page = Group.SERVERS
     var filter by rememberSaveable { mutableStateOf(Filter.ALL) }
     var query by rememberSaveable { mutableStateOf("") }
-    val tabServers = groups.firstOrNull { it.first == tab }?.second ?: groups.firstOrNull()?.second.orEmpty()
-    val shown = tabServers.filter { s ->
+    val bypassCount = groups[Group.BYPASS]?.size ?: 0
+
+    BackHandler(enabled = page == Group.BYPASS) { page = Group.SERVERS }
+
+    val shown = groups[page].orEmpty().filter { s ->
         (query.isBlank() || s.name.contains(query.trim(), ignoreCase = true)) &&
             when (filter) {
                 Filter.ALL -> true
-                Filter.AUTO -> "авто" in s.name.lowercase() || "auto" in s.name.lowercase()
+                Filter.AUTO -> isAuto(s)
                 Filter.FAVORITES -> s.name in favorites
             }
     }
 
-    PullToRefreshBox(isRefreshing = busy, onRefresh = { viewModel.refresh() }, modifier = Modifier.fillMaxSize()) {
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            val wide = maxWidth >= 720.dp
-            val connectSize = (if (wide) maxWidth * 0.25f else maxWidth * 0.46f).coerceIn(140.dp, 210.dp)
-            val padding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-            val spacing = Arrangement.spacedBy(10.dp)
-
-            val topItems: LazyListScope.() -> Unit = {
-                item {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Image(painterResource(R.drawable.logo), null, Modifier.size(32.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Text("Titan VPS", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        IconButton(onClick = { viewModel.refresh() }, enabled = !busy) {
-                            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                            else Icon(Icons.Default.Refresh, "Обновить подписку")
-                        }
-                    }
+    Column(Modifier.fillMaxSize()) {
+        Box(Modifier.widthIn(max = 640.dp).fillMaxWidth().align(Alignment.CenterHorizontally).padding(horizontal = 4.dp)) {
+            TopBar(
+                title = if (page == Group.BYPASS) "Обходы" else "Серверы",
+                onBack = if (page == Group.BYPASS) ({ page = Group.SERVERS }) else null,
+            ) {
+                IconButton(onClick = { viewModel.refresh() }, enabled = !busy) {
+                    if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else Icon(Icons.Default.Refresh, "Обновить подписку")
                 }
-                sub.info.announce?.let {
-                    item {
-                        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), modifier = Modifier.fillMaxWidth()) {
-                            Text(it, Modifier.padding(horizontal = 12.dp, vertical = 10.dp), fontSize = 12.sp, lineHeight = 16.sp)
-                        }
-                    }
-                }
-                item {
-                    Spacer(Modifier.height(6.dp))
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        ConnectButton(state, connectSize) {
-                            when (state) {
-                                is VpnState.Connected, VpnState.Connecting -> viewModel.disconnect()
-                                VpnState.Disconnecting -> Unit
-                                else -> onConnect()
-                            }
-                        }
-                    }
-                }
-                item { StatusBlock(state, selected, selected?.let { pings[it.id] }) }
             }
+        }
 
-            val serverItems: LazyListScope.() -> Unit = {
-                item {
-                    // Equal-width tabs so nothing gets clipped on narrow screens / big fonts.
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        groups.forEach { (group, list) ->
-                            TabChip(group.title, list.size, group == tab, Modifier.weight(1f)) { tab = group }
-                        }
-                        PingButton(pinging, viewModel::pingAll)
-                    }
-                }
-                if (tab == Group.BYPASS) {
+        PullToRefreshBox(isRefreshing = busy, onRefresh = { viewModel.refresh() }, modifier = Modifier.weight(1f)) {
+            LazyColumn(
+                Modifier.fillMaxHeight().widthIn(max = 640.dp).fillMaxWidth().align(Alignment.TopCenter),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (page == Group.BYPASS) {
                     item { InfoBanner("Для ограничений мобильного интернета") }
                     item { RemainingTrafficCard(sub) { context.openUrl(BuildConfig.TELEGRAM_URL) } }
+                } else {
+                    sub.info.announce?.let { item { InfoBanner(it) } }
+                    if (bypassCount > 0) {
+                        item { BypassEntryCard(bypassCount) { page = Group.BYPASS; filter = Filter.ALL; query = "" } }
+                    }
                 }
                 item {
                     OutlinedTextField(
                         value = query,
                         onValueChange = { query = it },
                         leadingIcon = { Icon(Icons.Default.Search, null) },
-                        placeholder = { Text(if (tab == Group.BYPASS) "Найти обход" else "Найти сервер") },
+                        placeholder = { Text(if (page == Group.BYPASS) "Найти обход" else "Найти сервер") },
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -188,10 +178,9 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                     )
                 }
                 item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Filter.entries.forEach { f ->
-                            FilterChip(f.title, f == filter, Modifier.weight(1f)) { filter = f }
-                        }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Filter.entries.forEach { f -> FilterChip(f.title, f == filter, Modifier.weight(1f)) { filter = f } }
+                        PingButton(pinging, viewModel::pingAll)
                     }
                 }
                 if (shown.isEmpty()) {
@@ -215,24 +204,15 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
                         onLongClick = { details = s },
                     )
                 }
-                item { Spacer(Modifier.height(16.dp)) }
+                item { Spacer(Modifier.height(8.dp)) }
             }
+        }
 
-            if (wide) {
-                // Tablets / unfolded foldables / landscape: controls left, locations right.
-                Row(Modifier.widthIn(max = 1200.dp).fillMaxSize().align(Alignment.TopCenter)) {
-                    LazyColumn(Modifier.weight(1f).fillMaxHeight(), contentPadding = padding, verticalArrangement = spacing) { topItems() }
-                    LazyColumn(Modifier.weight(1.2f).fillMaxHeight(), contentPadding = padding, verticalArrangement = spacing) { serverItems() }
-                }
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxHeight().widthIn(max = 640.dp).fillMaxWidth().align(Alignment.TopCenter),
-                    contentPadding = padding,
-                    verticalArrangement = spacing,
-                ) {
-                    topItems()
-                    serverItems()
-                }
+        ConnectBar(state, selected, Modifier.widthIn(max = 640.dp).fillMaxWidth().align(Alignment.CenterHorizontally)) {
+            when (state) {
+                is VpnState.Connected, VpnState.Connecting -> viewModel.disconnect()
+                VpnState.Disconnecting -> Unit
+                else -> onConnect()
             }
         }
     }
@@ -253,121 +233,114 @@ internal fun HomeScreen(viewModel: MainViewModel, sub: Subscription, busy: Boole
     }
 }
 
+/** Big bottom button from the mockup, with connection state and timer. */
 @Composable
-private fun ConnectButton(state: VpnState, size: Dp, onClick: () -> Unit) {
-    val color by animateColorAsState(
-        when (state) {
-            is VpnState.Connected -> Connected
-            VpnState.Connecting, VpnState.Disconnecting -> Brand.copy(alpha = 0.6f)
-            else -> Brand
-        },
-        label = "connect",
-    )
-    Box(
-        Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(color.copy(alpha = 0.12f))
-            .then(
-                if (state is VpnState.Connected || state == VpnState.Connecting || state == VpnState.Disconnecting)
-                    Modifier.border(3.dp, color, CircleShape)
-                else Modifier.border(3.dp, BrandGradient, CircleShape)
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (state == VpnState.Connecting || state == VpnState.Disconnecting) {
-            CircularProgressIndicator(Modifier.size(size), color = color, strokeWidth = 3.dp)
-        }
-        Icon(Icons.Default.PowerSettingsNew, "Подключить", tint = color, modifier = Modifier.size(size * 0.42f))
-    }
-}
-
-@Composable
-private fun StatusBlock(state: VpnState, server: Server?, ping: Long?) {
-    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+private fun ConnectBar(state: VpnState, server: Server?, modifier: Modifier, onClick: () -> Unit) {
+    Column(modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
         when (state) {
             is VpnState.Connected -> {
                 var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-                LaunchedEffect(state.since) {
-                    while (true) { now = System.currentTimeMillis(); delay(1000) }
-                }
-                Text("Подключено", color = Connected, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Text(formatDuration(now - state.since), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                LaunchedEffect(state.since) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
+                Text(
+                    "● Подключено · ${formatDuration(now - state.since)}" + (server?.let { " · ${it.name}" } ?: ""),
+                    color = Connected, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 8.dp, start = 4.dp),
+                )
             }
-            VpnState.Connecting -> Text("Подключение…", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            VpnState.Disconnecting -> Text("Отключение…", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            VpnState.Disconnected -> Text("Не подключено", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            is VpnState.Error -> Text(state.message, fontSize = 15.sp, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            is VpnState.Error -> Text(
+                state.message, color = MaterialTheme.colorScheme.error, fontSize = 13.sp,
+                modifier = Modifier.padding(bottom = 8.dp, start = 4.dp),
+            )
+            else -> Unit
         }
-        server?.let {
-            Spacer(Modifier.height(4.dp))
-            val suffix = ping?.let { p -> if (p >= 0) " · $p мс" else " · таймаут" }.orEmpty()
-            Text(it.name + suffix, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        val connected = state is VpnState.Connected
+        Button(
+            onClick = onClick,
+            enabled = state != VpnState.Disconnecting,
+            shape = RoundedCornerShape(14.dp),
+            colors = if (connected) ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ) else ButtonDefaults.buttonColors(),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+        ) {
+            if (state == VpnState.Connecting || state == VpnState.Disconnecting) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
+                Spacer(Modifier.width(10.dp))
+            }
+            Text(
+                when (state) {
+                    is VpnState.Connected -> "Отключиться"
+                    VpnState.Connecting -> "Подключение…"
+                    VpnState.Disconnecting -> "Отключение…"
+                    else -> "Подключиться"
+                },
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
     }
 }
 
-/** "Остаток трафика" card from the mockup; only bypass servers are metered. */
+/** Entry to the Обходы page from the main list. */
+@Composable
+private fun BypassEntryCard(count: Int, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick),
+    ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Обходы", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Text("Для ограничений мобильного интернета", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text("$count", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * "Остаток трафика" card. Dark mockup: "Докупить ГБ" full width under the progress;
+ * light mockup: the button sits to the right of the amount.
+ */
 @Composable
 private fun RemainingTrafficCard(sub: Subscription, onBuy: () -> Unit) {
     val info = sub.info
+    val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
+    val remaining = (info.totalBytes - info.usedBytes).coerceAtLeast(0)
     SectionCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Остаток трафика", fontWeight = FontWeight.SemiBold)
-                if (info.totalBytes > 0) {
-                    Text(formatBytes((info.totalBytes - info.usedBytes).coerceAtLeast(0)), fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                    Text("из ${formatBytes(info.totalBytes)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    Text("Безлимит", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                }
+                Text(if (info.totalBytes > 0) formatBytes(remaining) else "Безлимит", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                if (info.totalBytes > 0) Text("из ${formatBytes(info.totalBytes)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Button(onClick = onBuy, shape = RoundedCornerShape(12.dp)) { Text("Докупить ГБ") }
+            if (light) Button(onClick = onBuy, shape = RoundedCornerShape(12.dp)) { Text("Докупить ГБ") }
         }
         if (info.totalBytes > 0) {
             Spacer(Modifier.height(10.dp))
             LinearProgressIndicator(
-                progress = { ((info.totalBytes - info.usedBytes).toFloat() / info.totalBytes).coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                progress = { (remaining.toFloat() / info.totalBytes).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
             )
         }
-        Spacer(Modifier.height(8.dp))
-        Text("Трафик расходуется только на обходах", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun TabChip(title: String, count: Int, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(14.dp)
-    Row(
-        modifier
-            .clip(shape)
-            .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        val fg = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-        Text(
-            title,
-            modifier = Modifier.weight(1f, fill = false),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            fontWeight = FontWeight.SemiBold,
-            color = fg,
-        )
-        Spacer(Modifier.width(6.dp))
-        Box(
-            Modifier
-                .widthIn(min = 24.dp)
-                .clip(CircleShape)
-                .background(if (selected) Color.White.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 7.dp, vertical = 2.dp),
-            contentAlignment = Alignment.Center,
-        ) { Text("$count", fontSize = 12.sp, color = fg, maxLines = 1, softWrap = false) }
+        if (!light) {
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = onBuy, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text("Докупить ГБ", fontWeight = FontWeight.SemiBold)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!light) {
+                Icon(Icons.Outlined.Info, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(8.dp))
+            }
+            Text("Трафик расходуется только на обходах", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -378,7 +351,7 @@ private fun FilterChip(title: String, selected: Boolean, modifier: Modifier = Mo
             .clip(RoundedCornerShape(12.dp))
             .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
-            .padding(vertical = 9.dp),
+            .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -395,10 +368,10 @@ private fun FilterChip(title: String, selected: Boolean, modifier: Modifier = Mo
 private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surface)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(enabled = !pinging, onClick = onClick)
-            .padding(12.dp),
+            .padding(9.dp),
         contentAlignment = Alignment.Center,
     ) {
         if (pinging) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -406,6 +379,10 @@ private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
     }
 }
 
+/**
+ * List row from the mockup. Dark: server icon; light: signal bars colored by ping.
+ * "Авто" entries get the "По качеству соединения" subtitle.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ServerCard(
@@ -417,38 +394,53 @@ private fun ServerCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
-    val (flag, name) = remember(server.name) { ServerGroups.splitFlag(server.name) }
     val shape = RoundedCornerShape(16.dp)
     val primary = MaterialTheme.colorScheme.primary
+    val light = MaterialTheme.colorScheme.background.luminance() > 0.5f
     Row(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (selected) primary.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface)
-            .then(if (selected) Modifier.border(1.5.dp, primary, shape) else Modifier)
+            .background(if (selected) primary.copy(alpha = if (light) 0.08f else 0.10f) else MaterialTheme.colorScheme.surface)
+            .border(if (selected) 1.5.dp else 1.dp, if (selected) primary else MaterialTheme.colorScheme.outlineVariant, shape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .heightIn(min = 60.dp)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (flag != null) Text(flag, fontSize = 24.sp)
-        else Icon(
-            Icons.Default.SignalCellularAlt, null,
-            tint = ping?.let { pingColor(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(24.dp),
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(name, Modifier.weight(1f), fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (light) {
+            Icon(
+                Icons.Default.SignalCellularAlt, null, Modifier.size(24.dp),
+                tint = when {
+                    selected -> primary
+                    ping != null && ping >= 0 -> pingColor(ping)
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
+            )
+        } else {
+            Icon(Icons.Outlined.Dns, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurface)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(server.name.trim(), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (isAuto(server)) {
+                Text("По качеству соединения", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         if (favorite) {
             Icon(Icons.Default.Star, null, tint = Color(0xFFF5B301), modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
         }
         when {
             pending -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-            ping != null -> Text(if (ping >= 0) "$ping мс" else "таймаут", color = pingColor(ping), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            ping != null -> Text(
+                if (ping >= 0) "$ping мс" else "таймаут",
+                color = if (!light && ping >= 150) MaterialTheme.colorScheme.onSurfaceVariant else pingColor(ping),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
-        Spacer(Modifier.width(10.dp))
-        // Radio mark as in the mockup.
+        Spacer(Modifier.width(14.dp))
         if (selected) {
             Box(Modifier.size(24.dp).clip(CircleShape).background(primary), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))

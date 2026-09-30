@@ -91,6 +91,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.coroutines.delay
@@ -124,11 +125,19 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
             if (sub != null && overlay == null) {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                     MainTab.entries.forEach { t ->
+                        // Mockup style: no pill indicator, the active item is just blue.
                         NavigationBarItem(
                             selected = tab == t,
                             onClick = { tab = t },
                             icon = { Icon(if (tab == t) t.selectedIcon else t.icon, null) },
-                            label = { Text(t.title, maxLines = 1) },
+                            label = { Text(t.title, maxLines = 1, fontSize = 12.sp) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                indicatorColor = Color.Transparent,
+                            ),
                         )
                     }
                 }
@@ -142,7 +151,7 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
                 overlay == Overlay.APPS -> AppsScreen(viewModel) { overlay = null; viewModel.reconnectIfConnected() }
                 overlay == Overlay.DIAGNOSTICS -> DiagnosticsScreen { overlay = null }
                 tab == MainTab.HOME -> HomeScreen(viewModel, sub, busy, onConnect)
-                tab == MainTab.SUBSCRIPTION -> SubscriptionScreen(viewModel, sub)
+                tab == MainTab.SUBSCRIPTION -> SubscriptionScreen(viewModel, sub) { tab = MainTab.HOME }
                 else -> ProfileScreen(
                     viewModel, sub,
                     onOpenApps = { overlay = Overlay.APPS },

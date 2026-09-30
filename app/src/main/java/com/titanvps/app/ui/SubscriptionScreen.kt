@@ -48,7 +48,7 @@ import java.util.Locale
 
 /** "Подписка" tab: status, renew, bypass traffic, account actions (all via the bot). */
 @Composable
-internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription) {
+internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onBack: () -> Unit) {
     val context = LocalContext.current
     val info = sub.info
     val bot = { context.openUrl(BuildConfig.TELEGRAM_URL) }
@@ -56,10 +56,10 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription) {
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(
-            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ScreenTitle("Подписка")
+            TopBar("Подписка", onBack = onBack)
 
             SectionCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -111,13 +111,13 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription) {
             }
 
             SectionCard {
-                NavRow("Личный кабинет", Icons.Outlined.AccountCircle, onClick = viewModel::openCabinet)
                 NavRow("История платежей", Icons.Outlined.ReceiptLong, onClick = bot)
                 NavRow("Промокод", Icons.Outlined.Loyalty, onClick = bot)
                 NavRow("Управление устройствами", Icons.Outlined.Devices, onClick = bot)
-                NavRow("Поддержка", Icons.Outlined.SupportAgent, divider = false) {
+                NavRow("Поддержка", Icons.Outlined.SupportAgent) {
                     context.openUrl(info.supportUrl ?: BuildConfig.TELEGRAM_URL)
                 }
+                NavRow("Личный кабинет", Icons.Outlined.AccountCircle, divider = false, onClick = viewModel::openCabinet)
             }
 
             InfoBanner("Обходы доступны при активной подписке")
