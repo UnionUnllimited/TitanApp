@@ -69,6 +69,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -117,31 +119,19 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
     val sub = subscription
     var tab by rememberSaveable { mutableStateOf(MainTab.HOME) }
     var overlay by rememberSaveable { mutableStateOf<Overlay?>(null) }
+    // Launch screen from the mockup, once per cold start.
+    var splash by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(Unit) { if (splash) { delay(900); splash = false } }
+    if (splash) {
+        SplashScreen()
+        return
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            if (sub != null && overlay == null) {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
-                    MainTab.entries.forEach { t ->
-                        // Mockup style: no pill indicator, the active item is just blue.
-                        NavigationBarItem(
-                            selected = tab == t,
-                            onClick = { tab = t },
-                            icon = { Icon(if (tab == t) t.selectedIcon else t.icon, null) },
-                            label = { Text(t.title, maxLines = 1, fontSize = 12.sp) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                indicatorColor = Color.Transparent,
-                            ),
-                        )
-                    }
-                }
-            }
+            if (sub != null && overlay == null && !splash) BottomBar(tab) { tab = it }
         },
     ) { padding ->
         // Scaffold's padding covers the bars; consume it so safeDrawing (e.g. IME) isn't added twice.
@@ -150,7 +140,11 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
                 sub == null -> WelcomeScreen(viewModel, busy)
                 overlay == Overlay.APPS -> AppsScreen(viewModel) { overlay = null; viewModel.reconnectIfConnected() }
                 overlay == Overlay.DIAGNOSTICS -> DiagnosticsScreen { overlay = null }
-                tab == MainTab.HOME -> HomeScreen(viewModel, sub, busy, onConnect)
+                tab == MainTab.HOME -> HomeScreen(
+                    viewModel, sub, busy, onConnect,
+                    onOpenSubscription = { tab = MainTab.SUBSCRIPTION },
+                    onOpenSettings = { tab = MainTab.PROFILE },
+                )
                 tab == MainTab.SUBSCRIPTION -> SubscriptionScreen(viewModel, sub) { tab = MainTab.HOME }
                 else -> ProfileScreen(
                     viewModel, sub,
@@ -165,11 +159,52 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
 
 private enum class MainTab(val title: String, val icon: ImageVector, val selectedIcon: ImageVector) {
     HOME("Главная", Icons.Outlined.Home, Icons.Filled.Home),
-    SUBSCRIPTION("Подписка", Icons.Outlined.CreditCard, Icons.Filled.CreditCard),
+    SUBSCRIPTION("Подписка", TitanIcons.CrownOutlined, TitanIcons.CrownOutlined),
     PROFILE("Профиль", Icons.Outlined.Person, Icons.Filled.Person),
 }
 
 private enum class Overlay { APPS, DIAGNOSTICS }
+
+/** Logo and "Titan VPS" on a plain background, as in the mockup. */
+@Composable
+private fun SplashScreen() {
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Image(painterResource(R.drawable.logo), null, Modifier.size(150.dp))
+            Spacer(Modifier.height(12.dp))
+            Text("Titan VPS", fontSize = 38.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** Floating rounded bar: Главная / Подписка / Профиль, the active item in blue. */
+@Composable
+private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit) {
+    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+        Row(
+            Modifier
+                .widthIn(max = 640.dp)
+                .fillMaxWidth()
+                .shadow(6.dp, RoundedCornerShape(24.dp))
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(vertical = 8.dp),
+        ) {
+            MainTab.entries.forEach { t ->
+                val selected = t == tab
+                val color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                Column(
+                    Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).clickable { onSelect(t) }.padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(if (selected) t.selectedIcon else t.icon, null, Modifier.size(26.dp), tint = color)
+                    Spacer(Modifier.height(2.dp))
+                    Text(t.title, fontSize = 12.sp, color = color, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
