@@ -25,6 +25,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val vpnState = VpnStatus.state
     val excludedApps = settings.excludedApps
     val autoBypass = settings.autoBypass
+    val theme = settings.theme
+    val autoConnect = settings.autoConnect
+    val notifications = settings.notifications
+    val favorites = settings.favorites
+
+    fun setTheme(mode: com.titanvps.app.data.ThemeMode) = settings.setTheme(mode)
+    fun setAutoConnect(enabled: Boolean) = settings.setAutoConnect(enabled)
+    fun setNotifications(enabled: Boolean) = settings.setNotifications(enabled)
+    fun toggleFavorite(name: String) = settings.toggleFavorite(name)
     val ruAppsBypass = settings.ruAppsBypass
 
     fun setRuAppsBypass(enabled: Boolean) {

@@ -7,7 +7,15 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import android.graphics.Color
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import com.titanvps.app.ui.theme.isDark
+import com.titanvps.app.vpn.VpnState
+import com.titanvps.app.vpn.VpnStatus
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.lifecycle.Lifecycle
@@ -44,8 +52,24 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Auto-connect on launch (setting), only if VPN permission is already granted.
+        if (savedInstanceState == null) {
+            val app = TitanApp.get(this)
+            if (app.settings.autoConnect.value && app.repository.subscription.value != null &&
+                VpnStatus.state.value !is VpnState.Connected && VpnService.prepare(this) == null
+            ) TitanVpnService.start(this)
+        }
+
         setContent {
-            TitanTheme {
+            val mode by viewModel.theme.collectAsState()
+            val dark = isDark(mode)
+            // Status/navigation bar icons follow the app theme, not only the system one.
+            LaunchedEffect(dark) {
+                val style = if (dark) SystemBarStyle.dark(Color.TRANSPARENT)
+                else SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            }
+            TitanTheme(mode) {
                 TitanScreen(viewModel = viewModel, onConnect = ::connect)
             }
         }

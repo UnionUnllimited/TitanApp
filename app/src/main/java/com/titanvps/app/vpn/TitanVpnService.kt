@@ -144,6 +144,7 @@ class TitanVpnService : VpnService() {
 
     /** [switchedTo] = null: offer a switch; otherwise tell which bypass server we moved to. */
     private fun notifyWhitelist(switchedTo: String?) {
+        if (!TitanApp.get(this).settings.notifications.value) return
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(ALERT_CHANNEL_ID, "Ограничения мобильной сети", NotificationManager.IMPORTANCE_HIGH)

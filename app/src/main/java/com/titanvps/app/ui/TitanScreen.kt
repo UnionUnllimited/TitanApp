@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -82,6 +83,16 @@ import com.titanvps.app.data.Subscription
 import com.titanvps.app.ui.theme.Brand
 import com.titanvps.app.ui.theme.Connected
 import com.titanvps.app.vpn.VpnState
+import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.outlined.CreditCard
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -102,16 +113,54 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
         }
     }
 
+    val sub = subscription
+    var tab by rememberSaveable { mutableStateOf(MainTab.HOME) }
+    var overlay by rememberSaveable { mutableStateOf<Overlay?>(null) }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            if (sub != null && overlay == null) {
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                    MainTab.entries.forEach { t ->
+                        NavigationBarItem(
+                            selected = tab == t,
+                            onClick = { tab = t },
+                            icon = { Icon(if (tab == t) t.selectedIcon else t.icon, null) },
+                            label = { Text(t.title, maxLines = 1) },
+                        )
+                    }
+                }
+            }
+        },
     ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            val sub = subscription
-            if (sub == null) WelcomeScreen(viewModel, busy) else HomeScreen(viewModel, sub, busy, onConnect)
+        // Scaffold's padding covers the bars; consume it so safeDrawing (e.g. IME) isn't added twice.
+        Box(Modifier.padding(padding).consumeWindowInsets(padding).safeDrawingPadding().fillMaxSize()) {
+            when {
+                sub == null -> WelcomeScreen(viewModel, busy)
+                overlay == Overlay.APPS -> AppsScreen(viewModel) { overlay = null; viewModel.reconnectIfConnected() }
+                overlay == Overlay.DIAGNOSTICS -> DiagnosticsScreen { overlay = null }
+                tab == MainTab.HOME -> HomeScreen(viewModel, sub, busy, onConnect)
+                tab == MainTab.SUBSCRIPTION -> SubscriptionScreen(viewModel, sub)
+                else -> ProfileScreen(
+                    viewModel, sub,
+                    onOpenApps = { overlay = Overlay.APPS },
+                    onOpenDiagnostics = { overlay = Overlay.DIAGNOSTICS },
+                    onOpenHome = { tab = MainTab.HOME },
+                )
+            }
         }
     }
 }
+
+private enum class MainTab(val title: String, val icon: ImageVector, val selectedIcon: ImageVector) {
+    HOME("Главная", Icons.Outlined.Home, Icons.Filled.Home),
+    SUBSCRIPTION("Подписка", Icons.Outlined.CreditCard, Icons.Filled.CreditCard),
+    PROFILE("Профиль", Icons.Outlined.Person, Icons.Filled.Person),
+}
+
+private enum class Overlay { APPS, DIAGNOSTICS }
 
 @Composable
 private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
@@ -120,7 +169,7 @@ private fun WelcomeScreen(viewModel: MainViewModel, busy: Boolean) {
     var key by remember { mutableStateOf("") }
 
     // Centered, width-capped and scrollable: fits small phones, landscape and tablets.
-    Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
     Column(
         Modifier.widthIn(max = 480.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

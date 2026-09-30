@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Light by default; values-night switches it. The app theme itself is chosen in Compose. -->
-    <style name="Theme.TitanVPS" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.TitanVPS" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/background</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
