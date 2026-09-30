@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -143,62 +145,97 @@ internal fun HomeScreen(
     val selectedLocked = !onMobile && selected != null && ServerGroups.groupOf(selected, sub.servers) == Group.BYPASS
     val connected = state is VpnState.Connected
 
-    Column(Modifier.fillMaxSize()) {
+    val onToggle: (Boolean) -> Unit = { on ->
+        when {
+            on && state !is VpnState.Connected && state != VpnState.Connecting -> onConnect()
+            !on && (state is VpnState.Connected || state == VpnState.Connecting) -> viewModel.disconnect()
+        }
+    }
+    val topItems: LazyListScope.() -> Unit = {
+        item { SubscriptionCard(sub, onOpenSubscription) }
+        item { PowerSwitch(state, Modifier.padding(top = 6.dp), onToggle) }
+        item { StatusBlock(state, selected, selected?.let { pings[it.id] }, selectedLocked) }
+    }
+    val listItems: LazyListScope.() -> Unit = {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    groups.forEach { (group, list) ->
+                        GroupTab(group, list.size, group == page, Modifier.weight(1f)) { page = group }
+                    }
+                }
+                PingButton(pinging, viewModel::pingAll)
+            }
+        }
+        item {
+            when {
+                page == Group.SERVERS -> Caption("Безлимит на обычных серверах")
+                bypassLocked -> WifiWarning()
+                else -> BypassCaption(sub) { context.openUrl(BuildConfig.TELEGRAM_URL) }
+            }
+        }
+        items(groups[page].orEmpty(), key = { it.id }) { s ->
+            ServerRow(
+                server = s,
+                ping = pings[s.id],
+                pending = pinging && pings[s.id] == null,
+                selected = s.id == selected?.id,
+                connected = connected && s.id == selected?.id,
+                favorite = s.name in favorites,
+                locked = bypassLocked,
+                onClick = { if (bypassLocked) viewModel.explainBypassOnWifi() else viewModel.select(s.id) },
+                onLongClick = { details = s },
+            )
+        }
+    }
+    val header: @Composable (Modifier) -> Unit = { m ->
         HomeHeader(
             dark = dark,
             onSettings = onOpenSettings,
             onTheme = { viewModel.setTheme(if (dark) ThemeMode.LIGHT else ThemeMode.DARK) },
-            modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().align(Alignment.CenterHorizontally),
+            modifier = m,
         )
+    }
+    val listPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)
 
-        PullToRefreshBox(isRefreshing = busy, onRefresh = { viewModel.refresh() }, modifier = Modifier.weight(1f)) {
-            LazyColumn(
-                Modifier.fillMaxHeight().widthIn(max = 640.dp).fillMaxWidth().align(Alignment.TopCenter),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                item { SubscriptionCard(sub, onOpenSubscription) }
-                item {
-                    PowerSwitch(state, Modifier.padding(top = 6.dp)) { on ->
-                        when {
-                            on && state !is VpnState.Connected && state != VpnState.Connecting -> onConnect()
-                            !on && (state is VpnState.Connected || state == VpnState.Connecting) -> viewModel.disconnect()
-                        }
-                    }
-                }
-                item { StatusBlock(state, selected, selected?.let { pings[it.id] }, selectedLocked) }
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(
-                            Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).padding(4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            groups.forEach { (group, list) ->
-                                GroupTab(group, list.size, group == page, Modifier.weight(1f)) { page = group }
-                            }
-                        }
-                        PingButton(pinging, viewModel::pingAll)
-                    }
-                }
-                item {
-                    when {
-                        page == Group.SERVERS -> Caption("Безлимит на обычных серверах")
-                        bypassLocked -> WifiWarning()
-                        else -> BypassCaption(sub) { context.openUrl(BuildConfig.TELEGRAM_URL) }
-                    }
-                }
-                items(groups[page].orEmpty(), key = { it.id }) { s ->
-                    ServerRow(
-                        server = s,
-                        ping = pings[s.id],
-                        pending = pinging && pings[s.id] == null,
-                        selected = s.id == selected?.id,
-                        connected = connected && s.id == selected?.id,
-                        favorite = s.name in favorites,
-                        locked = bypassLocked,
-                        onClick = { if (bypassLocked) viewModel.explainBypassOnWifi() else viewModel.select(s.id) },
-                        onLongClick = { details = s },
+    // Phones: one column up to 640dp, centered. Tablets / landscape: controls on the
+    // left, the server list on the right.
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        if (maxWidth >= 720.dp) {
+            Column(Modifier.widthIn(max = 1200.dp).fillMaxSize()) {
+                header(Modifier.fillMaxWidth())
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                    LazyColumn(
+                        Modifier.weight(0.9f).fillMaxHeight(),
+                        contentPadding = listPadding,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        content = topItems,
                     )
+                    PullToRefreshBox(isRefreshing = busy, onRefresh = { viewModel.refresh() }, modifier = Modifier.weight(1.1f).fillMaxHeight()) {
+                        LazyColumn(
+                            Modifier.fillMaxSize(),
+                            contentPadding = listPadding,
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            content = listItems,
+                        )
+                    }
+                }
+            }
+        } else {
+            Column(Modifier.widthIn(max = 640.dp).fillMaxSize()) {
+                header(Modifier.fillMaxWidth())
+                PullToRefreshBox(isRefreshing = busy, onRefresh = { viewModel.refresh() }, modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = listPadding,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        topItems()
+                        listItems()
+                    }
                 }
             }
         }
