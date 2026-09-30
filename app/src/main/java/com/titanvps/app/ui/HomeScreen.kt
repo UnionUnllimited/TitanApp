@@ -317,6 +317,8 @@ private fun ServerDetailsSheet(
                     else -> Text("—")
                 }
             }
+            Spacer(Modifier.height(8.dp))
+            Text(configSummary(server), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (error != null && (ping ?: 0) < 0) {
                 Spacer(Modifier.height(8.dp))
                 Text("Причина: $error", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
@@ -486,6 +488,20 @@ private fun PingDot(ms: Long) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(6.dp))
         Text(if (ms >= 0) "$ms" else "таймаут", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Where the config came from and how much of the panel's routing it carries. */
+private fun configSummary(server: Server): String {
+    val cfg = runCatching { org.json.JSONObject(server.xrayJson) }.getOrNull() ?: return "Конфиг: —"
+    val routing = cfg.optJSONObject("routing")
+    val rules = routing?.optJSONArray("rules")?.length() ?: 0
+    val balancers = routing?.optJSONArray("balancers")?.length() ?: 0
+    val outbounds = cfg.optJSONArray("outbounds")?.length() ?: 0
+    return if (server.id.startsWith("json-")) {
+        "Конфиг: Xray JSON с сервера · правил: $rules · балансировщиков: $balancers · узлов: $outbounds"
+    } else {
+        "Конфиг: из ссылки (стандартная маршрутизация) — обновите подписку"
     }
 }
 

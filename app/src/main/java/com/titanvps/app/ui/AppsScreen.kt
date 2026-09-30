@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
+import com.titanvps.app.data.RuApps
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -55,6 +56,7 @@ private data class AppEntry(val packageName: String, val label: String, val icon
 internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val excluded by viewModel.excludedApps.collectAsState()
+    val ruApps by viewModel.ruAppsBypass.collectAsState()
     var apps by remember { mutableStateOf<List<AppEntry>?>(null) }
     var query by remember { mutableStateOf("") }
 
@@ -80,11 +82,25 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             Text("Исключения приложений", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         }
         Text(
-            "Отмеченные приложения работают без VPN. Изменения применяются при следующем подключении.",
+            "Отмеченные приложения работают без VPN и не видят его.",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
+        Row(
+            Modifier.fillMaxWidth().clickable { viewModel.setRuAppsBypass(!ruApps) }.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Российские приложения без VPN", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Банки, маркетплейсы, Госуслуги, Яндекс, VK, операторы — не увидят VPN",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = ruApps, onCheckedChange = { viewModel.setRuAppsBypass(it) })
+        }
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -100,22 +116,26 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             val shown = list
                 .filter { query.isBlank() || it.label.contains(query, ignoreCase = true) }
                 // Excluded apps first.
-                .sortedByDescending { it.packageName in excluded }
+                .sortedByDescending { it.packageName in excluded || (ruApps && it.packageName in RuApps.PACKAGES) }
             LazyColumn {
                 items(shown, key = { it.packageName }) { app ->
-                    val checked = app.packageName in excluded
+                    val preset = ruApps && app.packageName in RuApps.PACKAGES
+                    val checked = preset || app.packageName in excluded
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clickable { viewModel.setExcluded(app.packageName, !checked) }
+                            .clickable(enabled = !preset) { viewModel.setExcluded(app.packageName, !checked) }
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         val bitmap = remember(app.packageName) { app.icon.toBitmap(96, 96).asImageBitmap() }
                         Image(bitmap, null, Modifier.size(36.dp))
                         Spacer(Modifier.width(14.dp))
-                        Text(app.label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Switch(checked = checked, onCheckedChange = { viewModel.setExcluded(app.packageName, it) })
+                        Column(Modifier.weight(1f)) {
+                            Text(app.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (preset) Text("российское приложение", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = checked, enabled = !preset, onCheckedChange = { viewModel.setExcluded(app.packageName, it) })
                     }
                 }
             }

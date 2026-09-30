@@ -23,6 +23,19 @@ class AppSettings(context: Context) {
         _autoBypass.value = enabled
     }
 
+    private val _ruAppsBypass = MutableStateFlow(prefs.getBoolean(KEY_RU_APPS, true))
+    /** Russian banks/marketplaces/government apps go around the VPN (see [RuApps]). */
+    val ruAppsBypass: StateFlow<Boolean> = _ruAppsBypass.asStateFlow()
+
+    fun setRuAppsBypass(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_RU_APPS, enabled).apply()
+        _ruAppsBypass.value = enabled
+    }
+
+    /** Everything that must bypass the VPN right now. */
+    fun bypassPackages(): Set<String> =
+        _excludedApps.value + (if (_ruAppsBypass.value) RuApps.PACKAGES else emptySet())
+
     fun setExcluded(packageName: String, excluded: Boolean) {
         val next = if (excluded) _excludedApps.value + packageName else _excludedApps.value - packageName
         prefs.edit().putStringSet(KEY_EXCLUDED, next).apply()
@@ -33,10 +46,12 @@ class AppSettings(context: Context) {
         prefs.edit().clear().apply()
         _excludedApps.value = emptySet()
         _autoBypass.value = true
+        _ruAppsBypass.value = true
     }
 
     private companion object {
         const val KEY_EXCLUDED = "excluded_apps"
         const val KEY_AUTO_BYPASS = "auto_bypass"
+        const val KEY_RU_APPS = "ru_apps_bypass"
     }
 }

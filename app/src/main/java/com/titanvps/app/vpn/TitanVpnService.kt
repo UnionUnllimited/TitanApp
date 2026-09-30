@@ -76,8 +76,9 @@ class TitanVpnService : VpnService() {
                 // Our own sockets (Xray, subscription fetch) bypass the tunnel → no loops.
                 .addDisallowedApplication(packageName)
                 .apply {
-                    // Apps the user excluded from the VPN.
-                    TitanApp.get(this@TitanVpnService).settings.excludedApps.value.forEach { pkg ->
+                    // User-excluded apps + (by default) Russian banks/marketplaces, which
+                    // then don't see a VPN at all.
+                    TitanApp.get(this@TitanVpnService).settings.bypassPackages().forEach { pkg ->
                         runCatching { addDisallowedApplication(pkg) }
                     }
                 }

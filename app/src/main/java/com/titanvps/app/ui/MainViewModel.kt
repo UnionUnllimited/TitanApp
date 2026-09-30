@@ -25,6 +25,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val vpnState = VpnStatus.state
     val excludedApps = settings.excludedApps
     val autoBypass = settings.autoBypass
+    val ruAppsBypass = settings.ruAppsBypass
+
+    fun setRuAppsBypass(enabled: Boolean) {
+        settings.setRuAppsBypass(enabled)
+    }
 
     fun setAutoBypass(enabled: Boolean) = settings.setAutoBypass(enabled)
 
