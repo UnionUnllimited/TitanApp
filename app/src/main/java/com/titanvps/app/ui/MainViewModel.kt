@@ -82,7 +82,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         if (repo.isStale()) refresh(silent = true)
-        pingAll()
     }
 
     // ------------------------------------------------------------ subscription
@@ -96,12 +95,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         repo.activate(link)
         _message.value = "Подписка подключена"
         if (first || vpnState.value !is VpnState.Connected) _connectRequests.send(Unit)
-        pingAll()
     }
 
     fun refresh(silent: Boolean = false) = launchBusy(silent) {
         repo.refresh()
-        pingAll()
     }
 
     fun select(serverId: String) {

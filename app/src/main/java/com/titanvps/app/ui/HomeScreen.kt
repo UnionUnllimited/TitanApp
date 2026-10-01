@@ -657,7 +657,7 @@ private fun ServerRow(
             pending -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
             ping != null -> Text(
                 if (ping >= 0) "$ping мс" else "таймаут",
-                color = if (ping >= 0 && ping < 300) MaterialTheme.colorScheme.onSurfaceVariant else pingColor(ping),
+                color = pingColor(ping),
                 fontSize = 13.sp,
             )
         }

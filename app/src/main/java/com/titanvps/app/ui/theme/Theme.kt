@@ -63,8 +63,8 @@ private val LightColors = lightColorScheme(
 @ReadOnlyComposable
 fun pingColor(ms: Long): Color = when {
     ms < 0 -> MaterialTheme.colorScheme.error
-    ms < 150 -> if (MaterialTheme.colorScheme.background == LightColors.background) Color(0xFF16A34A) else Connected
-    ms < 300 -> Warning
+    ms < 500 -> if (MaterialTheme.colorScheme.background == LightColors.background) Color(0xFF16A34A) else Connected
+    ms < 1500 -> Warning
     else -> MaterialTheme.colorScheme.error
 }
 
