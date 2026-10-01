@@ -22,11 +22,6 @@ android {
         buildConfigField("String", "SUB_HOSTS", "\"${prop("titan.subHosts")}\"")
         buildConfigField("String", "TELEGRAM_URL", "\"${prop("titan.telegramUrl")}\"")
         manifestPlaceholders["appLinkHost"] = prop("titan.appLinkHost")
-
-        ndk {
-            // libXray.aar ships these ABIs; keep only what you distribute.
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
     }
 
     // One key for every build (CI runners otherwise sign with a random debug key, and
