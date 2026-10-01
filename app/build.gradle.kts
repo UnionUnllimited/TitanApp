@@ -42,7 +42,8 @@ android {
             isEnable = true
             reset()
             include("arm64-v8a", "armeabi-v7a")
-            isUniversalApk = false
+            // Universal APK too: installs on any phone when unsure which one to pick.
+            isUniversalApk = true
         }
     }
 
