@@ -52,14 +52,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Auto-connect on launch (setting), only if VPN permission is already granted.
-        if (savedInstanceState == null) {
-            val app = TitanApp.get(this)
-            if (app.settings.autoConnect.value && app.repository.subscription.value != null &&
-                VpnStatus.state.value !is VpnState.Connected && VpnService.prepare(this) == null
-            ) TitanVpnService.start(this)
-        }
-
         setContent {
             val mode by viewModel.theme.collectAsState()
             val dark = isDark(mode)
@@ -70,7 +62,14 @@ class MainActivity : ComponentActivity() {
                 enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
             }
             TitanTheme(mode) {
-                TitanScreen(viewModel = viewModel, onConnect = ::connect)
+                // Text a notch smaller than the system default everywhere.
+                val density = androidx.compose.ui.platform.LocalDensity.current
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.ui.platform.LocalDensity provides
+                        androidx.compose.ui.unit.Density(density.density, density.fontScale * 0.88f),
+                ) {
+                    TitanScreen(viewModel = viewModel, onConnect = ::connect)
+                }
             }
         }
     }

@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -186,6 +187,7 @@ internal fun HomeScreen(
                 connected = connected && s.id == selected?.id,
                 favorite = s.name in favorites,
                 locked = bypassLocked,
+                limited = page == Group.BYPASS,
                 onClick = { if (bypassLocked) viewModel.explainBypassOnWifi() else viewModel.select(s.id) },
                 onLongClick = { details = s },
             )
@@ -264,9 +266,9 @@ private fun HomeHeader(dark: Boolean, onSettings: () -> Unit, onTheme: () -> Uni
     Row(modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         SquareButton(Icons.Outlined.Settings, "Настройки", onSettings)
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(R.drawable.logo), null, Modifier.size(40.dp))
+            Image(painterResource(R.drawable.logo), null, Modifier.size(34.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Titan VPS", fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text("Titan VPS", fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         }
         SquareButton(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, "Тема", onTheme)
     }
@@ -309,7 +311,7 @@ private fun SubscriptionCard(sub: Subscription, onOpen: () -> Unit) {
                 }
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(if (active) "Подписка активна" else "Подписка истекла", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text(if (active) "Подписка активна" else "Подписка истекла", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                     Text(
                         if (info.expireAt <= 0) "Бессрочно"
                         else "До " + SimpleDateFormat("d MMMM yyyy", Locale("ru")).format(Date(info.expireAt * 1000)),
@@ -368,7 +370,7 @@ private fun PowerSwitch(state: VpnState, modifier: Modifier, onToggle: (Boolean)
     Box(
         modifier
             .fillMaxWidth()
-            .height(68.dp)
+            .height(60.dp)
             .clip(RoundedCornerShape(34.dp))
             .background(
                 if (connecting) Brush.horizontalGradient(listOf(track, primary.copy(alpha = 0.18f), track))
@@ -377,16 +379,25 @@ private fun PowerSwitch(state: VpnState, modifier: Modifier, onToggle: (Boolean)
             .padding(5.dp),
     ) {
         Row(Modifier.fillMaxSize()) {
-            val offBg by animateColorAsState(if (!on && !connecting) MaterialTheme.colorScheme.outlineVariant else Color.Transparent, label = "off")
+            val red = MaterialTheme.colorScheme.error
+            val off = !on && !connecting
+            val offBg by animateColorAsState(if (off) red.copy(alpha = 0.14f) else Color.Transparent, label = "off")
             val onBg by animateColorAsState(if (on) green.copy(alpha = 0.16f) else Color.Transparent, label = "on")
             Row(
-                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(30.dp)).background(offBg).clickable { onToggle(false) },
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(30.dp))
+                    .background(offBg)
+                    .then(if (off) Modifier.border(1.5.dp, red, RoundedCornerShape(30.dp)) else Modifier)
+                    .clickable { onToggle(false) },
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Default.PowerSettingsNew, null, Modifier.size(22.dp))
-                Spacer(Modifier.width(10.dp))
-                Text("Выкл", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                val tint = if (off) red else MaterialTheme.colorScheme.onSurface
+                Icon(Icons.Default.PowerSettingsNew, null, Modifier.size(20.dp), tint = tint)
+                Spacer(Modifier.width(8.dp))
+                Text("Выкл", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = tint)
             }
             Row(
                 Modifier
@@ -404,9 +415,9 @@ private fun PowerSwitch(state: VpnState, modifier: Modifier, onToggle: (Boolean)
                     connecting -> primary
                     else -> MaterialTheme.colorScheme.onSurface
                 }
-                Icon(Icons.Outlined.Shield, null, Modifier.size(22.dp), tint = tint)
-                Spacer(Modifier.width(10.dp))
-                Text("Вкл", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = tint)
+                Icon(Icons.Outlined.Shield, null, Modifier.size(20.dp), tint = tint)
+                Spacer(Modifier.width(8.dp))
+                Text("Вкл", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = tint)
             }
         }
         if (connecting) {
@@ -426,6 +437,7 @@ private fun PowerSwitch(state: VpnState, modifier: Modifier, onToggle: (Boolean)
 }
 
 /** "Не подключено / Подключаемся / Подключено" with the server, ping and timer. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun StatusBlock(state: VpnState, server: Server?, ping: Long?, locked: Boolean) {
     val green = connectedGreen()
@@ -436,17 +448,18 @@ private fun StatusBlock(state: VpnState, server: Server?, ping: Long?, locked: B
             VpnState.Disconnecting -> "Отключаемся" to MaterialTheme.colorScheme.onSurface
             else -> "Не подключено" to MaterialTheme.colorScheme.onSurface
         }
-        Text(title, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = color)
+        Text(title, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = color)
         val sub = MaterialTheme.colorScheme.onSurfaceVariant
         when (state) {
             is VpnState.Connected -> {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    server?.let { FlagCircle(it, 24.dp) }
+                Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    server?.let { FlagCircle(it, 22.dp) }
                     Spacer(Modifier.width(8.dp))
                     Text(
                         (server?.let { ServerGroups.splitFlag(it.name).second } ?: state.serverName) +
                             (ping?.takeIf { it >= 0 }?.let { " · $it мс" } ?: ""),
-                        fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false).basicMarquee(),
                     )
                 }
                 var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -488,21 +501,21 @@ private fun GroupTab(group: Group, count: Int, selected: Boolean, modifier: Modi
             .then(if (selected) Modifier.border(1.dp, primary.copy(alpha = 0.35f), shape) else Modifier)
             .clickable(onClick = onClick)
             .heightIn(min = 44.dp)
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 6.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(if (group == Group.SERVERS) Icons.Outlined.Storage else Icons.Default.Shuffle, null, Modifier.size(18.dp), tint = color)
-        Spacer(Modifier.width(6.dp))
-        Text(group.title, color = color, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Spacer(Modifier.width(6.dp))
+        Icon(if (group == Group.SERVERS) Icons.Outlined.Storage else Icons.Default.Shuffle, null, Modifier.size(15.dp), tint = color)
+        Spacer(Modifier.width(4.dp))
+        Text(group.title, color = color, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Spacer(Modifier.width(4.dp))
         Box(
             Modifier
                 .clip(RoundedCornerShape(10.dp))
                 .background(if (selected) primary else MaterialTheme.colorScheme.outlineVariant)
-                .padding(horizontal = 7.dp, vertical = 2.dp),
+                .padding(horizontal = 5.dp, vertical = 1.dp),
         ) {
-            Text("$count", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("$count", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -515,13 +528,13 @@ private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
             .background(MaterialTheme.colorScheme.surface)
             .clickable(enabled = !pinging, onClick = onClick)
             .heightIn(min = 52.dp)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (pinging) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         else Icon(Icons.Default.Speed, null, Modifier.size(20.dp))
         Spacer(Modifier.width(6.dp))
-        Text("Пинг", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text("Пинг", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -603,6 +616,7 @@ private fun ServerRow(
     connected: Boolean,
     favorite: Boolean,
     locked: Boolean,
+    limited: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -622,11 +636,19 @@ private fun ServerRow(
     ) {
         FlagCircle(server, 34.dp)
         Spacer(Modifier.width(14.dp))
-        Text(
-            ServerGroups.splitFlag(server.name).second,
-            Modifier.weight(1f),
-            fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                ServerGroups.splitFlag(server.name).second,
+                Modifier.basicMarquee(),
+                fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+            )
+            Text(
+                if (limited) "Лимитный · расходует ГБ" else "Безлимит",
+                fontSize = 11.sp,
+                color = if (limited) Color(0xFFF59E0B) else connectedGreen(),
+                maxLines = 1,
+            )
+        }
         if (favorite) {
             Icon(Icons.Default.Star, null, tint = Color(0xFFF5B301), modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
@@ -636,10 +658,10 @@ private fun ServerRow(
             ping != null -> Text(
                 if (ping >= 0) "$ping мс" else "таймаут",
                 color = if (ping >= 0 && ping < 300) MaterialTheme.colorScheme.onSurfaceVariant else pingColor(ping),
-                fontSize = 15.sp,
+                fontSize = 13.sp,
             )
         }
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(12.dp))
         when {
             connected -> Box(Modifier.size(26.dp).clip(CircleShape).background(accent), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(17.dp))

@@ -90,7 +90,6 @@ internal fun ProfileScreen(
             }
 
             SectionCard(title = "Подключение") {
-                ToggleRow("Автоподключение", autoConnect) { viewModel.setAutoConnect(it) }
                 NavRow(
                     "Выбор сервера",
                     value = selected?.let { if ("авто" in it.name.lowercase()) "Автоматически" else it.name.trim() } ?: "—",

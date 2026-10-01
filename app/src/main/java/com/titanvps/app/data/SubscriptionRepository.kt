@@ -92,6 +92,12 @@ class SubscriptionRepository(private val context: Context) {
         if (sub.servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")
         store.save(sub)
         _subscription.value = sub
+        // Trim geo files now so the first connect doesn't wait for it.
+        runCatching {
+            com.titanvps.app.core.GeoFiles.prepare(
+                context, java.io.File(com.titanvps.app.TitanApp.get(context).assetDir), sub.servers.map { it.xrayJson },
+            )
+        }
         if (sub.servers.none { it.id == _selectedId.value }) select(sub.servers.first().id)
         sub
     }

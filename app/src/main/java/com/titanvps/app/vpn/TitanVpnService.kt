@@ -100,6 +100,7 @@ class TitanVpnService : VpnService() {
             val logDir = cacheDir.absolutePath
             java.io.File(logDir, XrayConfigs.ACCESS_LOG).writeText("")
             java.io.File(logDir, XrayConfigs.ERROR_LOG).writeText("")
+            com.titanvps.app.core.GeoFiles.prepare(this, java.io.File(TitanApp.get(this).assetDir), all.map { it.xrayJson })
             val config = XrayConfigs.buildRunConfig(server.xrayJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir)
             XrayCore.start(config, underlyingDns) { fd -> protect(fd) }
 

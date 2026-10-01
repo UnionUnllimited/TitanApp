@@ -47,8 +47,14 @@ jobs:
       - name: Unit tests
         run: ./gradlew testDebugUnitTest
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
+      - name: Build APKs
+        run: ./gradlew assembleRelease assembleDebug
+
+      # arm64-v8a: almost every phone; armeabi-v7a: old 32-bit phones.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TitanVPS
+          path: app/build/outputs/apk/release/*.apk
 
       - uses: actions/upload-artifact@v4
         with:

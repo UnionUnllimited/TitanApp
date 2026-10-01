@@ -26,18 +26,15 @@ class TitanApp : Application() {
         repository = SubscriptionRepository(this)
         settings = AppSettings(this)
         network = NetworkMonitor(this)
-        copyGeoAssets()
+        cleanOldGeoCopies()
     }
 
-    /** Copies bundled *.dat files once per app version. */
-    private fun copyGeoAssets() {
-        val dir = File(assetDir).apply { mkdirs() }
-        val marker = File(dir, ".version")
-        if (marker.exists() && marker.readText() == BuildConfig.VERSION_CODE.toString()) return
-        assets.list("")?.filter { it.endsWith(".dat") }?.forEach { name ->
-            assets.open(name).use { input -> File(dir, name).outputStream().use { input.copyTo(it) } }
+    /** Removes full-size copies left by older versions (now trimmed in GeoFiles). */
+    private fun cleanOldGeoCopies() {
+        File(assetDir, ".version").takeIf { it.exists() }?.let { marker ->
+            marker.delete()
+            File(assetDir).listFiles()?.filter { it.name.endsWith(".dat") }?.forEach { it.delete() }
         }
-        marker.writeText(BuildConfig.VERSION_CODE.toString())
     }
 
     companion object {

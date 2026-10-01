@@ -14,8 +14,10 @@ android {
         applicationId = "com.titanvps.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI run number, so every build is an update over the previous one.
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "0.1.$build"
 
         buildConfigField("String", "SUB_HOSTS", "\"${prop("titan.subHosts")}\"")
         buildConfigField("String", "TELEGRAM_URL", "\"${prop("titan.telegramUrl")}\"")
@@ -23,12 +25,38 @@ android {
 
         ndk {
             // libXray.aar ships these ABIs; keep only what you distribute.
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    // One key for every build (CI runners otherwise sign with a random debug key, and
+    // Android refuses to install a new build over the old one).
+    // TODO: before a public release, move the keystore and passwords to CI secrets.
+    signingConfigs {
+        create("titan") {
+            storeFile = file("titan.keystore")
+            storePassword = "titanvps"
+            keyAlias = "titan"
+            keyPassword = "titanvps"
+        }
+    }
+
+    // A separate APK per CPU type instead of one with every libXray copy.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
         }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("titan")
+        }
         release {
+            signingConfig = signingConfigs.getByName("titan")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -46,7 +74,8 @@ android {
     }
 
     packaging {
-        jniLibs.useLegacyPackaging = true
+        // Native libs stay inside the APK (not extracted on install → less storage).
+        jniLibs.useLegacyPackaging = false
     }
 }
 

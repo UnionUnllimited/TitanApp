@@ -15,3 +15,6 @@ app/libs/*.jar
 # Downloaded by scripts/download-geo.sh
 app/src/main/assets/*.dat
 .build/
+
+# Shared signing key so new builds install over old ones.
+!app/titan.keystore
