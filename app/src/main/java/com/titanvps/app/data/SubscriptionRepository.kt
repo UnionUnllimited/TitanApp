@@ -130,9 +130,8 @@ class SubscriptionRepository(private val context: Context) {
     private fun download(url: String): Pair<SubscriptionInfo, String> {
         val request = Request.Builder()
             .url(url)
-            // TODO: temporary. Switch to our own UA (e.g. "TitanVPS/<version>") once a
-            //  Remnawave response rule for it is set up.
-            .header("User-Agent", "Xray")
+            // Our own UA; the subscription server answers it with Xray JSON.
+            .header("User-Agent", "Titan")
             .header("Accept", "application/json, text/plain, */*")
             // Remnawave HWID device limit headers.
             .header("x-hwid", hwid())
