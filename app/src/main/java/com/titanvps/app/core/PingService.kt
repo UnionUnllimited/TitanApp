@@ -20,10 +20,9 @@ import java.util.concurrent.TimeUnit
  * Pings every server through Xray, in its own process (":ping") so it works while the
  * VPN core runs (libXray allows one core per process).
  *
- * Like Happ / v2rayNG: one temporary core with a local SOCKS port per server; through
- * each port we open a connection with a warm-up request and time a second request on
- * the same connection. That is the real round trip through the server, without the
- * one-off handshakes. Falls back to libXray's pingBatch if the core can't start.
+ * Like Happ / v2RayTun: one temporary core with a local SOCKS port per server; through
+ * each port we time one request on a fresh connection (handshakes included). Falls back
+ * to libXray's pingBatch if the core can't start.
  */
 class PingService : Service() {
 
@@ -110,7 +109,7 @@ class PingService : Service() {
         return best.any { it >= 0 } || fallbackOk
     }
 
-    /** Warm-up request, then time a second request over the same (kept-alive) connection. */
+    /** Time of one request through the server on a fresh connection. */
     private fun measure(port: Int, timeoutSec: Int): Pair<Long, String?> {
         val client = OkHttpClient.Builder()
             .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
@@ -121,14 +120,11 @@ class PingService : Service() {
             .build()
         val request = Request.Builder().url(PING_URL).build()
         return try {
-            val warmStart = System.nanoTime()
+            // Like Happ / v2RayTun: one request on a fresh connection, including TCP,
+            // TLS and the proxy handshake.
+            val start = System.nanoTime()
             client.newCall(request).execute().use { it.body.bytes() }
-            val warm = (System.nanoTime() - warmStart) / 1_000_000
-            runCatching {
-                val start = System.nanoTime()
-                client.newCall(request).execute().use { it.body.bytes() }
-                (System.nanoTime() - start) / 1_000_000
-            }.getOrDefault(warm).coerceAtLeast(1) to null
+            ((System.nanoTime() - start) / 1_000_000).coerceAtLeast(1) to null
         } catch (e: Exception) {
             -1L to (e.message ?: e.javaClass.simpleName)
         } finally {

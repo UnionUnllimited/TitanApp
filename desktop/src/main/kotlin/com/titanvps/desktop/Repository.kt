@@ -161,14 +161,11 @@ object Pinger {
             .build()
         val request = Request.Builder().url(URL).build()
         return try {
-            val warmStart = System.nanoTime()
+            // Like Happ / v2RayTun: one request on a fresh connection, including TCP,
+            // TLS and the proxy handshake.
+            val start = System.nanoTime()
             client.newCall(request).execute().use { it.body.bytes() }
-            val warm = (System.nanoTime() - warmStart) / 1_000_000
-            runCatching {
-                val start = System.nanoTime()
-                client.newCall(request).execute().use { it.body.bytes() }
-                (System.nanoTime() - start) / 1_000_000
-            }.getOrDefault(warm).coerceAtLeast(1)
+            ((System.nanoTime() - start) / 1_000_000).coerceAtLeast(1)
         } catch (e: Exception) {
             -1
         } finally {
