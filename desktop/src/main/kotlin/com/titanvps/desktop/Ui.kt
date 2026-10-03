@@ -269,7 +269,7 @@ private fun Header(state: AppState) {
         SquareButton(Icons.Default.Refresh, "Обновить подписку", spinning = state.busy) { state.refresh() }
         Spacer(Modifier.width(8.dp))
         SquareButton(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, "Тема") {
-            state.setTheme(if (dark) "light" else "dark")
+            state.changeTheme(if (dark) "light" else "dark")
         }
     }
 }
@@ -556,7 +556,7 @@ private fun SettingsPage(state: AppState) {
                         val sel = state.theme == v
                         Box(
                             Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(if (sel) Brand else Color.Transparent)
-                                .clickable { state.setTheme(v) }.padding(vertical = 8.dp),
+                                .clickable { state.changeTheme(v) }.padding(vertical = 8.dp),
                             contentAlignment = Alignment.Center,
                         ) { Text(t, color = if (sel) Color.White else MaterialTheme.colorScheme.onSurface, fontSize = 13.sp) }
                     }

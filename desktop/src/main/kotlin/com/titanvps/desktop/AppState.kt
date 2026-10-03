@@ -83,7 +83,7 @@ class AppState {
         if (vpn is VpnState.Connected) connect()
     }
 
-    fun setTheme(value: String) {
+    fun changeTheme(value: String) {
         theme = value
         scope.launch(Dispatchers.IO) { persist() }
     }
