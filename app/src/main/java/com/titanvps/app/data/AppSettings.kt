@@ -67,24 +67,44 @@ class AppSettings(context: Context) {
     /** Russian banks/marketplaces/government apps go around the VPN (see [RuApps]). */
     val ruAppsBypass: StateFlow<Boolean> = _ruAppsBypass.asStateFlow()
 
+    /** On: all Russian apps bypass the VPN again. Off: only those picked by hand. */
     fun setRuAppsBypass(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_RU_APPS, enabled).apply()
+        val excluded = _excludedApps.value - RuApps.PACKAGES
+        prefs.edit().putBoolean(KEY_RU_APPS, enabled).putStringSet(KEY_RU_OFF, emptySet())
+            .putStringSet(KEY_EXCLUDED, excluded).apply()
         _ruAppsBypass.value = enabled
+        _ruAppsOff.value = emptySet()
+        _excludedApps.value = excluded
     }
+
+    private val _ruAppsOff = MutableStateFlow(prefs.getStringSet(KEY_RU_OFF, emptySet())!!.toSet())
+    /** Russian apps the user switched back to the VPN while the preset is on. */
+    val ruAppsOff: StateFlow<Set<String>> = _ruAppsOff.asStateFlow()
 
     /** Everything that must bypass the VPN right now. */
     fun bypassPackages(): Set<String> =
-        _excludedApps.value + (if (_ruAppsBypass.value) RuApps.PACKAGES else emptySet())
+        _excludedApps.value + (if (_ruAppsBypass.value) RuApps.PACKAGES - _ruAppsOff.value else emptySet())
 
+    fun isBypassed(packageName: String): Boolean = packageName in bypassPackages()
+
+    /** Every app is switchable; Russian apps from the preset remember being switched off. */
     fun setExcluded(packageName: String, excluded: Boolean) {
         val next = if (excluded) _excludedApps.value + packageName else _excludedApps.value - packageName
-        prefs.edit().putStringSet(KEY_EXCLUDED, next).apply()
+        val ru = packageName in RuApps.PACKAGES
+        val off = when {
+            ru && !excluded -> _ruAppsOff.value + packageName
+            ru -> _ruAppsOff.value - packageName
+            else -> _ruAppsOff.value
+        }
+        prefs.edit().putStringSet(KEY_EXCLUDED, next).putStringSet(KEY_RU_OFF, off).apply()
         _excludedApps.value = next
+        _ruAppsOff.value = off
     }
 
     fun reset() {
         prefs.edit().clear().apply()
         _excludedApps.value = emptySet()
+        _ruAppsOff.value = emptySet()
         _autoBypass.value = true
         _ruAppsBypass.value = true
         _theme.value = ThemeMode.SYSTEM
@@ -97,6 +117,7 @@ class AppSettings(context: Context) {
         const val KEY_EXCLUDED = "excluded_apps"
         const val KEY_AUTO_BYPASS = "auto_bypass"
         const val KEY_RU_APPS = "ru_apps_bypass"
+        const val KEY_RU_OFF = "ru_apps_off"
         const val KEY_THEME = "theme"
         const val KEY_AUTO_CONNECT = "auto_connect"
         const val KEY_NOTIFICATIONS = "notifications"

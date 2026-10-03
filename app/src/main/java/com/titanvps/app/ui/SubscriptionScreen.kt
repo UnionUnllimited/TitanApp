@@ -103,6 +103,16 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onB
                     }
                     Spacer(Modifier.height(6.dp))
                     Text("На обычных серверах — безлимит", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Обходы — серверы для мобильного интернета, когда оператор пропускает только " +
+                            "разрешённые сайты (белые списки) и обычные серверы не работают. " +
+                            "Гигабайты списываются только пока вы подключены к обходу. " +
+                            "На Wi-Fi обходы не нужны и недоступны. Закончились ГБ — докупите в личном кабинете.",
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 

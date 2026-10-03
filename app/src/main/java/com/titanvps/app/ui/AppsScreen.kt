@@ -57,6 +57,8 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val excluded by viewModel.excludedApps.collectAsState()
     val ruApps by viewModel.ruAppsBypass.collectAsState()
+    val ruOff by viewModel.ruAppsOff.collectAsState()
+    fun isChecked(pkg: String) = pkg in excluded || (ruApps && pkg in RuApps.PACKAGES && pkg !in ruOff)
     var apps by remember { mutableStateOf<List<AppEntry>?>(null) }
     var query by remember { mutableStateOf("") }
 
@@ -72,6 +74,9 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 .distinctBy { it.packageName }
                 .map { AppEntry(it.packageName, pm.getApplicationLabel(it).toString(), pm.getApplicationIcon(it)) }
                 .sortedBy { it.label.lowercase() }
+        }?.let { list ->
+            // Order fixed once on open (bypassed apps first), so rows don't jump when toggled.
+            list.sortedByDescending { isChecked(it.packageName) }
         }
     }
 
@@ -82,7 +87,9 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             Text("Исключения приложений", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         }
         Text(
-            "Отмеченные приложения работают без VPN и не видят его.",
+            "Включённые приложения ходят в интернет напрямую, мимо VPN, и не видят его. " +
+                "Это нужно для банков, маркетплейсов и Госуслуг: с VPN они часто не открываются, " +
+                "просят его выключить или блокируют оплату. Остальные приложения работают через VPN.",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -94,7 +101,8 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("Российские приложения без VPN", fontWeight = FontWeight.SemiBold)
                 Text(
-                    "Банки, маркетплейсы, Госуслуги, Яндекс, VK, операторы — не увидят VPN",
+                    "Включает все сразу: банки, маркетплейсы, Госуслуги, Яндекс, VK, операторы. " +
+                        "Любое из них можно выключить ниже.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -113,18 +121,15 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         if (list == null) {
             CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).padding(24.dp))
         } else {
-            val shown = list
-                .filter { query.isBlank() || it.label.contains(query, ignoreCase = true) }
-                // Excluded apps first.
-                .sortedByDescending { it.packageName in excluded || (ruApps && it.packageName in RuApps.PACKAGES) }
+            val shown = list.filter { query.isBlank() || it.label.contains(query, ignoreCase = true) }
             LazyColumn {
                 items(shown, key = { it.packageName }) { app ->
-                    val preset = ruApps && app.packageName in RuApps.PACKAGES
-                    val checked = preset || app.packageName in excluded
+                    val ru = app.packageName in RuApps.PACKAGES
+                    val checked = isChecked(app.packageName)
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = !preset) { viewModel.setExcluded(app.packageName, !checked) }
+                            .clickable { viewModel.setExcluded(app.packageName, !checked) }
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -133,9 +138,9 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
                             Text(app.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (preset) Text("российское приложение", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (ru) Text("российское приложение", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Switch(checked = checked, enabled = !preset, onCheckedChange = { viewModel.setExcluded(app.packageName, it) })
+                        Switch(checked = checked, onCheckedChange = { viewModel.setExcluded(app.packageName, it) })
                     }
                 }
             }

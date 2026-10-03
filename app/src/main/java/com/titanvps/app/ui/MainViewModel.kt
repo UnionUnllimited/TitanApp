@@ -52,6 +52,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setNotifications(enabled: Boolean) = settings.setNotifications(enabled)
     fun toggleFavorite(name: String) = settings.toggleFavorite(name)
     val ruAppsBypass = settings.ruAppsBypass
+    val ruAppsOff = settings.ruAppsOff
 
     fun setRuAppsBypass(enabled: Boolean) {
         settings.setRuAppsBypass(enabled)
