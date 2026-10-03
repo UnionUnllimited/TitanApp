@@ -58,7 +58,7 @@ class SubscriptionRepository(private val context: Context) {
     suspend fun activate(link: String): Subscription {
         val url = deepLinks.extractSubscriptionUrl(link)
             ?: linkFinder.find(link)
-            ?: throw SubscriptionException("Это не ключ TitanVPS")
+            ?: throw SubscriptionException("Это не ключ Titan VPS")
         return fetch(url)
     }
 
@@ -84,7 +84,7 @@ class SubscriptionRepository(private val context: Context) {
             if (XrayConfigs.isXrayJson(body)) XrayConfigs.serversFromXrayJson(body) else emptyList()
         }.getOrDefault(emptyList()).ifEmpty {
             runCatching { XrayConfigs.serversFromOutbounds(XrayCore.convertShareLinks(XrayConfigs.clean(body))) }
-                .getOrElse { throw SubscriptionException("Не удалось разобрать подписку: ${it.message}") }
+                .getOrElse { throw SubscriptionException("Не удалось загрузить подписку. Попробуйте позже") }
         }
         if (servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")
 
@@ -121,7 +121,7 @@ class SubscriptionRepository(private val context: Context) {
                 if (firstError == null) firstError = e
             }
         }
-        throw firstError ?: SubscriptionException("Сервер подписки недоступен")
+        throw firstError ?: SubscriptionException("Сервер подписки временно недоступен. Попробуйте позже")
     }
 
     /** Same URL on the other allowed hosts. */
@@ -150,15 +150,15 @@ class SubscriptionRepository(private val context: Context) {
                 }
                 when {
                     resp.code == 404 || resp.code == 403 ->
-                        throw SubscriptionException("Подписка не найдена или отключена (${resp.code}, ${resp.request.url.host})")
+                        throw SubscriptionException("Подписка не найдена или отключена")
                     !resp.isSuccessful ->
-                        throw SubscriptionException("Сервер подписки недоступен (${resp.code}, ${resp.request.url.host})")
+                        throw SubscriptionException("Сервер подписки временно недоступен. Попробуйте позже")
                 }
                 SubscriptionHeaders.parse { resp.header(it) } to resp.body.string()
             }
         } catch (e: IOException) {
-            val host = runCatching { java.net.URI(url).host }.getOrNull()
-            throw SubscriptionException("Нет соединения с сервером подписки ($host: ${e.message ?: e.javaClass.simpleName})")
+            android.util.Log.w("Titan", "subscription download failed: $url", e)
+            throw SubscriptionException("Нет соединения с сервером подписки. Проверьте интернет")
         }
     }
 

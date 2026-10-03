@@ -110,7 +110,12 @@ class TitanVpnService : VpnService() {
             watchWifi(server, all)
         } catch (e: Exception) {
             stopVpn()
-            VpnStatus.set(VpnState.Error(e.message ?: "Ошибка подключения"))
+            android.util.Log.w("Titan", "connect failed", e)
+            // Our own messages (no subscription, no permission…) as is; core errors stay in the logs.
+            val friendly = e is IllegalStateException || e is com.titanvps.app.data.SubscriptionRepository.SubscriptionException
+            VpnStatus.set(VpnState.Error(
+                if (friendly && e.message != null) e.message!! else "Не удалось подключиться. Попробуйте другой сервер"
+            ))
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }

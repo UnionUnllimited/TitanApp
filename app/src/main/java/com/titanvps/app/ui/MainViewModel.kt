@@ -158,7 +158,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                                 _pings.value = _pings.value + event.delays
                                 _pingErrors.value = _pingErrors.value + event.errors
                             }
-                            is PingClient.Event.Done -> if (clear) event.error?.let { _message.value = "Пинг не выполнен: $it" }
+                            is PingClient.Event.Done -> if (clear) event.error?.let {
+                                android.util.Log.w("Titan", "ping failed: $it")
+                                _message.value = "Не удалось проверить пинг. Попробуйте позже"
+                            }
                         }
                     }
                 }
@@ -193,7 +196,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 block()
             } catch (e: Exception) {
-                if (!silent) _message.value = e.message ?: "Ошибка"
+                android.util.Log.w("Titan", "request failed", e)
+                // Only our own, human-readable messages reach the user.
+                if (!silent) _message.value = (e as? com.titanvps.app.data.SubscriptionRepository.SubscriptionException)?.message
+                    ?: "Что-то пошло не так. Попробуйте ещё раз"
             } finally {
                 _busy.value = false
             }
