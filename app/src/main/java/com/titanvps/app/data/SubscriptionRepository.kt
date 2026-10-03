@@ -110,9 +110,13 @@ class SubscriptionRepository(private val context: Context) {
      */
     private fun downloadWithFallback(url: String): Pair<SubscriptionInfo, String> {
         var firstError: Exception? = null
-        for (candidate in listOf(url) + alternates(url)) {
+        // "Titan" is our own UA. Until the server answers it everywhere, fall back to
+        // "Xray" when it drops the connection or doesn't return Xray JSON.
+        for (ua in USER_AGENTS) for (candidate in listOf(url) + alternates(url)) {
             try {
-                return download(candidate)
+                val result = download(candidate, ua)
+                if (ua != USER_AGENTS.last() && !XrayConfigs.isXrayJson(result.second)) continue
+                return result
             } catch (e: SubscriptionException) {
                 if (firstError == null) firstError = e
             }
@@ -127,11 +131,10 @@ class SubscriptionRepository(private val context: Context) {
         return hosts.filter { it != host }.map { url.replaceFirst(uri.rawAuthority, it) }
     }
 
-    private fun download(url: String): Pair<SubscriptionInfo, String> {
+    private fun download(url: String, userAgent: String): Pair<SubscriptionInfo, String> {
         val request = Request.Builder()
             .url(url)
-            // Our own UA; the subscription server answers it with Xray JSON.
-            .header("User-Agent", "Titan")
+            .header("User-Agent", userAgent)
             .header("Accept", "application/json, text/plain, */*")
             // Remnawave HWID device limit headers.
             .header("x-hwid", hwid())
@@ -154,8 +157,13 @@ class SubscriptionRepository(private val context: Context) {
                 SubscriptionHeaders.parse { resp.header(it) } to resp.body.string()
             }
         } catch (e: IOException) {
-            throw SubscriptionException("Нет соединения с сервером подписки")
+            val host = runCatching { java.net.URI(url).host }.getOrNull()
+            throw SubscriptionException("Нет соединения с сервером подписки ($host: ${e.message ?: e.javaClass.simpleName})")
         }
+    }
+
+    private companion object {
+        val USER_AGENTS = listOf("Titan", "Xray")
     }
 
     @SuppressLint("HardwareIds")
