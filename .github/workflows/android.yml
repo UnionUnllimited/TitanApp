@@ -48,7 +48,7 @@ jobs:
         run: ./gradlew testDebugUnitTest
 
       - name: Build APKs
-        run: ./gradlew assembleRelease assembleDebug
+        run: ./gradlew assembleRelease
 
       # "Titan VPS.apk" is universal (any phone); the per-CPU ones are smaller.
       - name: Name APKs
@@ -68,11 +68,6 @@ jobs:
         with:
           name: Titan VPS (arm64, armv7)
           path: out/split/
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: TitanVPS-debug
-          path: app/build/outputs/apk/debug/*.apk
 
       # Prebuilt core + geo files for local builds in Android Studio
       # (unzip into the project root, no Go/NDK needed on your machine).
