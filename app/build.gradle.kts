@@ -70,8 +70,9 @@ android {
     }
 
     packaging {
-        // Native libs stay inside the APK (not extracted on install → less storage).
-        jniLibs.useLegacyPackaging = false
+        // Compressed native libs: the APK is far smaller to download (libXray is ~3x
+        // compressible); only the phone's own ABI gets extracted on install.
+        jniLibs.useLegacyPackaging = true
     }
 }
 

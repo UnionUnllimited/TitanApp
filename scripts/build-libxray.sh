@@ -21,6 +21,9 @@ echo "Using NDK: $ANDROID_NDK_HOME"
 rm -rf "$WORK"
 git clone --depth 1 --branch "$REF" https://github.com/XTLS/libXray.git "$WORK"
 export PATH="$PATH:$(go env GOPATH)/bin"
+# Strip Go debug info/symbols (-s -w): the .so gets roughly a third smaller.
+sed -i 's|"-ldflags=-checklinkname=0|"-trimpath", "-ldflags=-s -w -checklinkname=0|' "$WORK/build/app/android.py"
+grep -q -- '-ldflags=-s -w' "$WORK/build/app/android.py" || { echo "failed to patch ldflags" >&2; exit 1; }
 (cd "$WORK" && python3 build/main.py android)
 
 mkdir -p "$ROOT/app/libs"
