@@ -1,0 +1,58 @@
+name: Windows
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths: ["desktop/**", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Xray core for Windows + the same geo files as Android.
+      - name: Download xray.exe and geo files
+        shell: pwsh
+        run: |
+          $dest = "desktop/resources/windows"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-windows-64.zip" -OutFile xray.zip
+          Expand-Archive xray.zip -DestinationPath xray
+          Copy-Item xray/xray.exe $dest/
+          $geo = "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download"
+          Invoke-WebRequest -Uri "$geo/geoip.dat" -OutFile "$dest/geoip.dat"
+          Invoke-WebRequest -Uri "$geo/geosite.dat" -OutFile "$dest/geosite.dat"
+          Get-ChildItem $dest
+
+      - name: Build installer
+        run: .\gradlew.bat -p desktop packageExe packageMsi createDistributable --no-daemon
+
+      - name: Collect files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item "desktop/build/compose/binaries/main/exe/*.exe" "out/Titan VPS Setup.exe"
+          Copy-Item "desktop/build/compose/binaries/main/msi/*.msi" "out/Titan VPS.msi"
+          Compress-Archive -Path "desktop/build/compose/binaries/main/app/Titan VPS" -DestinationPath "out/Titan VPS portable.zip"
+          Get-ChildItem out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Titan VPS Setup (Windows)
+          path: out/Titan VPS Setup.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Titan VPS (Windows, other formats)
+          path: |
+            out/Titan VPS.msi
+            out/Titan VPS portable.zip

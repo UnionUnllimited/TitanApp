@@ -1,0 +1,5 @@
+build/
+.gradle/
+# Downloaded in CI: xray.exe and geo files
+resources/windows/*
+!resources/windows/.keep
