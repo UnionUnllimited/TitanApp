@@ -38,7 +38,9 @@ class SubscriptionStore(context: Context) {
             .put("supportUrl", s.info.supportUrl)
             .put("webPageUrl", s.info.webPageUrl)
             .put("announce", s.info.announce)
-            .put("updateHours", s.info.updateIntervalHours))
+            .put("updateHours", s.info.updateIntervalHours)
+            .put("deviceLimit", s.info.deviceLimit ?: -1)
+            .put("devicesUsed", s.info.devicesUsed ?: -1))
         .put("servers", JSONArray().apply {
             s.servers.forEach {
                 put(JSONObject().put("id", it.id).put("name", it.name).put("json", it.xrayJson).put("tag", it.proxyTag))
@@ -61,6 +63,8 @@ class SubscriptionStore(context: Context) {
                 webPageUrl = i.optStringOrNull("webPageUrl"),
                 announce = i.optStringOrNull("announce"),
                 updateIntervalHours = i.optInt("updateHours", SubscriptionInfo.DEFAULT_UPDATE_HOURS),
+                deviceLimit = i.optInt("deviceLimit", -1).takeIf { it >= 0 },
+                devicesUsed = i.optInt("devicesUsed", -1).takeIf { it >= 0 },
             ),
             servers = (0 until arr.length()).map {
                 val s = arr.getJSONObject(it)

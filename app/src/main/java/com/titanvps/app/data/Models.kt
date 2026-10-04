@@ -13,8 +13,20 @@ data class SubscriptionInfo(
     val webPageUrl: String? = null,
     val announce: String? = null,
     val updateIntervalHours: Int = DEFAULT_UPDATE_HOURS,
+    /** Device (HWID) limit from `x-device-limit`; 0 = unlimited, null = not sent. */
+    val deviceLimit: Int? = null,
+    /** Devices already bound, from `x-devices-used`. */
+    val devicesUsed: Int? = null,
 ) {
     val usedBytes: Long get() = uploadBytes + downloadBytes
+
+    /** "2 из 3", "Без лимита", or null when the server doesn't send it. */
+    val devicesText: String?
+        get() = when {
+            deviceLimit == null -> null
+            deviceLimit == 0 -> devicesUsed?.let { "$it · без лимита" } ?: "Без лимита"
+            else -> "${devicesUsed ?: "?"} из $deviceLimit"
+        }
 
     companion object {
         const val DEFAULT_UPDATE_HOURS = 12

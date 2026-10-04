@@ -83,6 +83,10 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onB
                         val days = TimeUnit.SECONDS.toDays(info.expireAt - now).coerceAtLeast(0)
                         Text("Осталось $days дн.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    info.devicesText?.let {
+                        Spacer(Modifier.height(4.dp))
+                        Text("Устройства: $it", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
             val traffic: @Composable (Modifier) -> Unit = { m ->

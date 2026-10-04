@@ -22,6 +22,8 @@ object SubscriptionHeaders {
             announce = decodeText(header("announce")),
             updateIntervalHours = header("profile-update-interval")?.trim()?.toIntOrNull()
                 ?.coerceIn(1, 24 * 7) ?: SubscriptionInfo.DEFAULT_UPDATE_HOURS,
+            deviceLimit = header("x-device-limit")?.trim()?.toIntOrNull()?.takeIf { it >= 0 },
+            devicesUsed = header("x-devices-used")?.trim()?.toIntOrNull()?.takeIf { it >= 0 },
         )
     }
 

@@ -339,6 +339,7 @@ private fun SubscriptionCard(sub: Subscription, onOpen: () -> Unit) {
                         val days = TimeUnit.SECONDS.toDays(info.expireAt - now).coerceAtLeast(0)
                         DetailLine("Осталось", "$days дн.")
                     }
+                    sub.info.devicesText?.let { DetailLine("Устройства", it) }
                     DetailLine("Обычные серверы", "Безлимит")
                     DetailLine(
                         "Трафик на обходах",
