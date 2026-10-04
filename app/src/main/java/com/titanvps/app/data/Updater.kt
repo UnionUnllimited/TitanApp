@@ -1,6 +1,5 @@
 package com.titanvps.app.data
 
-import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -20,9 +19,8 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Updates from GitHub Releases, downloaded only while our VPN is on: everything goes
- * through Android's DownloadManager, which runs under the system downloads UID and so
- * uses the tunnel (our own app is excluded from it).
+ * Updates from GitHub Releases, downloaded only while our VPN is on and only through
+ * it (via the core's local proxy, see [com.titanvps.app.vpn.LocalProxy]).
  */
 class Updater(private val context: Context) {
 
@@ -40,7 +38,6 @@ class Updater(private val context: Context) {
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    private val dm = context.getSystemService(DownloadManager::class.java)
     private val dir = File(context.getExternalFilesDir(null), "update").apply { mkdirs() }
 
     fun reset() { _state.value = State.Idle }
@@ -91,46 +88,64 @@ class Updater(private val context: Context) {
         )
     }
 
-    private fun vpnOn() = VpnStatus.state.value is VpnState.Connected
+    private fun vpnOn() = VpnStatus.state.value is VpnState.Connected && VpnStatus.localProxy != null
 
+    /**
+     * Downloads through the core's local HTTP proxy, i.e. through the server: our app is
+     * excluded from its own tunnel, so a direct request would bypass the VPN.
+     */
     private suspend fun download(url: String, name: String, visible: Boolean, json: Boolean, onProgress: (Float) -> Unit): File =
         withContext(Dispatchers.IO) {
+            val lp = VpnStatus.localProxy ?: error("vpn off")
+            val credential = okhttp3.Credentials.basic(lp.user, lp.password)
+            val client = okhttp3.OkHttpClient.Builder()
+                .proxy(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", lp.port)))
+                // Preemptive and on 407: Xray's HTTP inbound wants Basic auth.
+                .proxyAuthenticator { _, response ->
+                    response.request.newBuilder().header("Proxy-Authorization", credential).build()
+                }
+                .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            val request = okhttp3.Request.Builder().url(url)
+                .header("User-Agent", "Titan")
+                .apply { if (json) header("Accept", "application/vnd.github+json") }
+                .build()
             val target = File(dir, name).apply { delete() }
-            val request = DownloadManager.Request(Uri.parse(url))
-                .setDestinationUri(Uri.fromFile(target))
-                .addRequestHeader("User-Agent", "Titan")
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(true)
-                .setTitle("Titan VPS")
-                .setNotificationVisibility(
-                    if (visible) DownloadManager.Request.VISIBILITY_VISIBLE else DownloadManager.Request.VISIBILITY_HIDDEN
-                )
-                .apply { if (json) addRequestHeader("Accept", "application/vnd.github+json") }
-            val id = dm.enqueue(request)
-            val deadline = System.currentTimeMillis() + if (json) 30_000 else 15 * 60_000
+            val tmp = File(dir, "$name.part").apply { delete() }
             try {
-                while (true) {
-                    dm.query(DownloadManager.Query().setFilterById(id)).use { c ->
-                        if (!c.moveToFirst()) error("download gone")
-                        when (c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))) {
-                            DownloadManager.STATUS_SUCCESSFUL -> return@withContext target
-                            DownloadManager.STATUS_FAILED -> error("download failed")
-                            else -> {
-                                val done = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                                val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                                if (total > 0) onProgress((done.toFloat() / total).coerceIn(0f, 1f))
+                client.newCall(request).execute().use { resp ->
+                    if (!resp.isSuccessful) error("HTTP ${resp.code}")
+                    val total = resp.body.contentLength()
+                    resp.body.byteStream().use { input ->
+                        tmp.outputStream().use { out ->
+                            val buf = ByteArray(64 * 1024)
+                            var done = 0L
+                            var lastReport = 0L
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                out.write(buf, 0, n)
+                                done += n
+                                if (total > 0 && System.currentTimeMillis() - lastReport > 250) {
+                                    lastReport = System.currentTimeMillis()
+                                    onProgress((done.toFloat() / total).coerceIn(0f, 1f))
+                                }
+                                // VPN turned off mid-way: stop instead of going around it.
+                                if (!vpnOn()) error("vpn off")
                             }
                         }
                     }
-                    if (System.currentTimeMillis() > deadline) error("timeout")
-                    // VPN turned off mid-way: stop instead of downloading past the tunnel.
-                    if (!vpnOn()) error("vpn off")
-                    delay(400)
                 }
-                @Suppress("UNREACHABLE_CODE") target
+                if (!tmp.renameTo(target)) error("rename failed")
+                target
             } catch (e: Exception) {
-                dm.remove(id)
+                android.util.Log.w("Titan", "update download failed: $url", e)
+                tmp.delete()
                 throw e
+            } finally {
+                client.connectionPool.evictAll()
+                client.dispatcher.executorService.shutdown()
             }
         }
 

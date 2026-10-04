@@ -101,8 +101,14 @@ class TitanVpnService : VpnService() {
             java.io.File(logDir, XrayConfigs.ACCESS_LOG).writeText("")
             java.io.File(logDir, XrayConfigs.ERROR_LOG).writeText("")
             com.titanvps.app.core.GeoFiles.prepare(this, java.io.File(TitanApp.get(this).assetDir), all.map { it.xrayJson })
-            val config = XrayConfigs.buildRunConfig(server.xrayJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir, server.proxyTag)
+            val localProxy = LocalProxy(
+                port = java.net.ServerSocket(0).use { it.localPort },
+                user = java.util.UUID.randomUUID().toString(),
+                password = java.util.UUID.randomUUID().toString(),
+            )
+            val config = XrayConfigs.buildRunConfig(server.xrayJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir, server.proxyTag, localProxy)
             XrayCore.start(config, underlyingDns) { fd -> protect(fd) }
+            VpnStatus.localProxy = localProxy
 
             VpnStatus.set(VpnState.Connected(server.name, System.currentTimeMillis()))
             startForegroundCompat(getString(R.string.notification_connected, server.name))
@@ -234,6 +240,7 @@ class TitanVpnService : VpnService() {
         wifiJob = null
         watcherJob?.cancel()
         watcherJob = null
+        VpnStatus.localProxy = null
         if (tun != null) VpnStatus.set(VpnState.Disconnecting)
         XrayCore.stop()
         runCatching { tun?.close() }

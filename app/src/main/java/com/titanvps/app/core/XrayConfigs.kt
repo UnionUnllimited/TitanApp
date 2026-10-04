@@ -15,6 +15,7 @@ object XrayConfigs {
 
     const val TUN_TAG = "tun-in"
     const val DNS_OUT_TAG = "dns-out"
+    const val LOCAL_PROXY_TAG = "app-in"
     private const val SNIFFING_KEY = "_titanSniffing"
     const val ACCESS_LOG = "xray-access.log"
     const val ERROR_LOG = "xray-error.log"
@@ -167,6 +168,7 @@ object XrayConfigs {
         mtu: Int,
         logDir: String? = null,
         proxyTag: String? = null,
+        localProxy: com.titanvps.app.vpn.LocalProxy? = null,
     ): String {
         val cfg = JSONObject(serverJson)
 
@@ -192,13 +194,26 @@ object XrayConfigs {
             .put("xray.tun.fd", tunFd.toString())
             .put("xray.location.asset", assetDir))
 
-        cfg.put("inbounds", JSONArray().put(
+        val inbounds = JSONArray().put(
             JSONObject()
                 .put("tag", TUN_TAG)
                 .put("protocol", "tun")
                 .put("settings", JSONObject().put("name", "titan0").put("mtu", mtu))
                 .put("sniffing", sniffing)
-        ))
+        )
+        localProxy?.let { lp ->
+            inbounds.put(
+                JSONObject()
+                    .put("tag", LOCAL_PROXY_TAG)
+                    .put("protocol", "http")
+                    .put("listen", "127.0.0.1")
+                    .put("port", lp.port)
+                    .put("settings", JSONObject().put("accounts", JSONArray().put(
+                        JSONObject().put("user", lp.user).put("pass", lp.password)
+                    )))
+            )
+        }
+        cfg.put("inbounds", inbounds)
 
         if (!cfg.has("dns")) {
             cfg.put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8")))

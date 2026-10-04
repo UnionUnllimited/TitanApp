@@ -12,7 +12,18 @@ sealed interface VpnState {
     data class Error(val message: String) : VpnState
 }
 
+/**
+ * Local HTTP proxy into the running core (127.0.0.1, random port and password), so our
+ * own app — excluded from the tunnel — can still send traffic through the server
+ * (app updates from GitHub). Null while the VPN is off.
+ */
+data class LocalProxy(val port: Int, val user: String, val password: String)
+
 object VpnStatus {
+    @Volatile
+    var localProxy: LocalProxy? = null
+        internal set
+
     private val _state = MutableStateFlow<VpnState>(VpnState.Disconnected)
     val state: StateFlow<VpnState> = _state.asStateFlow()
 
