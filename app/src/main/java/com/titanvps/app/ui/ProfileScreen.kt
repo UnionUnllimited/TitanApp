@@ -103,6 +103,7 @@ internal fun ProfileScreen(
                 NavRow("Язык", value = "Русский", onClick = {})
                 ToggleRow("Уведомления", notifications) { viewModel.setNotifications(it) }
                 NavRow("Поддержка") { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) }
+                NavRow("Обновление приложения", value = "v${BuildConfig.VERSION_NAME}") { viewModel.checkUpdate() }
                 NavRow("О приложении", divider = false) { about = true }
             }
 
@@ -134,6 +135,7 @@ internal fun ProfileScreen(
             confirmButton = { TextButton(onClick = { about = false }) { Text("Закрыть") } },
         )
     }
+    UpdateDialog(viewModel)
     if (confirmReset) {
         AlertDialog(
             onDismissRequest = { confirmReset = false },
@@ -150,6 +152,61 @@ internal fun ProfileScreen(
             text = { Text("VPN отключится, ключ нужно будет вставить заново.") },
             confirmButton = { TextButton(onClick = { confirmLogout = false; viewModel.logout() }) { Text("Выйти") } },
             dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Отмена") } },
+        )
+    }
+}
+
+/** Check / download / install flow for "Обновление приложения". */
+@Composable
+private fun UpdateDialog(viewModel: MainViewModel) {
+    val state by viewModel.update.collectAsState()
+    val close = { viewModel.dismissUpdate() }
+    when (val st = state) {
+        com.titanvps.app.data.Updater.State.Idle -> Unit
+        com.titanvps.app.data.Updater.State.Checking -> AlertDialog(
+            onDismissRequest = close,
+            title = { Text("Обновление") },
+            text = { Text("Проверяем новую версию…") },
+            confirmButton = {},
+        )
+        com.titanvps.app.data.Updater.State.UpToDate -> AlertDialog(
+            onDismissRequest = close,
+            title = { Text("Обновление") },
+            text = { Text("У вас последняя версия ${BuildConfig.VERSION_NAME}") },
+            confirmButton = { TextButton(onClick = close) { Text("OK") } },
+        )
+        is com.titanvps.app.data.Updater.State.Available -> AlertDialog(
+            onDismissRequest = close,
+            title = { Text("Доступна версия ${st.release.versionName}") },
+            text = {
+                Text(
+                    "Сейчас установлена ${BuildConfig.VERSION_NAME}. Обновление скачается через VPN" +
+                        (if (st.release.sizeBytes > 0) " (${st.release.sizeBytes / 1024 / 1024} МБ)" else "") +
+                        " и установится поверх, настройки сохранятся."
+                )
+            },
+            confirmButton = { TextButton(onClick = { viewModel.downloadUpdate(st.release) }) { Text("Обновить") } },
+            dismissButton = { TextButton(onClick = close) { Text("Позже") } },
+        )
+        is com.titanvps.app.data.Updater.State.Downloading -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Скачиваем обновление") },
+            text = {
+                Column {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { st.progress },
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    )
+                    Text("${(st.progress * 100).toInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = {},
+        )
+        is com.titanvps.app.data.Updater.State.Error -> AlertDialog(
+            onDismissRequest = close,
+            title = { Text("Обновление") },
+            text = { Text(st.message) },
+            confirmButton = { TextButton(onClick = close) { Text("OK") } },
         )
     }
 }

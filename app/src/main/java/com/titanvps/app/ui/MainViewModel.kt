@@ -31,6 +31,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val favorites = settings.favorites
     val onMobile = TitanApp.get(app).network.onMobile
 
+    private val updater = com.titanvps.app.data.Updater(app)
+    val update = updater.state
+    fun checkUpdate() = viewModelScope.launch { updater.check() }
+    fun downloadUpdate(r: com.titanvps.app.data.Updater.Release) = viewModelScope.launch { updater.downloadAndInstall(r) }
+    fun dismissUpdate() = updater.reset()
+
     /** Bypass servers are for mobile internet only; tells the user why otherwise. */
     fun canConnect(): Boolean {
         val sub = subscription.value ?: return true
