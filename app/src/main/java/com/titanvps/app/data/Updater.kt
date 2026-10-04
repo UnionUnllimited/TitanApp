@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 
@@ -22,15 +23,18 @@ import java.io.File
  * Updates from GitHub Releases, downloaded only while our VPN is on and only through
  * it (via the core's local proxy, see [com.titanvps.app.vpn.LocalProxy]).
  */
-class Updater(private val context: Context) {
+class Updater(private val context: Context, private val requestVpn: () -> Unit) {
 
     data class Release(val versionCode: Int, val versionName: String, val apkUrl: String, val sizeBytes: Long)
 
     sealed interface State {
         data object Idle : State
+        data object ConnectingVpn : State
         data object Checking : State
         data object UpToDate : State
         data class Available(val release: Release) : State
+        /** "Install unknown apps" isn't allowed yet; asked before downloading anything. */
+        data class NeedPermission(val release: Release) : State
         data class Downloading(val progress: Float) : State
         data class Error(val message: String) : State
     }
@@ -43,10 +47,10 @@ class Updater(private val context: Context) {
     fun reset() { _state.value = State.Idle }
 
     suspend fun check() {
-        if (!vpnOn()) { _state.value = State.Error(NEED_VPN); return }
+        if (!ensureVpn()) return
         _state.value = State.Checking
         _state.value = runCatching {
-            val file = download(LATEST_URL, "latest.json", visible = false, json = true) { }
+            val file = download(LATEST_URL, "latest.json", json = true) { }
             parse(file.readText())
         }.fold(
             onSuccess = { r -> if (r != null && r.versionCode > BuildConfig.VERSION_CODE) State.Available(r) else State.UpToDate },
@@ -55,31 +59,36 @@ class Updater(private val context: Context) {
     }
 
     suspend fun downloadAndInstall(release: Release) {
-        if (!vpnOn()) { _state.value = State.Error(NEED_VPN); return }
+        // Permission first, so nothing is downloaded in vain.
+        if (!canInstall()) {
+            openInstallPermission()
+            _state.value = State.NeedPermission(release)
+            return
+        }
+        if (!ensureVpn()) return
         _state.value = State.Downloading(0f)
         runCatching {
-            val apk = download(release.apkUrl, "titan-vps-${release.versionCode}.apk", visible = true, json = false) {
+            val apk = download(release.apkUrl, "titan-vps-${release.versionCode}.apk", json = false) {
                 _state.value = State.Downloading(it)
             }
             install(apk)
             _state.value = State.Idle
-        }.onFailure { e ->
-            _state.value = State.Error(
-                if (e.message == "install permission") "Разрешите установку из Titan VPS в открывшихся настройках и нажмите «Обновить» ещё раз"
-                else "Не удалось скачать обновление. Проверьте подключение и попробуйте ещё раз"
-            )
+        }.onFailure {
+            _state.value = State.Error("Не удалось скачать обновление. Проверьте подключение и попробуйте ещё раз")
         }
     }
 
-    /** Opens the system installer, asking for the "install unknown apps" permission first if needed. */
-    fun install(apk: File) {
-        if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
-            context.startActivity(
-                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-            throw IllegalStateException("install permission")
-        }
+    fun canInstall(): Boolean = Build.VERSION.SDK_INT < 26 || context.packageManager.canRequestPackageInstalls()
+
+    fun openInstallPermission() {
+        if (Build.VERSION.SDK_INT < 26) return
+        context.startActivity(
+            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+
+    private fun install(apk: File) {
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
         context.startActivity(
             Intent(Intent.ACTION_VIEW)
@@ -88,13 +97,29 @@ class Updater(private val context: Context) {
         )
     }
 
+    /** Turns the VPN on by itself if needed and waits for it; updates only go through it. */
+    private suspend fun ensureVpn(): Boolean {
+        if (vpnOn()) return true
+        _state.value = State.ConnectingVpn
+        requestVpn()
+        val ok = withTimeoutOrNull(45_000) {
+            while (!vpnOn()) {
+                if (VpnStatus.state.value is VpnState.Error) return@withTimeoutOrNull false
+                delay(300)
+            }
+            true
+        } ?: false
+        if (!ok) _state.value = State.Error(NEED_VPN)
+        return ok
+    }
+
     private fun vpnOn() = VpnStatus.state.value is VpnState.Connected && VpnStatus.localProxy != null
 
     /**
      * Downloads through the core's local HTTP proxy, i.e. through the server: our app is
      * excluded from its own tunnel, so a direct request would bypass the VPN.
      */
-    private suspend fun download(url: String, name: String, visible: Boolean, json: Boolean, onProgress: (Float) -> Unit): File =
+    private suspend fun download(url: String, name: String, json: Boolean, onProgress: (Float) -> Unit): File =
         withContext(Dispatchers.IO) {
             val lp = VpnStatus.localProxy ?: error("vpn off")
             val credential = okhttp3.Credentials.basic(lp.user, lp.password)
@@ -167,6 +192,6 @@ class Updater(private val context: Context) {
 
     companion object {
         private const val LATEST_URL = "https://api.github.com/repos/UnionUnllimited/TitanApp/releases/latest"
-        const val NEED_VPN = "Включите VPN — обновление скачивается только через него"
+        const val NEED_VPN = "Не удалось включить VPN. Обновление скачивается только через VPN — подключитесь и попробуйте ещё раз"
     }
 }

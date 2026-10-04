@@ -163,6 +163,19 @@ private fun UpdateDialog(viewModel: MainViewModel) {
     val close = { viewModel.dismissUpdate() }
     when (val st = state) {
         com.titanvps.app.data.Updater.State.Idle -> Unit
+        com.titanvps.app.data.Updater.State.ConnectingVpn -> AlertDialog(
+            onDismissRequest = close,
+            title = { Text("Обновление") },
+            text = { Text("Включаем VPN — обновление скачивается только через него…") },
+            confirmButton = {},
+        )
+        is com.titanvps.app.data.Updater.State.NeedPermission -> AlertDialog(
+            onDismissRequest = close,
+            title = { Text("Разрешите установку") },
+            text = { Text("В открывшихся настройках включите «Разрешить установку» для Titan VPS, вернитесь сюда и нажмите «Продолжить».") },
+            confirmButton = { TextButton(onClick = { viewModel.downloadUpdate(st.release) }) { Text("Продолжить") } },
+            dismissButton = { TextButton(onClick = { viewModel.openInstallPermission() }) { Text("Открыть настройки") } },
+        )
         com.titanvps.app.data.Updater.State.Checking -> AlertDialog(
             onDismissRequest = close,
             title = { Text("Обновление") },
@@ -180,7 +193,7 @@ private fun UpdateDialog(viewModel: MainViewModel) {
             title = { Text("Доступна версия ${st.release.versionName}") },
             text = {
                 Text(
-                    "Сейчас установлена ${BuildConfig.VERSION_NAME}. Обновление скачается через VPN" +
+                    "Сейчас установлена ${BuildConfig.VERSION_NAME}. Обновление скачается через VPN (он включится сам)" +
                         (if (st.release.sizeBytes > 0) " (${st.release.sizeBytes / 1024 / 1024} МБ)" else "") +
                         " и установится поверх, настройки сохранятся."
                 )

@@ -31,11 +31,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val favorites = settings.favorites
     val onMobile = TitanApp.get(app).network.onMobile
 
-    private val updater = com.titanvps.app.data.Updater(app)
+    // Updates turn the VPN on themselves (through MainActivity, which handles the VPN prompt).
+    private val updater = com.titanvps.app.data.Updater(app) { _connectRequests.trySend(Unit) }
     val update = updater.state
     fun checkUpdate() = viewModelScope.launch { updater.check() }
     fun downloadUpdate(r: com.titanvps.app.data.Updater.Release) = viewModelScope.launch { updater.downloadAndInstall(r) }
     fun dismissUpdate() = updater.reset()
+    fun openInstallPermission() = updater.openInstallPermission()
 
     /** Bypass servers are for mobile internet only; tells the user why otherwise. */
     fun canConnect(): Boolean {
