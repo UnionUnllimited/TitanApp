@@ -68,13 +68,6 @@ internal fun DiagnosticsScreen(onBack: () -> Unit) {
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { text = readLogs(context.cacheDir) }, modifier = Modifier.weight(1f)) { Text("Обновить") }
                 OutlinedButton(onClick = { clipboard.setText(AnnotatedString(text)) }, modifier = Modifier.weight(1f)) { Text("Копировать") }
-                Button(
-                    onClick = {
-                        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
-                        context.startActivity(Intent.createChooser(send, "Отправить журнал"))
-                    },
-                    modifier = Modifier.weight(1f),
-                ) { Text("Отправить") }
             }
             SelectionContainer(
                 Modifier.fillMaxSize().padding(horizontal = 12.dp)
