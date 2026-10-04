@@ -19,6 +19,7 @@ object XrayConfigs {
     const val ACCESS_LOG = "xray-access.log"
     const val ERROR_LOG = "xray-error.log"
     private const val PROXY_TAG = "proxy"
+    private val UPDATE_DOMAINS = listOf("github.com", "githubusercontent.com", "githubassets.com")
     private val SERVICE_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
 
     /** Returns true if the body looks like Xray JSON (object or array of configs). */
@@ -159,7 +160,14 @@ object XrayConfigs {
      * Final config: our TUN inbound (fd from VpnService), DNS hijack, asset dir.
      * Everything else (outbounds, routing, dns) comes from the server.
      */
-    fun buildRunConfig(serverJson: String, tunFd: Int, assetDir: String, mtu: Int, logDir: String? = null): String {
+    fun buildRunConfig(
+        serverJson: String,
+        tunFd: Int,
+        assetDir: String,
+        mtu: Int,
+        logDir: String? = null,
+        proxyTag: String? = null,
+    ): String {
         val cfg = JSONObject(serverJson)
 
         // Access log shows every connection and where routing sent it (direct/proxy/block);
@@ -213,6 +221,16 @@ object XrayConfigs {
                 .put("port", "53")
                 .put("outboundTag", DNS_OUT_TAG)
         )
+        // App updates come from GitHub and must always go through the server, whatever
+        // the panel's rules say (GitHub is slow or blocked on many Russian networks).
+        if (proxyTag != null) {
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("domain", JSONArray(UPDATE_DOMAINS.map { "domain:$it" }))
+                    .put("outboundTag", proxyTag)
+            )
+        }
         for (i in 0 until oldRules.length()) rules.put(oldRules.get(i))
         routing.put("rules", rules)
 

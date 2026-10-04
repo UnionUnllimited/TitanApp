@@ -101,7 +101,7 @@ class TitanVpnService : VpnService() {
             java.io.File(logDir, XrayConfigs.ACCESS_LOG).writeText("")
             java.io.File(logDir, XrayConfigs.ERROR_LOG).writeText("")
             com.titanvps.app.core.GeoFiles.prepare(this, java.io.File(TitanApp.get(this).assetDir), all.map { it.xrayJson })
-            val config = XrayConfigs.buildRunConfig(server.xrayJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir)
+            val config = XrayConfigs.buildRunConfig(server.xrayJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir, server.proxyTag)
             XrayCore.start(config, underlyingDns) { fd -> protect(fd) }
 
             VpnStatus.set(VpnState.Connected(server.name, System.currentTimeMillis()))
