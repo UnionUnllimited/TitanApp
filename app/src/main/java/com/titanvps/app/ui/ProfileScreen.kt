@@ -135,7 +135,6 @@ internal fun ProfileScreen(
             confirmButton = { TextButton(onClick = { about = false }) { Text("Закрыть") } },
         )
     }
-    UpdateDialog(viewModel)
     if (confirmReset) {
         AlertDialog(
             onDismissRequest = { confirmReset = false },
@@ -158,7 +157,7 @@ internal fun ProfileScreen(
 
 /** Check / download / install flow for "Обновление приложения". */
 @Composable
-private fun UpdateDialog(viewModel: MainViewModel) {
+internal fun UpdateDialog(viewModel: MainViewModel) {
     val state by viewModel.update.collectAsState()
     val close = { viewModel.dismissUpdate() }
     when (val st = state) {

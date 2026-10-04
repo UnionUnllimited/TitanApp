@@ -24,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -114,6 +115,7 @@ class TitanVpnService : VpnService() {
             startForegroundCompat(getString(R.string.notification_connected, server.name))
             startWatcher(server)
             watchWifi(server, all)
+            watchUpdates()
         } catch (e: Exception) {
             stopVpn()
             android.util.Log.w("Titan", "connect failed", e)
@@ -128,6 +130,50 @@ class TitanVpnService : VpnService() {
     }
 
     private var wifiJob: Job? = null
+    private var updateJob: Job? = null
+
+    /** While connected: look for a new app version (through the VPN) and notify once per version. */
+    private fun watchUpdates() {
+        updateJob?.cancel()
+        updateJob = scope.launch {
+            delay(15_000)
+            while (true) {
+                runCatching {
+                    val release = com.titanvps.app.data.Updater(this@TitanVpnService) {}.findNewer()
+                    val prefs = getSharedPreferences("updates", MODE_PRIVATE)
+                    if (release != null && prefs.getInt("notified", 0) < release.versionCode) {
+                        notifyUpdate(release.versionName)
+                        prefs.edit().putInt("notified", release.versionCode).apply()
+                    }
+                }
+                delay(12 * 60 * 60_000L)
+            }
+        }
+    }
+
+    private fun notifyUpdate(version: String) {
+        if (!TitanApp.get(this).settings.notifications.value) return
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel(UPDATE_CHANNEL_ID, "Обновления приложения", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+        val open = PendingIntent.getActivity(
+            this, 5,
+            Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_UPDATE, true)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        nm.notify(
+            UPDATE_ID,
+            NotificationCompat.Builder(this, UPDATE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_shield)
+                .setContentTitle("Вышла новая версия Titan VPS")
+                .setContentText("Версия $version — нажмите, чтобы обновить")
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build()
+        )
+    }
 
     private fun isBypass(server: com.titanvps.app.data.Server, all: List<com.titanvps.app.data.Server>) =
         com.titanvps.app.data.ServerGroups.groupOf(server, all) == com.titanvps.app.data.ServerGroups.Group.BYPASS
@@ -236,6 +282,8 @@ class TitanVpnService : VpnService() {
     }
 
     private fun stopVpn() {
+        updateJob?.cancel()
+        updateJob = null
         wifiJob?.cancel()
         wifiJob = null
         watcherJob?.cancel()
@@ -287,6 +335,8 @@ class TitanVpnService : VpnService() {
         private const val ACTION_STOP = "com.titanvps.app.STOP"
         private const val ACTION_SWITCH_BYPASS = "com.titanvps.app.SWITCH_BYPASS"
         private const val ALERT_CHANNEL_ID = "whitelist"
+        private const val UPDATE_CHANNEL_ID = "updates"
+        private const val UPDATE_ID = 3
         private const val ALERT_ID = 2
         private const val CHANNEL_ID = "vpn"
         private const val NOTIFICATION_ID = 1

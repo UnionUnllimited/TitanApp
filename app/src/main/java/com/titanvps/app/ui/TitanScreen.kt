@@ -126,6 +126,8 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
         SplashScreen()
         return
     }
+    // Update flow (from settings or the "new version" notification), on any tab.
+    UpdateDialog(viewModel)
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },

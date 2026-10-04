@@ -80,6 +80,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleLink(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_UPDATE, false) == true) {
+            intent.removeExtra(EXTRA_OPEN_UPDATE)
+            viewModel.checkUpdate()
+            return
+        }
         val data = intent?.dataString ?: return
         if (intent.action == Intent.ACTION_VIEW) viewModel.activate(data)
     }
@@ -88,5 +93,9 @@ class MainActivity : ComponentActivity() {
         if (!viewModel.canConnect()) return
         val prepare = VpnService.prepare(this)
         if (prepare != null) vpnPermission.launch(prepare) else TitanVpnService.start(this)
+    }
+
+    companion object {
+        const val EXTRA_OPEN_UPDATE = "open_update"
     }
 }

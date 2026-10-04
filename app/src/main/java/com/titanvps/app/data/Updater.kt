@@ -58,6 +58,13 @@ class Updater(private val context: Context, private val requestVpn: () -> Unit) 
         )
     }
 
+    /** Newer release than the installed one, or null. Needs the VPN; no UI state. */
+    suspend fun findNewer(): Release? {
+        if (!vpnOn()) return null
+        val r = parse(download(LATEST_URL, "latest-bg.json", json = true) { }.readText())
+        return r?.takeIf { it.versionCode > BuildConfig.VERSION_CODE }
+    }
+
     suspend fun downloadAndInstall(release: Release) {
         // Permission first, so nothing is downloaded in vain.
         if (!canInstall()) {
