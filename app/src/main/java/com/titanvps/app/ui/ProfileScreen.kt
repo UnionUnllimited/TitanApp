@@ -197,7 +197,10 @@ private fun UpdateDialog(viewModel: MainViewModel) {
                         progress = { st.progress },
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                     )
-                    Text("${(st.progress * 100).toInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "${(st.progress * 100).toInt()}% · через VPN. Не закрывайте приложение",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             },
             confirmButton = {},
