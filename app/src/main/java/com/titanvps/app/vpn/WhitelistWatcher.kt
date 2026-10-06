@@ -70,7 +70,7 @@ class WhitelistWatcher(private val context: Context) {
         val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
         // Our process isn't routed through the VPN: activeNetwork is the underlying one.
         val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
-        return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        return com.titanvps.app.data.NetworkMonitor.isMobileLike(caps)
     }
 
     private companion object {

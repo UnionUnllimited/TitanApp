@@ -24,7 +24,7 @@ class NetworkMonitor(context: Context) {
         runCatching {
             cm?.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                    _onMobile.value = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                    _onMobile.value = isMobileLike(caps)
                 }
 
                 override fun onLost(network: Network) {
@@ -35,11 +35,20 @@ class NetworkMonitor(context: Context) {
     }
 
     fun current(): Boolean {
-        val caps = cm?.getNetworkCapabilities(cm.activeNetwork) ?: return false
-        return caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        val caps = cm?.getNetworkCapabilities(cm.activeNetwork) ?: return true
+        return isMobileLike(caps)
     }
 
     companion object {
+        /**
+         * Bypass servers are blocked only on ordinary (unmetered) Wi-Fi. Everything else
+         * counts as mobile internet: SIM, a car head unit's USB/LTE modem (often shown as
+         * Ethernet), or a phone hotspot (Wi-Fi that Android marks as metered).
+         */
+        fun isMobileLike(caps: NetworkCapabilities): Boolean =
+            !(caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+
         const val BYPASS_WIFI_MESSAGE =
             "Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Серверы»."
     }
