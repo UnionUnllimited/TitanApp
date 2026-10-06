@@ -52,6 +52,14 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Автоподключение (setting, off by default): once when the app is opened.
+        if (savedInstanceState == null) {
+            val app = TitanApp.get(this)
+            if (app.settings.autoConnect.value && app.repository.subscription.value != null &&
+                VpnStatus.state.value !is VpnState.Connected && VpnService.prepare(this) == null
+            ) TitanVpnService.start(this)
+        }
+
         setContent {
             val mode by viewModel.theme.collectAsState()
             val dark = isDark(mode)

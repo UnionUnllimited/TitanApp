@@ -95,6 +95,11 @@ internal fun ProfileScreen(
                     value = selected?.let { if ("авто" in it.name.lowercase()) "Автоматически" else it.name.trim() } ?: "—",
                     onClick = onOpenHome,
                 )
+                ToggleRow(
+                    "Автоподключение",
+                    autoConnect,
+                    subtitle = "VPN включится сам при запуске приложения, включении и после сна устройства",
+                ) { viewModel.setAutoConnect(it) }
                 NavRow("Раздельное туннелирование", onClick = onOpenApps)
                 ToggleRow("Автопереход на обходы", autoBypass, divider = false) { viewModel.setAutoBypass(it) }
             }
