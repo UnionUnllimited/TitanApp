@@ -122,8 +122,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * otherwise the Telegram bot.
      * Re-fetched first, since it can be a short-lived magic link.
      */
-    fun openCabinet() = launchBusy {
-        runCatching { repo.refresh() }
+    /** Fresh magic link if the server answers quickly, otherwise the saved one, else the bot. */
+    fun openCabinet() = viewModelScope.launch {
+        _busy.value = true
+        runCatching { kotlinx.coroutines.withTimeout(6_000) { repo.refresh() } }
+        _busy.value = false
         _openUrl.send(subscription.value?.info?.webPageUrl ?: BuildConfig.TELEGRAM_URL)
     }
 

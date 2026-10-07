@@ -109,6 +109,10 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
     val message by viewModel.message.collectAsState()
     val snackbar = remember { SnackbarHostState() }
 
+    val context = LocalContext.current
+    // Links prepared by the view model (Личный кабинет).
+    LaunchedEffect(Unit) { viewModel.openUrl.collect { context.openUrl(it) } }
+
     LaunchedEffect(message) {
         message?.let {
             snackbar.showSnackbar(it)
@@ -283,7 +287,15 @@ internal fun GradientButton(text: String, icon: androidx.compose.ui.graphics.vec
 }
 
 internal fun android.content.Context.openUrl(url: String) {
-    runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    val opened = runCatching {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.isSuccess
+    // No browser (some car head units): fall back to the bot, where Telegram is installed.
+    if (!opened && url != BuildConfig.TELEGRAM_URL) {
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BuildConfig.TELEGRAM_URL)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
 }
 
 internal fun formatDuration(ms: Long): String {
