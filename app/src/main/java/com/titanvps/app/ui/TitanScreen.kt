@@ -149,7 +149,6 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
                 tab == MainTab.HOME -> HomeScreen(
                     viewModel, sub, busy, onConnect,
                     onOpenSubscription = { tab = MainTab.SUBSCRIPTION },
-                    onOpenSettings = { tab = MainTab.PROFILE },
                 )
                 tab == MainTab.SUBSCRIPTION -> SubscriptionScreen(viewModel, sub) { tab = MainTab.HOME }
                 else -> ProfileScreen(

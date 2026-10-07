@@ -87,7 +87,9 @@ class PingService : Service() {
             val pool = Executors.newFixedThreadPool(minOf(keys.size.coerceAtLeast(1), PARALLEL))
             keys.mapIndexed { p, key ->
                 pool.submit {
-                    var r = measure(ports[p], TIMEOUT_SEC)
+                    // Best of two cold attempts: one slow handshake on a weak network
+                    // shouldn't decide the number.
+                    var r = bestOf(measure(ports[p], TIMEOUT_SEC), measure(ports[p], TIMEOUT_SEC))
                     if (r.first < 0) r = measure(ports[p], RETRY_TIMEOUT_SEC)
                     synchronized(lock) {
                         result[key] = r.first
@@ -107,6 +109,12 @@ class PingService : Service() {
         val failed = items.indices.filter { best[it] < 0 }
         val fallbackOk = if (failed.isNotEmpty()) pingBatchFallback(failed.map { items[it] }, receiver) else false
         return best.any { it >= 0 } || fallbackOk
+    }
+
+    private fun bestOf(a: Pair<Long, String?>, b: Pair<Long, String?>): Pair<Long, String?> = when {
+        a.first < 0 -> b
+        b.first < 0 -> a
+        else -> if (a.first <= b.first) a else b
     }
 
     /** Time of one request through the server on a fresh connection. */
@@ -178,7 +186,7 @@ class PingService : Service() {
         private const val PING_URL = "https://www.gstatic.com/generate_204"
         private const val TIMEOUT_SEC = 5
         private const val RETRY_TIMEOUT_SEC = 10
-        private const val PARALLEL = 16
+        private const val PARALLEL = 6 // more at once crowd each other out on a weak mobile network
         private const val MAX_PROBES = 200
         private const val BATCH_LIMIT = 5 // libXray pingBatch accepts at most 5 configs per call
     }

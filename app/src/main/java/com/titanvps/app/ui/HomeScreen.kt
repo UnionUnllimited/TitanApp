@@ -44,9 +44,9 @@ import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -73,9 +73,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -122,7 +126,6 @@ internal fun HomeScreen(
     busy: Boolean,
     onConnect: () -> Unit,
     onOpenSubscription: () -> Unit,
-    onOpenSettings: () -> Unit,
 ) {
     val context = LocalContext.current
     val state by viewModel.vpnState.collectAsState()
@@ -196,7 +199,7 @@ internal fun HomeScreen(
     val header: @Composable (Modifier) -> Unit = { m ->
         HomeHeader(
             dark = dark,
-            onSettings = onOpenSettings,
+            onSupport = { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) },
             onTheme = { viewModel.setTheme(if (dark) ThemeMode.LIGHT else ThemeMode.DARK) },
             modifier = m,
         )
@@ -260,11 +263,11 @@ internal fun HomeScreen(
     }
 }
 
-/** Settings button, logo + "Titan VPS", theme button. */
+/** Support button, logo + "Titan VPS", theme button. */
 @Composable
-private fun HomeHeader(dark: Boolean, onSettings: () -> Unit, onTheme: () -> Unit, modifier: Modifier) {
+private fun HomeHeader(dark: Boolean, onSupport: () -> Unit, onTheme: () -> Unit, modifier: Modifier) {
     Row(modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        SquareButton(Icons.Outlined.Settings, "Настройки", onSettings)
+        SquareButton(Icons.Outlined.SupportAgent, "Поддержка", onSupport)
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.logo), null, Modifier.size(34.dp))
             Spacer(Modifier.width(8.dp))
@@ -459,7 +462,7 @@ private fun StatusBlock(state: VpnState, server: Server?, ping: Long?, locked: B
                         (server?.let { ServerGroups.splitFlag(it.name).second } ?: state.serverName) +
                             (ping?.takeIf { it >= 0 }?.let { " · $it мс" } ?: ""),
                         fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                        modifier = Modifier.weight(1f, fill = false).basicMarquee(),
+                        modifier = Modifier.weight(1f, fill = false).marqueeName(),
                     )
                 }
                 var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -639,7 +642,7 @@ private fun ServerRow(
         Column(Modifier.weight(1f)) {
             Text(
                 ServerGroups.splitFlag(server.name).second,
-                Modifier.basicMarquee(),
+                Modifier.marqueeName(),
                 fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
             )
             Text(
@@ -649,6 +652,7 @@ private fun ServerRow(
                 maxLines = 1,
             )
         }
+        Spacer(Modifier.width(10.dp))
         if (favorite) {
             Icon(Icons.Default.Star, null, tint = Color(0xFFF5B301), modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
@@ -729,3 +733,22 @@ private fun ServerDetailsSheet(
         }
     }
 }
+
+/**
+ * Long names scroll, but start from the beginning after a pause and fade out at the
+ * edges instead of being cut mid-letter.
+ */
+private fun Modifier.marqueeName(): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val fade = 12.dp.toPx().coerceAtMost(size.width / 4)
+        drawRect(
+            Brush.horizontalGradient(
+                0f to Color.Transparent, fade / size.width to Color.Black,
+                1f - fade / size.width to Color.Black, 1f to Color.Transparent,
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }
+    .basicMarquee(initialDelayMillis = 2000, repeatDelayMillis = 2500)
