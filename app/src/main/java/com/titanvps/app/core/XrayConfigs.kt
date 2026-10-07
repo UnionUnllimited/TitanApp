@@ -20,6 +20,11 @@ object XrayConfigs {
     const val ACCESS_LOG = "xray-access.log"
     const val ERROR_LOG = "xray-error.log"
     private const val PROXY_TAG = "proxy"
+    private const val BLOCK_TAG = "titan-block"
+    private val YOUTUBE_DOMAINS = listOf(
+        "youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "youtubei.googleapis.com",
+        "youtube.googleapis.com", "ggpht.com", "youtube-nocookie.com",
+    )
     private val UPDATE_DOMAINS = listOf("github.com", "githubusercontent.com", "githubassets.com")
     private val SERVICE_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
 
@@ -235,6 +240,19 @@ object XrayConfigs {
                 .put("inboundTag", JSONArray().put(TUN_TAG))
                 .put("port", "53")
                 .put("outboundTag", DNS_OUT_TAG)
+        )
+        // YouTube over QUIC (UDP 443) breaks playback through proxies ("Ошибка
+        // воспроизведения"); blocking it makes the app fall back to TCP, like Happ does.
+        val blockTag = (0 until outbounds.length()).map { outbounds.getJSONObject(it) }
+            .firstOrNull { it.optString("protocol") == "blackhole" }?.optString("tag")
+            ?: BLOCK_TAG.also { outbounds.put(JSONObject().put("tag", it).put("protocol", "blackhole")) }
+        rules.put(
+            JSONObject()
+                .put("type", "field")
+                .put("network", "udp")
+                .put("port", "443")
+                .put("domain", JSONArray(YOUTUBE_DOMAINS.map { "domain:$it" }))
+                .put("outboundTag", blockTag)
         )
         // App updates come from GitHub and must always go through the server, whatever
         // the panel's rules say (GitHub is slow or blocked on many Russian networks).
