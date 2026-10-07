@@ -62,7 +62,12 @@ class XrayConfigsTest {
 
         val rules = cfg.getJSONObject("routing").getJSONArray("rules")
         assertEquals(XrayConfigs.DNS_OUT_TAG, rules.getJSONObject(0).getString("outboundTag"))
-        assertEquals(2, rules.length()) // server rule kept after the DNS hijack
+        // DNS hijack, YouTube QUIC block, then the server's own rule.
+        assertEquals(3, rules.length())
+        val quic = rules.getJSONObject(1)
+        assertEquals("udp", quic.getString("network"))
+        assertEquals("443", quic.getString("port"))
+        assertTrue(quic.getJSONArray("domain").toString().contains("googlevideo.com"))
         assertTrue(cfg.has("dns"))
         assertEquals("UseIPv4", cfg.getJSONObject("dns").getString("queryStrategy"))
 
