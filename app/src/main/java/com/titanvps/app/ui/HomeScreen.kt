@@ -456,11 +456,11 @@ private fun StatusBlock(state: VpnState, server: Server?, ping: Long?, locked: B
                 Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     server?.let { FlagCircle(it, 22.dp) }
                     Spacer(Modifier.width(8.dp))
-                    Text(
+                    MarqueeText(
                         (server?.let { ServerGroups.splitFlag(it.name).second } ?: state.serverName) +
                             (ping?.takeIf { it >= 0 }?.let { " · $it мс" } ?: ""),
-                        fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                        modifier = Modifier.weight(1f, fill = false).marqueeName(),
+                        Modifier.weight(1f, fill = false),
+                        fontSize = 14.sp, fontWeight = FontWeight.Medium,
                     )
                 }
                 var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -639,10 +639,9 @@ private fun ServerRow(
         FlagCircle(server, 34.dp)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(
+            MarqueeText(
                 ServerGroups.splitFlag(server.name).second,
-                Modifier.marqueeName(),
-                fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
             )
             Text(
                 if (limited) "Лимитный · расходует ГБ" else "Безлимит",
@@ -744,9 +743,26 @@ private fun ServerDetailsSheet(
 }
 
 /**
- * Long names scroll, but start from the beginning after a pause and fade out at the
- * edges instead of being cut mid-letter.
+ * A one-line name. Only if it doesn't fit does it scroll (after a pause, from the
+ * beginning) with faded edges; names that fit are shown as is.
  */
+@Composable
+private fun MarqueeText(
+    text: String,
+    modifier: Modifier = Modifier,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    fontWeight: FontWeight,
+) {
+    // Once measured as too long it stays scrolling (the marquee itself never overflows).
+    var overflow by remember(text) { mutableStateOf(false) }
+    Text(
+        text,
+        modifier.then(if (overflow) Modifier.marqueeName() else Modifier),
+        fontSize = fontSize, fontWeight = fontWeight, maxLines = 1, softWrap = false,
+        onTextLayout = { if (it.hasVisualOverflow) overflow = true },
+    )
+}
+
 private fun Modifier.marqueeName(): Modifier = this
     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
     .drawWithContent {
