@@ -82,10 +82,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _pings = MutableStateFlow<Map<String, Long>>(emptyMap())
     val pings = _pings.asStateFlow()
 
-    /** serverId → why its ping failed (shown in the long-press sheet only). */
-    private val _pingErrors = MutableStateFlow<Map<String, String>>(emptyMap())
-    val pingErrors = _pingErrors.asStateFlow()
+    /** Servers being measured right now (spinner, or their old value dimmed). */
+    private val _measuring = MutableStateFlow<Set<String>>(emptySet())
+    val measuring = _measuring.asStateFlow()
 
+    /** The whole list is being measured (the Пинг button spins). */
     private val _pinging = MutableStateFlow(false)
     val pinging = _pinging.asStateFlow()
 
@@ -142,44 +143,55 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _message.value = null
     }
 
-    /** Real ping through every server; results arrive progressively. */
-    fun pingAll() {
-        val servers = subscription.value?.servers ?: return
-        ping(servers, clear = true)
-    }
-
-    /** Ping a single server (long press on a location). */
-    fun pingOne(serverId: String) {
-        val server = subscription.value?.servers?.firstOrNull { it.id == serverId } ?: return
-        _pings.value = _pings.value - serverId
-        ping(listOf(server), clear = false)
-    }
-
-    private fun ping(servers: List<com.titanvps.app.data.Server>, clear: Boolean) {
+    /**
+     * Pings every server, [firstIds] (the tab on screen, top to bottom) first. Results
+     * appear one by one; old values stay until the new ones arrive.
+     */
+    fun pingAll(firstIds: List<String> = emptyList()) {
         if (_pinging.value) return
+        val servers = subscription.value?.servers ?: return
+        val ids = servers.map { it.id }
+        val order = firstIds.filter { it in ids } + ids.filter { it !in firstIds }
+        _pinging.value = true
+        ping(servers, order) { error ->
+            _pinging.value = false
+            if (error != null) _message.value = "Не удалось проверить пинг. Попробуйте позже"
+        }
+    }
+
+    /** Pings one server; works any time, also while the whole list is being measured. */
+    fun pingOne(serverId: String) {
+        val servers = subscription.value?.servers ?: return
+        if (servers.none { it.id == serverId } || serverId in _measuring.value) return
+        _measuring.value = _measuring.value + serverId
+        ping(servers, listOf(serverId)) {}
+    }
+
+    private fun ping(servers: List<com.titanvps.app.data.Server>, targets: List<String>, onDone: (String?) -> Unit) {
         viewModelScope.launch {
-            _pinging.value = true
-            if (clear) _pings.value = emptyMap()
-            _pingErrors.value = _pingErrors.value - servers.map { it.id }.toSet()
+            val answered = HashSet<String>()
+            var error: String? = null
             try {
                 withTimeoutOrNull(150_000) {
-                    PingClient.ping(getApplication<Application>(), servers).collect { event ->
+                    PingClient.ping(getApplication<Application>(), servers, targets).collect { event ->
                         when (event) {
+                            is PingClient.Event.Started -> _measuring.value = _measuring.value + event.ids
                             is PingClient.Event.Partial -> {
+                                answered += event.delays.keys
                                 _pings.value = _pings.value + event.delays
-                                _pingErrors.value = _pingErrors.value + event.errors
+                                _measuring.value = _measuring.value - event.delays.keys
                             }
-                            is PingClient.Event.Done -> if (clear) event.error?.let {
-                                android.util.Log.w("Titan", "ping failed: $it")
-                                _message.value = "Не удалось проверить пинг. Попробуйте позже"
-                            }
+                            is PingClient.Event.Done -> error = event.error
                         }
                     }
                 }
             } finally {
                 // Anything still unanswered counts as a timeout.
-                _pings.value = servers.associate { it.id to -1L } + _pings.value
-                _pinging.value = false
+                val missing = targets.filter { it !in answered }
+                _pings.value = _pings.value + missing.associateWith { -1L }
+                _measuring.value = _measuring.value - targets.toSet()
+                error?.let { android.util.Log.w("Titan", "ping failed: $it") }
+                onDone(error)
             }
         }
     }

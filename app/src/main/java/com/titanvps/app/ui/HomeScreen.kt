@@ -56,7 +56,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -132,7 +131,7 @@ internal fun HomeScreen(
     val selectedId by viewModel.selectedId.collectAsState()
     val pings by viewModel.pings.collectAsState()
     val pinging by viewModel.pinging.collectAsState()
-    val pingErrors by viewModel.pingErrors.collectAsState()
+    val measuring by viewModel.measuring.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
     val onMobile by viewModel.onMobile.collectAsState()
     val theme by viewModel.theme.collectAsState()
@@ -171,7 +170,7 @@ internal fun HomeScreen(
                         GroupTab(group, list.size, group == page, Modifier.weight(1f)) { page = group }
                     }
                 }
-                PingButton(pinging, viewModel::pingAll)
+                PingButton(pinging) { viewModel.pingAll(groups[page].orEmpty().map { it.id }) }
             }
         }
         item {
@@ -185,7 +184,7 @@ internal fun HomeScreen(
             ServerRow(
                 server = s,
                 ping = pings[s.id],
-                pending = pinging && pings[s.id] == null,
+                measuring = s.id in measuring,
                 selected = s.id == selected?.id,
                 connected = connected && s.id == selected?.id,
                 favorite = s.name in favorites,
@@ -193,6 +192,7 @@ internal fun HomeScreen(
                 limited = page == Group.BYPASS,
                 onClick = { if (bypassLocked) viewModel.explainBypassOnWifi() else viewModel.select(s.id) },
                 onLongClick = { details = s },
+                onPing = { viewModel.pingOne(s.id) },
             )
         }
     }
@@ -250,12 +250,10 @@ internal fun HomeScreen(
         ServerDetailsSheet(
             server = server,
             ping = pings[server.id],
-            error = pingErrors[server.id],
-            pinging = pinging,
+            measuring = server.id in measuring,
             selected = server.id == selected?.id,
             favorite = server.name in favorites,
             locked = !onMobile && ServerGroups.groupOf(server, sub.servers) == Group.BYPASS,
-            onPing = { viewModel.pingOne(server.id) },
             onFavorite = { viewModel.toggleFavorite(server.name) },
             onSelect = { viewModel.select(server.id); details = null },
             onDismiss = { details = null },
@@ -614,7 +612,7 @@ private fun FlagCircle(server: Server, size: androidx.compose.ui.unit.Dp) {
 private fun ServerRow(
     server: Server,
     ping: Long?,
-    pending: Boolean,
+    measuring: Boolean,
     selected: Boolean,
     connected: Boolean,
     favorite: Boolean,
@@ -622,6 +620,7 @@ private fun ServerRow(
     limited: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onPing: () -> Unit,
 ) {
     val shape = RoundedCornerShape(16.dp)
     val accent = if (connected) connectedGreen() else MaterialTheme.colorScheme.primary
@@ -657,13 +656,32 @@ private fun ServerRow(
             Icon(Icons.Default.Star, null, tint = Color(0xFFF5B301), modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
         }
-        when {
-            pending -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-            ping != null -> Text(
-                if (ping >= 0) "$ping мс" else "таймаут",
-                color = pingColor(ping),
-                fontSize = 13.sp,
-            )
+        // Tap the ping to re-measure just this server (like Happ).
+        Box(
+            Modifier
+                .heightIn(min = 40.dp)
+                .widthIn(min = 40.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(enabled = !measuring, onClick = onPing)
+                .padding(horizontal = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                ping != null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (measuring) {
+                        CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp)
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(
+                        if (ping >= 0) "$ping мс" else "таймаут",
+                        color = pingColor(ping),
+                        fontSize = 13.sp,
+                        modifier = Modifier.alpha(if (measuring) 0.5f else 1f),
+                    )
+                }
+                measuring -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                else -> Icon(Icons.Default.Speed, "Пинг", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+            }
         }
         Spacer(Modifier.width(12.dp))
         when {
@@ -683,12 +701,10 @@ private fun ServerRow(
 private fun ServerDetailsSheet(
     server: Server,
     ping: Long?,
-    error: String?,
-    pinging: Boolean,
+    measuring: Boolean,
     selected: Boolean,
     favorite: Boolean,
     locked: Boolean,
-    onPing: () -> Unit,
     onFavorite: () -> Unit,
     onSelect: () -> Unit,
     onDismiss: () -> Unit,
@@ -709,7 +725,7 @@ private fun ServerDetailsSheet(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Пинг", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 when {
-                    pinging && ping == null -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    measuring && ping == null -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     ping != null -> Text(if (ping >= 0) "$ping мс" else "таймаут", color = pingColor(ping), fontWeight = FontWeight.Medium)
                     else -> Text("—")
                 }
@@ -720,15 +736,8 @@ private fun ServerDetailsSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = onPing, enabled = !pinging, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
-                    Icon(Icons.Default.Speed, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Пинг")
-                }
-                Button(onClick = onSelect, enabled = !selected && !locked, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
-                    Text(if (selected) "Выбран" else if (locked) "Только моб. сеть" else "Выбрать")
-                }
+            Button(onClick = onSelect, enabled = !selected && !locked, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text(if (selected) "Выбран" else if (locked) "Только моб. сеть" else "Выбрать")
             }
         }
     }

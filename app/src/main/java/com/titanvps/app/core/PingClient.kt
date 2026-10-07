@@ -18,26 +18,33 @@ import java.io.File
 object PingClient {
 
     sealed interface Event {
-        /** serverId → ms (-1 = timeout / unreachable) and serverId → why it failed. */
-        data class Partial(val delays: Map<String, Long>, val errors: Map<String, String>) : Event
+        /** These servers are being measured right now. */
+        data class Started(val ids: List<String>) : Event
+        /** serverId → ms (-1 = timeout / unreachable). */
+        data class Partial(val delays: Map<String, Long>) : Event
         /** Batch finished; [error] is set when nothing answered. */
         data class Done(val error: String?) : Event
     }
 
-    fun ping(context: Context, servers: List<Server>): Flow<Event> = callbackFlow {
+    /**
+     * Measures [targets] in that order. [all] is every server of the subscription: the
+     * service keeps one warm core for all of them, shared by concurrent requests.
+     */
+    fun ping(context: Context, all: List<Server>, targets: List<String>): Flow<Event> = callbackFlow {
         val file = File(context.cacheDir, "ping-${System.nanoTime()}.json")
         val arr = JSONArray()
-        servers.forEach { arr.put(JSONObject().put("id", it.id).put("json", it.xrayJson).put("tag", it.proxyTag)) }
-        file.writeText(arr.toString())
+        all.forEach { arr.put(JSONObject().put("id", it.id).put("json", it.xrayJson).put("tag", it.proxyTag)) }
+        file.writeText(JSONObject().put("servers", arr).put("targets", JSONArray(targets)).toString())
 
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, data: Bundle?) {
-                if (resultCode == PingService.RESULT_PARTIAL) {
+                if (resultCode == PingService.RESULT_STARTED) {
+                    val ids = data?.getStringArray(PingService.KEY_IDS) ?: return
+                    trySend(Event.Started(ids.toList()))
+                } else if (resultCode == PingService.RESULT_PARTIAL) {
                     val ids = data?.getStringArray(PingService.KEY_IDS) ?: return
                     val delays = data.getLongArray(PingService.KEY_DELAYS) ?: return
-                    val errors = data.getStringArray(PingService.KEY_ERRORS)
-                    val errorMap = errors?.let { ids.zip(it.toList()).filter { e -> e.second.isNotEmpty() }.toMap() }.orEmpty()
-                    trySend(Event.Partial(ids.zip(delays.toList()).toMap(), errorMap))
+                    trySend(Event.Partial(ids.zip(delays.toList()).toMap()))
                 } else {
                     trySend(Event.Done(data?.getString(PingService.KEY_ERROR)))
                     close()

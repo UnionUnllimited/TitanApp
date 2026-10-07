@@ -52,7 +52,7 @@ class WhitelistWatcher(private val context: Context) {
     private suspend fun ping(servers: List<Server>): Map<String, Long> {
         val result = mutableMapOf<String, Long>()
         withTimeoutOrNull(60_000) {
-            PingClient.ping(context, servers).collect { event ->
+            PingClient.ping(context, servers, servers.map { it.id }).collect { event ->
                 if (event is PingClient.Event.Partial) result += event.delays
             }
         }
