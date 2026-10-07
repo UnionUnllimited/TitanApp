@@ -118,17 +118,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (vpnState.value is VpnState.Connected) TitanVpnService.start(getApplication<Application>())
     }
 
-    /**
-     * Personal cabinet: the panel's profile-web-page-url (the same link Happ opens with ⓘ),
-     * otherwise the Telegram bot.
-     * Re-fetched first, since it can be a short-lived magic link.
-     */
-    /** Fresh magic link if the server answers quickly, otherwise the saved one, else the bot. */
+    /** Personal cabinet: the Telegram bot (payments, renewal, extra GB). */
     fun openCabinet() = viewModelScope.launch {
-        _busy.value = true
-        runCatching { kotlinx.coroutines.withTimeout(6_000) { repo.refresh() } }
-        _busy.value = false
-        _openUrl.send(subscription.value?.info?.webPageUrl ?: BuildConfig.TELEGRAM_URL)
+        _openUrl.send(BuildConfig.TELEGRAM_URL)
     }
 
     fun disconnect() = TitanVpnService.stop(getApplication<Application>())
