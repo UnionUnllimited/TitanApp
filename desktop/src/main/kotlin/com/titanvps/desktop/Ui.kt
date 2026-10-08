@@ -326,9 +326,10 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
+        val panelWidth = if (maxWidth >= 1050.dp) 440.dp else 380.dp
         if (maxWidth >= 820.dp) {
             Row(Modifier.fillMaxSize().padding(18.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                ControlPanel(state, sub, openSubscription, Modifier.width(if (maxWidth >= 1050.dp) 440.dp else 380.dp).fillMaxHeight())
+                ControlPanel(state, sub, openSubscription, Modifier.width(panelWidth).fillMaxHeight())
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     toolbar()
                     Spacer(Modifier.height(10.dp))
