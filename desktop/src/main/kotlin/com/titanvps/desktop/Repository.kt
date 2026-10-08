@@ -73,6 +73,8 @@ object Repository {
         val mode: String = "proxy",
         /** Exe names that bypass the VPN in TUN mode. */
         val excludedApps: Set<String> = emptySet(),
+        /** Connect as soon as the app starts. */
+        val autoConnect: Boolean = false,
     )
 
     fun load(): State {
@@ -93,12 +95,13 @@ object Repository {
             )
         }
         val excluded = o.optJSONArray("excludedApps")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
-        return State(sub, o.optString("selected").ifEmpty { null }, o.optString("theme", "system"), o.optString("mode", "proxy"), excluded)
+        return State(sub, o.optString("selected").ifEmpty { null }, o.optString("theme", "system"), o.optString("mode", "proxy"), excluded, o.optBoolean("autoConnect", false))
     }
 
     fun save(state: State) {
         val o = JSONObject().put("theme", state.theme).put("selected", state.selectedId ?: "")
             .put("mode", state.mode).put("excludedApps", JSONArray(state.excludedApps.sorted()))
+            .put("autoConnect", state.autoConnect)
         state.subscription?.let { s ->
             o.put("subscription", JSONObject()
                 .put("url", s.url).put("fetchedAt", s.fetchedAt)

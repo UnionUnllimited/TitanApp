@@ -42,6 +42,11 @@ class AppState {
     /** "proxy" (system proxy) or "tun" (whole PC, needs administrator rights). */
     var mode by mutableStateOf("proxy"); private set
     var excludedApps by mutableStateOf<Set<String>>(emptySet()); private set
+    var autoConnect by mutableStateOf(false); private set
+    var autostart by mutableStateOf(false); private set
+    /** Account status and devices from the bot (null until loaded). */
+    var account by mutableStateOf<Account.Info?>(null); private set
+    var accountLoading by mutableStateOf(false); private set
     /** Asks to restart as administrator (TUN). */
     var needAdmin by mutableStateOf(false)
     var vpn by mutableStateOf<VpnState>(VpnState.Off); private set
@@ -68,15 +73,21 @@ class AppState {
         theme = st.theme
         mode = st.mode
         excludedApps = st.excludedApps
+        autoConnect = st.autoConnect
+        scope.launch { autostart = withContext(Dispatchers.IO) { Autostart.isEnabled } }
         Runtime.getRuntime().addShutdownHook(Thread { shutdown() })
-        if (subscription != null) refresh(silent = true)
+        if (subscription != null) {
+            refresh(silent = true)
+            loadAccount()
+            if (autoConnect) connect()
+        }
     }
 
-    private fun persist() = Repository.save(Repository.State(subscription, selectedId, theme, mode, excludedApps))
+    private fun persist() = Repository.save(Repository.State(subscription, selectedId, theme, mode, excludedApps, autoConnect))
 
     fun activate(text: String) {
         val url = Links.find(text.trim()) ?: run { message = "Это не ключ Titan VPS"; return }
-        load(url, silent = false) { message = "Подписка подключена" }
+        load(url, silent = false) { message = "Подписка подключена"; loadAccount() }
     }
 
     fun refresh(silent: Boolean = false) {
@@ -154,6 +165,31 @@ class AppState {
         needAdmin = false
         mode = "proxy"
         scope.launch(Dispatchers.IO) { persist() }
+    }
+
+    fun changeAutoConnect(value: Boolean) {
+        autoConnect = value
+        scope.launch(Dispatchers.IO) { persist() }
+    }
+
+    /** Start with Windows (a logon task with admin rights when we have them, for TUN). */
+    fun changeAutostart(value: Boolean) {
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) { runCatching { Autostart.set(value, Admin.isAdmin) }.isSuccess }
+            autostart = withContext(Dispatchers.IO) { Autostart.isEnabled }
+            if (!ok) message = "Не удалось изменить автозапуск"
+        }
+    }
+
+    fun loadAccount() {
+        val url = subscription?.url ?: return
+        if (accountLoading) return
+        accountLoading = true
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { Account.fetch(url, proxyPort) } }
+                .onSuccess { account = it }
+            accountLoading = false
+        }
     }
 
     fun changeTheme(value: String) {
@@ -324,6 +360,7 @@ class AppState {
         disconnect()
         subscription = null
         selectedId = null
+        account = null
         pings.clear()
         measuring = emptySet()
         scope.launch(Dispatchers.IO) { persist() }

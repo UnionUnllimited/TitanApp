@@ -80,6 +80,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.outlined.PhoneIphone
+import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.DevicesOther
+import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Close
@@ -431,6 +435,7 @@ private fun ControlPanel(state: AppState, sub: Subscription, openSubscription: (
                 Text("Быстрый. Стабильный. Без ограничений.", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             SubscriptionCard(sub, openSubscription)
+            AccountBanner(state)
             Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     BigPowerButton(state)
@@ -801,6 +806,77 @@ private fun MarqueeText(text: String, fontSize: androidx.compose.ui.unit.TextUni
 
 // ------------------------------------------------------------------ subscription
 
+/** Devices that used this key (from the bot), right on the subscription page. */
+@Composable
+private fun DevicesCard(state: AppState) {
+    LaunchedEffect(Unit) { state.loadAccount() }
+    val info = state.account
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Мои устройства", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            if (info != null && info.devicesEnabled) {
+                Text(
+                    "${info.devices.size}" + if (info.deviceLimit > 0) " из ${info.deviceLimit}" else "",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            if (state.accountLoading) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            else Icon(Icons.Default.Refresh, "Обновить", Modifier.size(18.dp).clickable { state.loadAccount() }, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(8.dp))
+        when {
+            info == null && !state.accountLoading -> Text("Не удалось загрузить список. Нажмите ↻, чтобы повторить", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            info == null -> {}
+            !info.devicesEnabled -> Text("Список устройств сейчас недоступен", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            info.devices.isEmpty() -> Text("Пока нет подключённых устройств", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else -> info.devices.forEach { d ->
+                val os = d.os.lowercase()
+                val icon = when {
+                    "ios" in os || "iphone" in d.model.lowercase() -> Icons.Outlined.PhoneIphone
+                    "android" in os -> Icons.Outlined.PhoneAndroid
+                    "windows" in os || "mac" in os || "linux" in os -> Icons.Outlined.Computer
+                    else -> Icons.Outlined.DevicesOther
+                }
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(36.dp).clip(CircleShape).background(Brand.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+                        Icon(icon, null, Modifier.size(20.dp), tint = Brand)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(d.model.ifEmpty { "Устройство" }, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOf(listOf(d.os, d.osVersion).filter { it.isNotEmpty() }.joinToString(" "), Account.appName(d.app))
+                                .filter { it.isNotEmpty() }.joinToString(" · "),
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Account.lastSeen(d.lastSeen)?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+            }
+        }
+        if (info != null && info.devices.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text("Чтобы отвязать лишнее устройство, напишите в поддержку.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Blocked account / maintenance, from the bot; click → support. */
+@Composable
+private fun AccountBanner(state: AppState) {
+    val uri = LocalUriHandler.current
+    val text = when (state.account?.status) {
+        "BLOCKED" -> "Аккаунт заблокирован. Напишите в поддержку"
+        "MAINTENANCE" -> "Идут технические работы. Подключение может не работать"
+        else -> return
+    }
+    Box(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Red.copy(alpha = 0.14f))
+            .clickable { uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL) }.padding(14.dp),
+    ) { Text(text, color = Red, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+}
+
 @Composable
 private fun SubscriptionPage(state: AppState, sub: Subscription) {
     val uri = LocalUriHandler.current
@@ -843,6 +919,7 @@ private fun SubscriptionPage(state: AppState, sub: Subscription) {
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            DevicesCard(state)
             Button({ uri.openUri(state.openCabinetUrl()) }, Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp)) {
                 Icon(Icons.Outlined.AccountCircle, null); Spacer(Modifier.width(8.dp)); Text("Личный кабинет", fontWeight = FontWeight.SemiBold)
             }
@@ -930,6 +1007,20 @@ private fun SettingsPage(state: AppState) {
                 }
             }
             Card {
+                Text("Запуск", fontWeight = FontWeight.SemiBold)
+                SettingsToggle(
+                    "Автоподключение",
+                    "VPN включится сам при запуске приложения",
+                    state.autoConnect,
+                ) { state.changeAutoConnect(it) }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                SettingsToggle(
+                    "Запускать вместе с Windows",
+                    if (state.mode == "tun") "С правами администратора, без запроса при входе — если включить из режима TUN" else "Приложение откроется при входе в Windows",
+                    state.autostart,
+                ) { state.changeAutostart(it) }
+            }
+            Card {
                 SettingsRow("Обновить подписку") { state.refresh() }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 SettingsRow("Обновление приложения") { state.checkUpdate() }
@@ -944,6 +1035,18 @@ private fun SettingsPage(state: AppState) {
             }
             Text("Версия ${System.getProperty("jpackage.app-version") ?: "dev"}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+@Composable
+private fun SettingsToggle(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title)
+            Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(12.dp))
+        androidx.compose.material3.Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 
