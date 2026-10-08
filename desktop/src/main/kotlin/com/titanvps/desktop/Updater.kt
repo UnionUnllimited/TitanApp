@@ -81,15 +81,22 @@ object Updater {
      */
     fun installAndRestart(msi: File) {
         val exe = ProcessHandle.current().info().command().orElse(null)
+            ?.takeIf { it.endsWith(".exe", ignoreCase = true) && !it.endsWith("java.exe", ignoreCase = true) }
+        val pid = ProcessHandle.current().pid()
+        val coreDir = AppPaths.coreDir.absolutePath
         val script = File(msi.parentFile, "update.cmd")
         script.writeText(
             buildString {
                 appendLine("@echo off")
-                appendLine("timeout /t 3 /nobreak >nul")
+                appendLine("chcp 65001 >nul") // paths may contain Cyrillic (user name)
+                // Wait for the app to quit, then make sure none of our xray.exe keep files
+                // locked: a locked file makes Windows Installer hang on "configuring".
+                appendLine(":wait")
+                appendLine("tasklist /FI \"PID eq $pid\" | find \"$pid\" >nul && (timeout /t 1 /nobreak >nul & goto wait)")
+                appendLine("powershell -NoProfile -Command \"Get-Process xray -ErrorAction SilentlyContinue | Where-Object { \$_.Path -like '$coreDir*' } | Stop-Process -Force\"")
+                appendLine("timeout /t 1 /nobreak >nul")
                 appendLine("msiexec /i \"${msi.absolutePath}\" /passive /norestart")
-                if (exe != null && exe.endsWith(".exe", ignoreCase = true) && !exe.endsWith("java.exe", ignoreCase = true)) {
-                    appendLine("start \"\" \"$exe\"")
-                }
+                if (exe != null) appendLine("start \"\" \"$exe\"")
             }.replace("\n", "\r\n"),
             Charsets.UTF_8,
         )
