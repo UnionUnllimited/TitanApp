@@ -462,7 +462,11 @@ private fun FlagCircle(server: Server, size: Dp) {
     val (flag, name) = remember(server.name) { ServerGroups.splitFlag(server.name) }
     val code = ServerGroups.countryCode(flag)
     Box(Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+        // Windows can't draw flag emoji: real flag images (flag-icons, added in CI).
+        val flagRes = code?.lowercase()?.let { "flags/$it.svg" }
+            ?.takeIf { Thread.currentThread().contextClassLoader.getResource(it) != null }
         when {
+            flagRes != null -> Image(painterResource(flagRes), null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
             code != null -> Text(code.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Brand)
             "авто" in name.lowercase() -> Icon(Icons.Default.Bolt, null, Modifier.size(size * 0.55f), tint = Brand)
             else -> Icon(Icons.Outlined.Dns, null, Modifier.size(size * 0.5f), tint = MaterialTheme.colorScheme.onSurfaceVariant)

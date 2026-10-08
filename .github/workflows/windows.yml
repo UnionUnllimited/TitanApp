@@ -35,6 +35,16 @@ jobs:
           Invoke-WebRequest -Uri "$geo/geosite.dat" -OutFile "$dest/geosite.dat"
           Get-ChildItem $dest
 
+      # Round flag images: Windows has no flag emoji.
+      - name: Download flag images
+        shell: pwsh
+        run: |
+          npm pack flag-icons --silent
+          tar -xzf (Get-ChildItem flag-icons-*.tgz).Name
+          New-Item -ItemType Directory -Force -Path desktop/src/main/resources/flags | Out-Null
+          Copy-Item package/flags/1x1/*.svg desktop/src/main/resources/flags/
+          (Get-ChildItem desktop/src/main/resources/flags).Count
+
       - name: Build installer
         run: .\gradlew.bat -p desktop packageExe packageMsi createDistributable --no-daemon
 

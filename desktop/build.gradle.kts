@@ -38,7 +38,8 @@ compose.desktop {
             vendor = "Titan VPS"
             // xray.exe + geoip.dat/geosite.dat (downloaded in CI into resources/windows).
             appResourcesRootDir.set(project.layout.projectDirectory.dir("resources"))
-            modules("java.naming", "jdk.crypto.ec", "jdk.unsupported", "java.management")
+            // jdk.localedata: Russian month names ("13 июля 2027", not "13 Jul 2027").
+            modules("java.naming", "jdk.crypto.ec", "jdk.unsupported", "java.management", "jdk.localedata")
             windows {
                 iconFile.set(project.file("icons/icon.ico"))
                 menuGroup = "Titan VPS"

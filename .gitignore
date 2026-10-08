@@ -18,3 +18,4 @@ app/src/main/assets/*.dat
 
 # Shared signing key so new builds install over old ones.
 !app/titan.keystore
+desktop/src/main/resources/flags/
