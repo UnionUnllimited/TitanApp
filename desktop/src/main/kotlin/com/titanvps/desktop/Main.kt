@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+
 package com.titanvps.desktop
 
 import androidx.compose.foundation.Image
