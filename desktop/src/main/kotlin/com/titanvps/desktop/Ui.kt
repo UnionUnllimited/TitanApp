@@ -81,7 +81,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.graphics.graphicsLayer
@@ -370,10 +369,9 @@ private fun ControlPanel(state: AppState, sub: Subscription, openSubscription: (
                 }
             }
             state.selected?.let { SelectedServer(it, ServerGroups.groupOf(it, sub.servers) == Group.BYPASS) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 Feature(Icons.Default.Bolt, "Высокая\nскорость")
                 Feature(Icons.Outlined.Shield, "Стабильное\nсоединение")
-                Feature(Icons.Default.AllInclusive, "Безлимитный\nтрафик")
             }
         }
     }
