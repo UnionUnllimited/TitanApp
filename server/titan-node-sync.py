@@ -5,7 +5,9 @@ Titan VPS: Naive + Mieru users from Remnawave.
 Runs on a node with Caddy (forwardproxy@naive) and/or mita (Mieru). Every run it reads
 the active users from the Remnawave API and writes them as logins for both protocols:
 
-    login = password = the user's VLESS UUID (what the Titan VPS app already has)
+    login = password = the user's credential from Remnawave: the VLESS UUID, or the
+    Shadowsocks password when the Naive/Mieru hosts sit on Shadowsocks placeholder
+    inbounds (CREDENTIAL=ss) — whatever the app finds in that host's outbound
 
 so only active subscriptions can connect; expired/disabled ones drop out on the next run.
 Files are rewritten and the services reloaded only when the user list changed.
@@ -18,6 +20,7 @@ Settings: /etc/titan-sync.env (never in this repo)
     EXTRA_NAIVE_USERS=                           # "name:pass name2:pass2", e.g. for tests
     EXTRA_MIERU_USERS=
     ONLY_SQUADS=                                 # optional: internal squad UUIDs, comma-separated
+    CREDENTIAL=vless                             # vless (vlessUuid) or ss (ssPassword)
 
 Run: python3 titan-node-sync.py  (a systemd timer runs it every minute)
 """
@@ -59,8 +62,12 @@ def api_get(base, token, path):
         return json.loads(r.read().decode())
 
 
-def active_users(base, token, only_squads):
-    """VLESS UUIDs of users with status ACTIVE (optionally only in the given squads)."""
+CREDENTIAL_FIELDS = {"vless": ("vlessUuid", "vless_uuid"), "ss": ("ssPassword", "ss_password")}
+
+
+def active_users(base, token, only_squads, credential):
+    """Credentials of users with status ACTIVE (optionally only in the given squads)."""
+    fields = CREDENTIAL_FIELDS[credential]
     out, start = [], 0
     while True:
         data = api_get(base, token, "/api/users?" + urllib.parse.urlencode({"start": start, "size": PAGE}))
@@ -73,9 +80,10 @@ def active_users(base, token, only_squads):
                 squads = {s.get("uuid") if isinstance(s, dict) else s for s in (u.get("activeInternalSquads") or [])}
                 if not squads & only_squads:
                     continue
-            vless = u.get("vlessUuid") or u.get("vless_uuid")
-            if vless:
-                out.append(str(vless).lower())
+            value = next((u.get(f) for f in fields if u.get(f)), None)
+            if value:
+                # UUIDs are compared lowercase; passwords as they are.
+                out.append(str(value).lower() if credential == "vless" else str(value))
         start += len(users)
         total = resp.get("total", start)
         if not users or start >= total:
@@ -146,9 +154,12 @@ def main():
     if not base or not token:
         sys.exit("REMNAWAVE_URL and REMNAWAVE_TOKEN are required")
     only = {s.strip() for s in env.get("ONLY_SQUADS", "").split(",") if s.strip()}
+    credential = env.get("CREDENTIAL", "vless").lower()
+    if credential not in CREDENTIAL_FIELDS:
+        sys.exit("CREDENTIAL must be vless or ss")
 
     try:
-        uuids = active_users(base, token, only)
+        uuids = active_users(base, token, only, credential)
     except Exception as e:  # never wipe users because the panel is briefly unreachable
         sys.exit(f"remnawave api: {e}")
 
