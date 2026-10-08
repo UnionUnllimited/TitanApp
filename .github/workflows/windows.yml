@@ -34,8 +34,15 @@ jobs:
           Invoke-WebRequest -Uri "$geo/geoip.dat" -OutFile "$dest/geoip.dat"
           Invoke-WebRequest -Uri "$geo/geosite.dat" -OutFile "$dest/geosite.dat"
           # TUN mode: sing-box (1.12 config format), wintun is built in.
-          $rel = Invoke-RestMethod -Headers @{ Authorization = "Bearer ${{ github.token }}" } -Uri "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=50"
-          $sb = $rel | Where-Object { -not $_.prerelease -and $_.tag_name -like "v1.12.*" } | Select-Object -First 1
+          # Newest stable 1.12.x (newer lines may change the config format); look through all pages.
+          $sb = $null
+          foreach ($page in 1..10) {
+            $rel = Invoke-RestMethod -Headers @{ Authorization = "Bearer ${{ github.token }}" } -Uri "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100&page=$page"
+            if (-not $rel) { break }
+            $sb = $rel | Where-Object { -not $_.prerelease -and $_.tag_name -match '^v1\.12\.\d+$' } | Sort-Object { [version]($_.tag_name.TrimStart('v')) } -Descending | Select-Object -First 1
+            if ($sb) { break }
+          }
+          if (-not $sb) { throw "sing-box 1.12.x not found" }
           $asset = $sb.assets | Where-Object { $_.name -like "*-windows-amd64.zip" } | Select-Object -First 1
           Write-Host "sing-box $($sb.tag_name): $($asset.name)"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile singbox.zip
