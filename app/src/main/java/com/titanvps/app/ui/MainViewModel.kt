@@ -164,7 +164,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val answered = HashSet<String>()
             var error: String? = null
             try {
-                withTimeoutOrNull(150_000) {
+                withTimeoutOrNull(240_000) {
                     PingClient.ping(getApplication<Application>(), servers, targets).collect { event ->
                         when (event) {
                             is PingClient.Event.Started -> _measuring.value = _measuring.value + event.ids

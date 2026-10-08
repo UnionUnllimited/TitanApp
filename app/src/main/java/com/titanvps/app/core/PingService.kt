@@ -113,28 +113,36 @@ class PingService : Service() {
         }
         targets.filter { remaining[it] == 0 }.forEach { send(receiver, it, -1L) }
         val lock = Any()
+        fun report(key: String, r: Long) = synchronized(lock) {
+            for (id in serversByKey.getValue(key)) {
+                if (r >= 0 && (best[id] ?: -1L).let { it < 0 || r < it }) best[id] = r
+                remaining[id] = remaining.getValue(id) - 1
+                if (remaining[id] == 0) send(receiver, id, best[id] ?: -1L)
+            }
+        }
         // Keys go into the pool in the order of the servers asked for, so the list fills top-down.
+        val recheck = java.util.Collections.synchronizedMap(LinkedHashMap<String, Long>())
         serversByKey.map { (key, ids) ->
             pool.submit {
                 synchronized(lock) {
                     val fresh = ids.filter { started.add(it) }
                     if (fresh.isNotEmpty()) sendStarted(receiver, fresh)
                 }
-                val port = s.ports.getValue(key)
-                // Best of two cold attempts: one slow handshake on a weak network
-                // shouldn't decide the number.
-                var r = bestOf(measure(port, TIMEOUT_SEC), measure(port, TIMEOUT_SEC))
-                if (r < 0) r = measure(port, RETRY_TIMEOUT_SEC)
-                synchronized(lock) {
-                    for (id in ids) {
-                        if (r >= 0 && (best[id] ?: -1L).let { it < 0 || r < it }) best[id] = r
-                        remaining[id] = remaining.getValue(id) - 1
-                        if (remaining[id] == 0) send(receiver, id, best[id] ?: -1L)
-                    }
-                }
+                val r = measureKey(s.ports.getValue(key))
+                // In a full run a bad result is often just the crowd (Hysteria/QUIC suffers
+                // most on mobile): measure it again alone once the list is done.
+                if (!single && (r < 0 || r > RECHECK_ABOVE_MS)) recheck[key] = r else report(key, r)
             }
         }.forEach { runCatching { it.get() } }
+        // One attempt each, one at a time; keep the better of the two runs.
+        for ((key, first) in recheck.toList()) report(key, bestOf(first, measure(s.ports.getValue(key), RETRY_TIMEOUT_SEC)))
         return best.isNotEmpty()
+    }
+
+    /** Best of two cold attempts, then one patient retry if both failed. */
+    private fun measureKey(port: Int): Long {
+        val r = bestOf(measure(port, TIMEOUT_SEC), measure(port, TIMEOUT_SEC))
+        return if (r >= 0) r else measure(port, RETRY_TIMEOUT_SEC)
     }
 
     private fun bestOf(a: Long, b: Long): Long = when {
@@ -226,6 +234,7 @@ class PingService : Service() {
         private const val RETRY_TIMEOUT_SEC = 10
         private const val PARALLEL = 6 // more at once crowd each other out on a weak mobile network
         private const val MAX_PROBES = 200
+        private const val RECHECK_ABOVE_MS = 1500L
         private const val KEEP_WARM_MS = 60_000L
         private const val BATCH_LIMIT = 5 // libXray pingBatch accepts at most 5 configs per call
     }
