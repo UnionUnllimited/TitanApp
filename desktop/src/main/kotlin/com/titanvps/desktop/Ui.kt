@@ -326,9 +326,9 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        if (maxWidth >= 900.dp) {
+        if (maxWidth >= 820.dp) {
             Row(Modifier.fillMaxSize().padding(18.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                ControlPanel(state, sub, openSubscription, Modifier.width(440.dp).fillMaxHeight())
+                ControlPanel(state, sub, openSubscription, Modifier.width(if (maxWidth >= 1050.dp) 440.dp else 380.dp).fillMaxHeight())
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     toolbar()
                     Spacer(Modifier.height(10.dp))
@@ -339,7 +339,7 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
             }
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                item { ControlPanel(state, sub, openSubscription, Modifier.fillMaxWidth()) }
+                item { ControlPanel(state, sub, openSubscription, Modifier.fillMaxWidth(), scrollable = false) }
                 item { toolbar() }
                 items(servers, key = { it.id }) { row(it) }
             }
@@ -349,10 +349,11 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
 
 /** Title, subscription, the big power button with status, selected server, features. */
 @Composable
-private fun ControlPanel(state: AppState, sub: Subscription, openSubscription: () -> Unit, modifier: Modifier) {
+private fun ControlPanel(state: AppState, sub: Subscription, openSubscription: () -> Unit, modifier: Modifier, scrollable: Boolean = true) {
     Surface(modifier, shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)) {
+        // Not scrollable inside the narrow layout's list: nested vertical scrolling crashes Compose.
         Column(
-            Modifier.verticalScroll(rememberScrollState()).padding(22.dp),
+            (if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier).padding(22.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Column {

@@ -53,7 +53,7 @@ import androidx.compose.ui.window.rememberWindowState
 fun main() {
     val state = AppState()
     application {
-        val windowState = rememberWindowState(size = DpSize(1100.dp, 740.dp))
+        val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
         val quit = {
             // Turn the system proxy off before quitting, or Windows loses internet.
             state.shutdown()
