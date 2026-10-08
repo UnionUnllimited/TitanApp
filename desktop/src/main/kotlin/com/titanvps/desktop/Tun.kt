@@ -1,6 +1,7 @@
 package com.titanvps.desktop
 
-import com.sun.jna.platform.win32.Shell32
+import com.sun.jna.Library
+import com.sun.jna.Native
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -12,8 +13,13 @@ import java.io.File
  * Same scheme as v2rayN; needs administrator rights.
  */
 object Admin {
+    @Suppress("FunctionName")
+    private interface Shell : Library {
+        fun IsUserAnAdmin(): Boolean
+    }
+
     val isAdmin: Boolean
-        get() = !isWindows || runCatching { Shell32.INSTANCE.IsUserAnAdmin() }.getOrDefault(false)
+        get() = !isWindows || runCatching { Native.load("shell32", Shell::class.java).IsUserAnAdmin() }.getOrDefault(false)
 
     /** Starts this app again "as administrator" (Windows asks). True if it was started. */
     fun relaunchElevated(): Boolean {
