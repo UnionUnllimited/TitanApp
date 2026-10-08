@@ -122,8 +122,10 @@ class AppState {
                 vpn = VpnState.Connected(System.currentTimeMillis())
                 watchUpdates()
             } catch (e: Exception) {
+                System.err.println("connect failed: $e")
                 withContext(Dispatchers.IO) { core.stop(); runCatching { SystemProxy.restore() } }
-                vpn = VpnState.Error(e.message ?: "Не удалось подключиться")
+                // No technical details for clients.
+                vpn = VpnState.Error("Не удалось подключиться. Попробуйте другой сервер или ещё раз")
             }
         }
     }
@@ -208,29 +210,58 @@ class AppState {
         return vpn is VpnState.Connected
     }
 
-    fun pingAll() {
+    /** Servers being measured right now (spinner, or the old value dimmed). */
+    var measuring by mutableStateOf<Set<String>>(emptySet()); private set
+
+    /** Every server, [firstIds] (the tab on screen) first; old values stay until new ones arrive. */
+    fun pingAll(firstIds: List<String> = emptyList()) {
         val servers = subscription?.servers ?: return
         if (pinging) return
+        val ids = servers.map { it.id }
         pinging = true
-        pings.clear()
+        ping(servers, firstIds.filter { it in ids } + ids.filter { it !in firstIds }) { pinging = false }
+    }
+
+    /** One server; works any time, also while the whole list is being measured. */
+    fun pingOne(id: String) {
+        val servers = subscription?.servers ?: return
+        if (servers.none { it.id == id } || id in measuring) return
+        measuring = measuring + id
+        ping(servers, listOf(id)) {}
+    }
+
+    private fun ping(servers: List<Server>, targets: List<String>, onDone: () -> Unit) {
         scope.launch {
+            val answered = HashSet<String>()
             try {
                 withContext(Dispatchers.IO) {
-                    Pinger.pingAll(servers) { id, ms -> scope.launch { pings[id] = ms } }
+                    Pinger.ping(
+                        servers, targets,
+                        onStart = { ids -> scope.launch { measuring = measuring + ids } },
+                        onResult = { id, ms -> scope.launch { answered += id; pings[id] = ms; measuring = measuring - id } },
+                    )
                 }
             } catch (e: Exception) {
-                message = "Пинг не выполнен: ${e.message}"
+                if (targets.size > 1) message = "Не удалось проверить пинг. Попробуйте ещё раз"
             } finally {
-                pinging = false
+                // Let queued results land first.
+                kotlinx.coroutines.yield()
+                targets.filter { it !in answered && it !in pings }.forEach { pings[it] = -1 }
+                measuring = measuring - targets.toSet()
+                onDone()
             }
         }
     }
+
+    /** Личный кабинет: the Telegram bot (renewal, extra GB). */
+    fun openCabinetUrl(): String = Config.TELEGRAM_URL
 
     fun logout() {
         disconnect()
         subscription = null
         selectedId = null
         pings.clear()
+        measuring = emptySet()
         scope.launch(Dispatchers.IO) { persist() }
     }
 
@@ -238,6 +269,7 @@ class AppState {
     fun shutdown() {
         updateJob?.cancel()
         proxyPort = 0
+        runCatching { Pinger.stop() }
         core.stop()
         runCatching { SystemProxy.restore() }
     }

@@ -22,22 +22,27 @@ object Repository {
     fun fetch(url: String): Subscription {
         if (!Links.isAllowed(url)) throw SubscriptionException("Недопустимый адрес подписки")
         var firstError: Exception? = null
-        for (candidate in listOf(url) + Links.alternates(url)) {
+        // "Titan" is our own UA; "Xray" if the server doesn't answer it with Xray JSON.
+        for (ua in Config.USER_AGENTS) for (candidate in listOf(url) + Links.alternates(url)) {
             try {
-                val (info, body) = download(candidate)
-                val servers = XrayConfigs.serversFromXrayJson(body).filterNot(ServerGroups::isHidden)
-                if (servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")
+                val (info, body) = download(candidate, ua)
+                val servers = runCatching { XrayConfigs.serversFromXrayJson(body) }.getOrDefault(emptyList())
+                    .filterNot(ServerGroups::isHidden)
+                if (servers.isEmpty()) {
+                    if (ua != Config.USER_AGENTS.last()) continue
+                    throw SubscriptionException("В подписке нет серверов")
+                }
                 return Subscription(url, info, servers, System.currentTimeMillis())
             } catch (e: Exception) {
                 if (firstError == null) firstError = e
             }
         }
-        throw firstError ?: SubscriptionException("Сервер подписки недоступен")
+        throw (firstError as? SubscriptionException) ?: SubscriptionException("Сервер подписки временно недоступен. Попробуйте позже")
     }
 
-    private fun download(url: String): Pair<SubscriptionInfo, String> {
+    private fun download(url: String, userAgent: String): Pair<SubscriptionInfo, String> {
         val request = Request.Builder().url(url)
-            .header("User-Agent", Config.USER_AGENT)
+            .header("User-Agent", userAgent)
             .header("Accept", "application/json, text/plain, */*")
             .header("x-hwid", Hwid.get())
             .header("x-device-os", "Windows")
@@ -48,14 +53,13 @@ object Repository {
             http.newCall(request).execute().use { resp ->
                 if (!Links.isAllowed(resp.request.url.toString())) throw SubscriptionException("Недопустимый адрес подписки")
                 when {
-                    resp.code == 404 || resp.code == 403 ->
-                        throw SubscriptionException("Подписка не найдена или отключена (${resp.code}, ${resp.request.url.host})")
-                    !resp.isSuccessful -> throw SubscriptionException("Сервер подписки недоступен (${resp.code}, ${resp.request.url.host})")
+                    resp.code == 404 -> throw SubscriptionException("Подписка не найдена или отключена")
+                    !resp.isSuccessful -> throw SubscriptionException("Сервер подписки временно недоступен. Попробуйте позже")
                 }
                 SubscriptionHeaders.parse { resp.header(it) } to resp.body.string()
             }
         } catch (e: IOException) {
-            throw SubscriptionException("Нет соединения с сервером подписки")
+            throw SubscriptionException("Нет соединения с сервером подписки. Проверьте интернет")
         }
     }
 
@@ -104,54 +108,110 @@ object Repository {
     }
 }
 
-/** Real ping through Xray: one temporary core, a SOCKS port per node, warm + timed request. */
+/**
+ * Real ping through Xray, like Happ: one core with a SOCKS port per node is started once
+ * and kept warm for a minute, shared by every request (the whole list or one server, also
+ * while the list is still being measured). A few nodes at a time; results arrive one by one.
+ */
 object Pinger {
     private const val URL = "https://www.gstatic.com/generate_204"
-    private val core = XrayProcess("ping")
+    private const val PARALLEL = 6 // more at once crowd each other out on a weak network
+    private const val RECHECK_ABOVE_MS = 1500L
+    private const val KEEP_WARM_MS = 60_000L
 
-    /** Calls [onResult] per server id (ms, or -1 for timeout) as soon as it is known. */
-    fun pingAll(servers: List<Server>, onResult: (String, Long) -> Unit) {
+    private class Session(val sigs: Map<String, Int>, val ports: Map<String, Int>, val serverKeys: Map<String, List<String>>)
+
+    private val core = XrayProcess("ping")
+    private val listPool = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL) { r -> Thread(r).apply { isDaemon = true } }
+    private val singlePool = java.util.concurrent.Executors.newCachedThreadPool { r -> Thread(r).apply { isDaemon = true } }
+    private val timer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r).apply { isDaemon = true } }
+    private val active = java.util.concurrent.atomic.AtomicInteger()
+    private var idleStop: java.util.concurrent.ScheduledFuture<*>? = null
+    private var session: Session? = null
+
+    /**
+     * Measures [targets] in that order ([all] = every server, for the shared core).
+     * [onStart] when a server starts being measured, [onResult] with ms or -1 (timeout).
+     */
+    fun ping(all: List<Server>, targets: List<String>, onStart: (List<String>) -> Unit, onResult: (String, Long) -> Unit) {
+        synchronized(this) { idleStop?.cancel(false); idleStop = null }
+        active.incrementAndGet()
+        try {
+            measure(ensureSession(all), targets, targets.size == 1, onStart, onResult)
+        } finally {
+            if (active.decrementAndGet() == 0) synchronized(this) {
+                idleStop = timer.schedule(Runnable { stopIfIdle() }, KEEP_WARM_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
+        }
+    }
+
+    fun stop() = synchronized(this) { core.stop(); session = null }
+
+    private fun stopIfIdle() = synchronized(this) { if (active.get() == 0) { core.stop(); session = null } }
+
+    @Synchronized
+    private fun ensureSession(servers: List<Server>): Session {
+        val sigs = servers.associate { it.id to (it.xrayJson + it.proxyTag).hashCode() }
+        session?.takeIf { s -> core.isRunning && sigs.all { (id, sig) -> s.sigs[id] == sig } }?.let { return it }
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
-        val serverKeys = servers.map { s ->
-            XrayConfigs.pingTags(s.xrayJson, s.proxyTag).mapNotNull { tag ->
+        val serverKeys = servers.associate { s ->
+            s.id to XrayConfigs.pingTags(s.xrayJson, s.proxyTag).mapNotNull { tag ->
                 val key = XrayConfigs.endpointKey(s.xrayJson, tag) ?: return@mapNotNull null
                 if (key !in probes && probes.size < 200) probes[key] = Probe(s.xrayJson, tag)
                 key.takeIf { it in probes }
             }.distinct()
         }
         val keys = probes.keys.toList()
-        if (keys.isEmpty()) { servers.forEach { onResult(it.id, -1) }; return }
-        val ports = freePorts(keys.size)
-        core.start(XrayConfigs.buildPingConfig(keys.map { probes.getValue(it).let { p -> p.json to p.tag } }, ports))
-        val best = LongArray(servers.size) { -1 }
-        val remaining = IntArray(servers.size) { serverKeys[it].size }
-        val byKey = HashMap<String, MutableList<Int>>().also { m ->
-            serverKeys.forEachIndexed { i, ks -> ks.forEach { m.getOrPut(it) { mutableListOf() }.add(i) } }
-        }
-        servers.indices.filter { remaining[it] == 0 }.forEach { onResult(servers[it].id, -1) }
-        val lock = Any()
-        try {
-            val pool = java.util.concurrent.Executors.newFixedThreadPool(minOf(keys.size, 16))
-            keys.mapIndexed { p, key ->
-                pool.submit {
-                    var ms = measure(ports[p], 5)
-                    if (ms < 0) ms = measure(ports[p], 10)
-                    synchronized(lock) {
-                        for (i in byKey[key].orEmpty()) {
-                            if (ms >= 0 && (best[i] < 0 || ms < best[i])) best[i] = ms
-                            if (--remaining[i] == 0) onResult(servers[i].id, best[i])
-                        }
-                    }
-                }
-            }.forEach { runCatching { it.get() } }
-            pool.shutdown()
-        } finally {
-            core.stop()
-        }
+        val ports = if (keys.isEmpty()) emptyList() else freePorts(keys.size)
+        if (keys.isNotEmpty()) core.start(XrayConfigs.buildPingConfig(keys.map { probes.getValue(it).let { p -> p.json to p.tag } }, ports))
+        return Session(sigs, keys.zip(ports).toMap(), serverKeys).also { session = it }
     }
 
-    private fun measure(port: Int, timeoutSec: Long): Long {
+    private fun measure(s: Session, targets: List<String>, single: Boolean, onStart: (List<String>) -> Unit, onResult: (String, Long) -> Unit) {
+        val best = HashMap<String, Long>()
+        val remaining = HashMap<String, Int>()
+        val started = HashSet<String>()
+        val byKey = LinkedHashMap<String, MutableList<String>>()
+        targets.forEach { id ->
+            val keys = s.serverKeys[id].orEmpty()
+            remaining[id] = keys.size
+            keys.forEach { byKey.getOrPut(it) { mutableListOf() }.add(id) }
+        }
+        targets.filter { remaining[it] == 0 }.forEach { onResult(it, -1) }
+        val lock = Any()
+        fun report(key: String, ms: Long) = synchronized(lock) {
+            for (id in byKey.getValue(key)) {
+                if (ms >= 0 && (best[id] ?: -1L).let { it < 0 || ms < it }) best[id] = ms
+                remaining[id] = remaining.getValue(id) - 1
+                if (remaining[id] == 0) onResult(id, best[id] ?: -1L)
+            }
+        }
+        val recheck = java.util.Collections.synchronizedMap(LinkedHashMap<String, Long>())
+        val pool = if (single) singlePool else listPool
+        byKey.map { (key, ids) ->
+            pool.submit {
+                synchronized(lock) { ids.filter { started.add(it) }.takeIf { it.isNotEmpty() }?.let(onStart) }
+                val port = s.ports.getValue(key)
+                // Best of two cold attempts, then one patient retry.
+                var ms = bestOf(timed(port, 5), timed(port, 5))
+                if (ms < 0) ms = timed(port, 10)
+                // In a full run a bad result is often just the crowd (Hysteria/QUIC suffers
+                // most): measure it again alone once the list is done.
+                if (!single && (ms < 0 || ms > RECHECK_ABOVE_MS)) recheck[key] = ms else report(key, ms)
+            }
+        }.forEach { runCatching { it.get() } }
+        for ((key, first) in recheck.toList()) report(key, bestOf(first, timed(s.ports.getValue(key), 10)))
+    }
+
+    private fun bestOf(a: Long, b: Long): Long = when {
+        a < 0 -> b
+        b < 0 -> a
+        else -> minOf(a, b)
+    }
+
+    /** One request on a fresh connection (TCP, TLS and the proxy handshake included). */
+    private fun timed(port: Int, timeoutSec: Long): Long {
         val client = OkHttpClient.Builder()
             .proxy(java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port)))
             .connectTimeout(timeoutSec, TimeUnit.SECONDS)
@@ -159,12 +219,9 @@ object Pinger {
             .callTimeout(timeoutSec + 2, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
             .build()
-        val request = Request.Builder().url(URL).build()
         return try {
-            // Like Happ / v2RayTun: one request on a fresh connection, including TCP,
-            // TLS and the proxy handshake.
             val start = System.nanoTime()
-            client.newCall(request).execute().use { it.body.bytes() }
+            client.newCall(Request.Builder().url(URL).build()).execute().use { it.body.bytes() }
             ((System.nanoTime() - start) / 1_000_000).coerceAtLeast(1)
         } catch (e: Exception) {
             -1

@@ -80,6 +80,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -235,6 +237,7 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
         mutableStateOf(state.selected?.let { ServerGroups.groupOf(it, sub.servers) } ?: Group.SERVERS)
     }
     if (groups[page].isNullOrEmpty()) page = Group.SERVERS
+    val servers = groups[page].orEmpty()
 
     val controls: @Composable ColumnScope.() -> Unit = {
         Header(state)
@@ -242,8 +245,8 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
         PowerSwitch(state)
         Status(state)
     }
-    val list: LazyListScope.() -> Unit = {
-        item {
+    val toolbar: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).padding(4.dp),
@@ -251,62 +254,75 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
                 ) {
                     groups.forEach { (g, items) -> GroupTab(g, items.size, g == page, Modifier.weight(1f)) { page = g } }
                 }
-                PingButton(state.pinging) { state.pingAll() }
+                PingButton(state.pinging) { state.pingAll(servers.map { it.id }) }
             }
-        }
-        item {
             Text(
                 if (page == Group.SERVERS) "Безлимит на обычных серверах"
-                else "Для мобильного интернета с белыми списками (раздача с телефона). Расходуют ГБ" +
+                else "Серверы для мобильного интернета с белыми списками. Расходуют ГБ" +
                     (if (sub.info.totalBytes > 0) " · осталось ${formatBytes(sub.info.remainingBytes)} из ${formatBytes(sub.info.totalBytes)}" else ""),
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp),
             )
         }
-        items(groups[page].orEmpty(), key = { it.id }) { s ->
-            ServerRow(
-                server = s,
-                ping = state.pings[s.id],
-                pending = state.pinging && state.pings[s.id] == null,
-                selected = s.id == state.selected?.id,
-                connected = state.vpn is VpnState.Connected && s.id == state.selected?.id,
-                limited = page == Group.BYPASS,
-            ) { state.select(s.id) }
-        }
+    }
+    val row: @Composable (Server) -> Unit = { s ->
+        ServerRow(
+            server = s,
+            ping = state.pings[s.id],
+            measuring = s.id in state.measuring,
+            selected = s.id == state.selected?.id,
+            connected = state.vpn is VpnState.Connected && s.id == state.selected?.id,
+            limited = page == Group.BYPASS,
+            onPing = { state.pingOne(s.id) },
+        ) { state.select(s.id) }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        if (maxWidth >= 860.dp) {
-            Row(Modifier.widthIn(max = 1300.dp).fillMaxSize().padding(horizontal = 8.dp)) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        if (maxWidth >= 820.dp) {
+            // Wide window: controls on the left, the server list (in columns) on the right.
+            Row(Modifier.fillMaxSize()) {
                 Column(
-                    Modifier.weight(0.9f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    Modifier.width(380.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
                     content = controls,
                 )
-                LazyColumn(
-                    Modifier.weight(1.1f).fillMaxHeight(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    content = list,
-                )
+                Column(Modifier.weight(1f).fillMaxHeight().padding(top = 20.dp, end = 20.dp)) {
+                    toolbar()
+                    Spacer(Modifier.height(10.dp))
+                    androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                        columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(minSize = 340.dp),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(servers.size, key = { servers[it].id }) { row(servers[it]) }
+                    }
+                }
             }
         } else {
             LazyColumn(
-                Modifier.widthIn(max = 640.dp).fillMaxSize(),
+                Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 item { Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = controls) }
-                list()
+                item { toolbar() }
+                items(servers, key = { it.id }) { row(it) }
             }
         }
     }
 }
 
+/** Support, title, refresh and theme — like the phone app's header. */
 @Composable
 private fun Header(state: AppState) {
     val dark = isDark(state.theme)
+    val uri = LocalUriHandler.current
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Titan VPS", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        SquareButton(Icons.Outlined.SupportAgent, "Поддержка") {
+            uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL)
+        }
+        Text("Titan VPS", fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
         SquareButton(Icons.Default.Refresh, "Обновить подписку", spinning = state.busy) { state.refresh() }
         Spacer(Modifier.width(8.dp))
         SquareButton(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, "Тема") {
@@ -409,7 +425,7 @@ private fun Status(state: AppState) {
         when (vpn) {
             is VpnState.Connected -> {
                 val ping = server?.let { state.pings[it.id] }?.takeIf { it >= 0 }
-                Text((name ?: "") + (ping?.let { " · $it мс" } ?: ""), fontSize = 14.sp, maxLines = 1, modifier = Modifier.basicMarquee())
+                MarqueeText((name ?: "") + (ping?.let { " · $it мс" } ?: ""), fontSize = 14.sp, fontWeight = FontWeight.Normal)
                 var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
                 LaunchedEffect(vpn.since) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
                 val s = (now - vpn.since) / 1000
@@ -475,27 +491,45 @@ private fun FlagCircle(server: Server, size: Dp) {
 }
 
 @Composable
-private fun ServerRow(server: Server, ping: Long?, pending: Boolean, selected: Boolean, connected: Boolean, limited: Boolean, onClick: () -> Unit) {
+private fun ServerRow(
+    server: Server, ping: Long?, measuring: Boolean, selected: Boolean, connected: Boolean, limited: Boolean,
+    onPing: () -> Unit, onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(14.dp)
     val accent = if (connected) Green else Brand
     Row(
         Modifier.fillMaxWidth().clip(shape)
             .background(if (selected) accent.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface)
             .then(if (selected) Modifier.border(1.5.dp, accent, shape) else Modifier)
-            .clickable(onClick = onClick).heightIn(min = 54.dp).padding(horizontal = 12.dp, vertical = 6.dp),
+            .clickable(onClick = onClick).heightIn(min = 60.dp).padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        FlagCircle(server, 32.dp)
+        FlagCircle(server, 34.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(ServerGroups.splitFlag(server.name).second, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.basicMarquee())
+            MarqueeText(ServerGroups.splitFlag(server.name).second, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Text(if (limited) "Лимитный · расходует ГБ" else "Безлимит", fontSize = 11.sp, color = if (limited) Yellow else Green)
         }
-        when {
-            pending -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-            ping != null -> Text(if (ping >= 0) "$ping мс" else "таймаут", color = pingColor(ping), fontSize = 13.sp)
+        Spacer(Modifier.width(10.dp))
+        // Click the ping to re-measure just this server (like Happ).
+        Box(
+            Modifier.heightIn(min = 36.dp).widthIn(min = 36.dp).clip(RoundedCornerShape(10.dp))
+                .clickable(enabled = !measuring, onClick = onPing).padding(horizontal = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                ping != null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (measuring) { CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp); Spacer(Modifier.width(4.dp)) }
+                    Text(
+                        if (ping >= 0) "$ping мс" else "таймаут", color = pingColor(ping), fontSize = 13.sp,
+                        modifier = Modifier.graphicsLayer { alpha = if (measuring) 0.5f else 1f },
+                    )
+                }
+                measuring -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                else -> Icon(Icons.Default.Speed, "Пинг", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+            }
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(10.dp))
         when {
             connected -> Box(Modifier.size(24.dp).clip(CircleShape).background(accent), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
@@ -506,6 +540,34 @@ private fun ServerRow(server: Server, ping: Long?, pending: Boolean, selected: B
             else -> Box(Modifier.size(24.dp).border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape))
         }
     }
+}
+
+/** One line; only a name that doesn't fit scrolls (after a pause) with faded edges. */
+@Composable
+private fun MarqueeText(text: String, fontSize: androidx.compose.ui.unit.TextUnit, fontWeight: FontWeight, modifier: Modifier = Modifier) {
+    var overflow by remember(text) { mutableStateOf(false) }
+    Text(
+        text,
+        modifier.then(
+            if (overflow) Modifier
+                .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val fade = 12.dp.toPx().coerceAtMost(size.width / 4)
+                    drawRect(
+                        Brush.horizontalGradient(
+                            0f to Color.Transparent, fade / size.width to Color.Black,
+                            1f - fade / size.width to Color.Black, 1f to Color.Transparent,
+                        ),
+                        blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+                    )
+                }
+                .basicMarquee(initialDelayMillis = 2000, repeatDelayMillis = 2500)
+            else Modifier
+        ),
+        fontSize = fontSize, fontWeight = fontWeight, maxLines = 1, softWrap = false,
+        onTextLayout = { if (it.hasVisualOverflow) overflow = true },
+    )
 }
 
 // ------------------------------------------------------------------ subscription
@@ -547,12 +609,12 @@ private fun SubscriptionPage(state: AppState, sub: Subscription) {
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты " +
-                        "(белые списки) и обычные серверы не работают. На компьютере нужны только при раздаче интернета с телефона. " +
+                        "(белые списки) и обычные серверы не работают. Работают и по Wi‑Fi, например при раздаче интернета с телефона. " +
                         "Гигабайты списываются, пока вы подключены к обходу. Закончились ГБ — докупите в личном кабинете.",
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Button({ uri.openUri(info.webPageUrl ?: Config.TELEGRAM_URL) }, Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp)) {
+            Button({ uri.openUri(state.openCabinetUrl()) }, Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp)) {
                 Icon(Icons.Outlined.AccountCircle, null); Spacer(Modifier.width(8.dp)); Text("Личный кабинет", fontWeight = FontWeight.SemiBold)
             }
             Card {
