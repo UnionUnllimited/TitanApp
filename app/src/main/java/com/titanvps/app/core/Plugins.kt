@@ -96,7 +96,13 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
     fun start() {
         val exe = File(context.applicationInfo.nativeLibraryDir, endpoint.kind.lib)
         note("${endpoint.kind}: start ${endpoint.host}:${endpoint.port} → 127.0.0.1:$port, exe=${exe.exists()} ${exe.canExecute()}")
-        if (!exe.exists()) error("Этот сервер пока не поддерживается на вашем устройстве")
+        if (!exe.exists()) {
+            // Why: which ABI the phone runs us as and what the installer actually unpacked.
+            val dir = File(context.applicationInfo.nativeLibraryDir)
+            note("  abis=${android.os.Build.SUPPORTED_ABIS.joinToString()} dir=${dir.absolutePath} files=${dir.list()?.sorted()?.joinToString()}")
+            note("  apk splits=${context.applicationInfo.splitSourceDirs?.size ?: 0} extractNativeLibs=${(context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_EXTRACT_NATIVE_LIBS) != 0}")
+            error("Этот сервер пока не поддерживается на вашем устройстве")
+        }
         val dir = File(context.filesDir, "plugins").apply { mkdirs() }
         val log = File(context.cacheDir, "${endpoint.kind.name.lowercase()}.log")
         val pb = when (endpoint.kind) {
