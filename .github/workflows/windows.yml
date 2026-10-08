@@ -47,6 +47,18 @@ jobs:
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile singbox.zip
           Expand-Archive singbox.zip -DestinationPath singbox
           Copy-Item (Get-ChildItem singbox -Recurse -Filter sing-box.exe | Select-Object -First 1).FullName $dest/
+          # Naive / Mieru servers: their own clients (Plugins.kt).
+          $h = @{ Authorization = "Bearer ${{ github.token }}" }
+          $nv = (Invoke-RestMethod -Headers $h -Uri "https://api.github.com/repos/klzgrad/naiveproxy/releases/latest").assets | Where-Object { $_.name -like "naiveproxy-*-win-x64.zip" } | Select-Object -First 1
+          Write-Host "naive: $($nv.name)"
+          Invoke-WebRequest -Uri $nv.browser_download_url -OutFile naive.zip
+          Expand-Archive naive.zip -DestinationPath naive
+          Copy-Item (Get-ChildItem naive -Recurse -Filter naive.exe | Select-Object -First 1).FullName $dest/
+          $mr = (Invoke-RestMethod -Headers $h -Uri "https://api.github.com/repos/enfein/mieru/releases/latest").assets | Where-Object { $_.name -like "mieru_*_windows_amd64.zip" } | Select-Object -First 1
+          Write-Host "mieru: $($mr.name)"
+          Invoke-WebRequest -Uri $mr.browser_download_url -OutFile mieru.zip
+          Expand-Archive mieru.zip -DestinationPath mieru
+          Copy-Item (Get-ChildItem mieru -Recurse -Filter mieru.exe | Select-Object -First 1).FullName $dest/
           Get-ChildItem $dest
 
       # Round flag images: Windows has no flag emoji.

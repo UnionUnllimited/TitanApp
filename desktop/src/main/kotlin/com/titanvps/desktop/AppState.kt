@@ -35,6 +35,8 @@ class AppState {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
     private val core = XrayProcess("core")
     private val tun = SingBoxProcess()
+    /** Naive / Mieru client of the connected server, if it is one. */
+    private var plugin: PluginProcess? = null
 
     var subscription by mutableStateOf<Subscription?>(null); private set
     var selectedId by mutableStateOf<String?>(null); private set
@@ -208,7 +210,15 @@ class AppState {
                     val geo = GeoFiles.prepare(sub.servers.map { it.xrayJson })
                     val (socks, http) = freePorts(2)
                     val logDir = AppPaths.logDir.absolutePath.replace('\\', '/')
-                    core.start(XrayConfigs.buildProxyConfig(server.xrayJson, socks, http, logDir, server.proxyTag), geo)
+                    // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound points at it.
+                    plugin?.close()
+                    plugin = null
+                    val serverJson = Plugins.endpoint(server)?.let { ep ->
+                        val p = PluginProcess(ep).also { plugin = it }
+                        p.start()
+                        Plugins.withLocalSocks(server.xrayJson, server.proxyTag, p.port)
+                    } ?: server.xrayJson
+                    core.start(XrayConfigs.buildProxyConfig(serverJson, socks, http, logDir, server.proxyTag), geo)
                     if (mode == "tun") {
                         // The whole PC through the tunnel; no system proxy then.
                         runCatching { SystemProxy.restore() }
@@ -223,7 +233,7 @@ class AppState {
                 watchUpdates()
             } catch (e: Exception) {
                 System.err.println("connect failed: $e")
-                withContext(Dispatchers.IO) { tun.stop(); core.stop(); runCatching { SystemProxy.restore() } }
+                withContext(Dispatchers.IO) { tun.stop(); core.stop(); plugin?.close(); plugin = null; runCatching { SystemProxy.restore() } }
                 // No technical details for clients.
                 vpn = VpnState.Error("Не удалось подключиться. Попробуйте другой сервер или ещё раз")
             }
@@ -373,6 +383,8 @@ class AppState {
         runCatching { Pinger.stop() }
         tun.stop()
         core.stop()
+        plugin?.close()
+        plugin = null
         runCatching { SystemProxy.restore() }
     }
 }

@@ -90,7 +90,9 @@ object Repository {
                     i.optString("announce").ifEmpty { null },
                 ),
                 servers = (0 until arr.length()).map { arr.getJSONObject(it) }
-                    .map { Server(it.getString("id"), it.getString("name"), it.getString("json"), it.getString("tag")) },
+                    .map { Server(it.getString("id"), it.getString("name"), it.getString("json"), it.getString("tag")) }
+                    // Saved before a hiding rule existed: apply it now, not only on refresh.
+                    .filterNot(ServerGroups::isHidden),
                 fetchedAt = s.optLong("fetchedAt"),
             )
         }
@@ -132,7 +134,12 @@ object Pinger {
     private const val RECHECK_ABOVE_MS = 1500L
     private const val KEEP_WARM_MS = 60_000L
 
-    private class Session(val sigs: Map<String, Int>, val ports: Map<String, Int>, val serverKeys: Map<String, List<String>>)
+    private class Session(
+        val sigs: Map<String, Int>,
+        val ports: Map<String, Int>,
+        val serverKeys: Map<String, List<String>>,
+        val plugins: List<PluginProcess> = emptyList(),
+    )
 
     private val core = XrayProcess("ping")
     private val listPool = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL) { r -> Thread(r).apply { isDaemon = true } }
@@ -159,27 +166,44 @@ object Pinger {
         }
     }
 
-    fun stop() = synchronized(this) { core.stop(); session = null }
+    fun stop() = synchronized(this) { stopSession() }
 
-    private fun stopIfIdle() = synchronized(this) { if (active.get() == 0) { core.stop(); session = null } }
+    private fun stopIfIdle() = synchronized(this) { if (active.get() == 0) stopSession() }
+
+    private fun stopSession() {
+        core.stop()
+        session?.plugins?.forEach { runCatching { it.close() } }
+        session = null
+    }
 
     @Synchronized
     private fun ensureSession(servers: List<Server>): Session {
         val sigs = servers.associate { it.id to (it.xrayJson + it.proxyTag).hashCode() }
         session?.takeIf { s -> core.isRunning && sigs.all { (id, sig) -> s.sigs[id] == sig } }?.let { return it }
+        session?.plugins?.forEach { runCatching { it.close() } }
+        // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it.
+        val plugins = mutableListOf<PluginProcess>()
+        val jsonOf = servers.associate { s ->
+            s.id to (Plugins.endpoint(s)?.let { ep ->
+                runCatching { PluginProcess(ep).also { p -> p.start(); plugins += p } }
+                    .map { p -> Plugins.withLocalSocks(s.xrayJson, s.proxyTag, p.port) }
+                    .getOrDefault(s.xrayJson)
+            } ?: s.xrayJson)
+        }
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
         val serverKeys = servers.associate { s ->
-            s.id to XrayConfigs.pingTags(s.xrayJson, s.proxyTag).mapNotNull { tag ->
-                val key = XrayConfigs.endpointKey(s.xrayJson, tag) ?: return@mapNotNull null
-                if (key !in probes && probes.size < 200) probes[key] = Probe(s.xrayJson, tag)
+            val json = jsonOf.getValue(s.id)
+            s.id to XrayConfigs.pingTags(json, s.proxyTag).mapNotNull { tag ->
+                val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
+                if (key !in probes && probes.size < 200) probes[key] = Probe(json, tag)
                 key.takeIf { it in probes }
             }.distinct()
         }
         val keys = probes.keys.toList()
         val ports = if (keys.isEmpty()) emptyList() else freePorts(keys.size)
         if (keys.isNotEmpty()) core.start(XrayConfigs.buildPingConfig(keys.map { probes.getValue(it).let { p -> p.json to p.tag } }, ports))
-        return Session(sigs, keys.zip(ports).toMap(), serverKeys).also { session = it }
+        return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins).also { session = it }
     }
 
     private fun measure(s: Session, targets: List<String>, single: Boolean, onStart: (List<String>) -> Unit, onResult: (String, Long) -> Unit) {
