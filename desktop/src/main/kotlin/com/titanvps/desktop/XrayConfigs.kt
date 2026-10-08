@@ -48,7 +48,7 @@ object XrayConfigs {
      * Config for "system proxy" mode: local SOCKS + HTTP inbounds on [socksPort]/[httpPort];
      * outbounds, routing (Russian sites → direct etc.) and DNS come from the panel.
      */
-    fun buildProxyConfig(serverJson: String, socksPort: Int, httpPort: Int, logDir: String): String {
+    fun buildProxyConfig(serverJson: String, socksPort: Int, httpPort: Int, logDir: String, proxyTag: String? = null): String {
         val cfg = JSONObject(serverJson)
         val sniffing = (cfg.remove(SNIFFING_KEY) as? JSONObject)?.put("enabled", true)
             ?: JSONObject().put("enabled", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))
@@ -71,6 +71,18 @@ object XrayConfigs {
             val list = (0 until tags.length()).map { tags.getString(it) }
             if (list.none { it in oldTags || it == "tun-in" }) continue
             rule.put("inboundTag", JSONArray((list.filterNot { it in oldTags || it == "tun-in" } + SOCKS_TAG + HTTP_TAG).distinct()))
+        }
+        // App updates come from GitHub: always through the VPN, whatever the panel routes direct.
+        if (proxyTag != null) {
+            val routing = cfg.optJSONObject("routing") ?: JSONObject().also { cfg.put("routing", it) }
+            val old = routing.optJSONArray("rules") ?: JSONArray()
+            val updated = JSONArray().put(
+                JSONObject().put("type", "field")
+                    .put("domain", JSONArray().put("domain:github.com").put("domain:githubusercontent.com").put("domain:githubassets.com"))
+                    .put("outboundTag", proxyTag)
+            )
+            for (i in 0 until old.length()) updated.put(old.get(i))
+            routing.put("rules", updated)
         }
         if (!cfg.has("dns")) cfg.put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8")))
         cfg.getJSONObject("dns").put("queryStrategy", "UseIPv4")

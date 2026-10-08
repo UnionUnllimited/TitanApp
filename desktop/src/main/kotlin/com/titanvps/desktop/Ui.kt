@@ -148,7 +148,48 @@ fun App(state: AppState) {
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+        if (state.updateDialog) UpdateDialog(state)
     }
+}
+
+@Composable
+private fun UpdateDialog(state: AppState) {
+    val u = state.update
+    val busy = u == UpdateState.ConnectingVpn || u == UpdateState.Checking || u is UpdateState.Downloading || u == UpdateState.Installing
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { if (!busy) state.dismissUpdate() },
+        title = { Text("Обновление приложения") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    when (u) {
+                        UpdateState.ConnectingVpn -> "Включаем VPN…"
+                        UpdateState.Checking -> "Проверяем…"
+                        UpdateState.UpToDate -> "У вас последняя версия"
+                        is UpdateState.Available -> "Доступна новая версия ${u.release.name}. Приложение закроется, установит её и откроется снова."
+                        is UpdateState.Downloading -> "Скачиваем обновление… ${(u.progress * 100).toInt()}%"
+                        UpdateState.Installing -> "Устанавливаем…"
+                        is UpdateState.Error -> u.message
+                        UpdateState.Idle -> ""
+                    }
+                )
+                if (u is UpdateState.Downloading) androidx.compose.material3.LinearProgressIndicator(progress = { u.progress }, modifier = Modifier.fillMaxWidth())
+                else if (busy) androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            when (u) {
+                is UpdateState.Available -> androidx.compose.material3.Button(onClick = { state.installUpdate() }) { Text("Обновить") }
+                is UpdateState.Error -> androidx.compose.material3.TextButton(onClick = { state.checkUpdate() }) { Text("Повторить") }
+                else -> {}
+            }
+        },
+        dismissButton = {
+            if (!busy) androidx.compose.material3.TextButton(onClick = { state.dismissUpdate() }) {
+                Text(if (u is UpdateState.Available) "Позже" else "Закрыть")
+            }
+        },
+    )
 }
 
 // ------------------------------------------------------------------ welcome
@@ -572,6 +613,8 @@ private fun SettingsPage(state: AppState) {
             }
             Card {
                 SettingsRow("Обновить подписку") { state.refresh() }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                SettingsRow("Обновление приложения") { state.checkUpdate() }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 SettingsRow("Папка с логами") { runCatching { java.awt.Desktop.getDesktop().open(AppPaths.logDir) } }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -43,7 +45,22 @@ jobs:
           Copy-Item "desktop/build/compose/binaries/main/exe/*.exe" "out/Titan VPS Setup.exe"
           Copy-Item "desktop/build/compose/binaries/main/msi/*.msi" "out/Titan VPS.msi"
           Compress-Archive -Path "desktop/build/compose/binaries/main/app/Titan VPS" -DestinationPath "out/Titan VPS portable.zip"
-          Get-ChildItem out
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item "out/Titan VPS Setup.exe" "release/titan-vps-setup.exe"
+          Copy-Item "out/Titan VPS.msi" "release/titan-vps.msi"
+          Get-ChildItem out, release
+
+      # The app's "Обновление приложения" looks for the newest windows-<build> release.
+      # Not "latest": Android reads releases/latest.
+      - name: Publish release for in-app updates
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Titan VPS для Windows 1.0.${{ github.run_number }}
+          make_latest: false
+          files: release/*
 
       - uses: actions/upload-artifact@v4
         with:
