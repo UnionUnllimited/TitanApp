@@ -5,32 +5,38 @@ object ServerGroups {
 
     enum class Group(val title: String) { SERVERS("Серверы"), BYPASS("Обходы") }
 
-    /** Section headers from the subscription that shouldn't be shown as servers. */
-    fun isHidden(server: Server): Boolean = "безлимит" in server.name.lowercase()
-
-    /** Start of the bypass section: its "ЛИМИТНЫЕ …" header or the first "обход" server. */
-    private fun isBypassName(server: Server): Boolean {
-        val n = server.name.lowercase()
-        return "обход" in n || ("лимитн" in n && "безлимит" !in n)
-    }
-
     /**
-     * The subscription lists regular servers first, then the bypass section. Everything
-     * from its start (the "ЛИМИТНЫЕ" header, its own АВТО, info entries, …) is the bypass tab.
+     * Not servers: section headers ("👇БЕЗЛИМИТНЫЕ👇", "ЛИМИТНЫЕ ОСТ: …") and info entries
+     * the panel sends with a dummy address ("СЕРВЕР ДЛЯ", "ОБНОВЛЕНИЯ ПОДПИСКИ", …).
      */
-    fun groupOf(server: Server, all: List<Server>): Group {
-        val first = all.indexOfFirst(::isBypassName)
-        val index = all.indexOfFirst { it.id == server.id }
-        return if (first >= 0 && index >= first) Group.BYPASS else Group.SERVERS
+    fun isHidden(server: Server): Boolean {
+        val n = server.name.lowercase()
+        return "лимитн" in n || isPlaceholder(server)
     }
 
-    /** Non-empty groups in display order. */
+    /** "Обходы" are exactly the servers with "обход" in the name (Обход 5, АВТО | Быстрые обходы). */
+    fun isBypass(server: Server): Boolean = "обход" in server.name.lowercase()
+
+    fun groupOf(server: Server, @Suppress("UNUSED_PARAMETER") all: List<Server> = emptyList()): Group =
+        if (isBypass(server)) Group.BYPASS else Group.SERVERS
+
+    /** Non-empty groups in display order; each keeps the subscription's order. */
     fun split(servers: List<Server>): List<Pair<Group, List<Server>>> {
-        val first = servers.indexOfFirst(::isBypassName)
-        val bypass = if (first >= 0) servers.drop(first) else emptyList()
-        val regular = if (first >= 0) servers.take(first) else servers
+        val (bypass, regular) = servers.partition(::isBypass)
         return listOf(Group.SERVERS to regular, Group.BYPASS to bypass).filter { it.second.isNotEmpty() }
     }
+
+    /** The proxy outbound points nowhere (127.0.0.1, 0.0.0.0, port 0/1): an info entry. */
+    private fun isPlaceholder(server: Server): Boolean = runCatching {
+        val outbounds = org.json.JSONObject(server.xrayJson).optJSONArray("outbounds") ?: return false
+        val ob = (0 until outbounds.length()).mapNotNull { outbounds.optJSONObject(it) }
+            .firstOrNull { it.optString("tag") == server.proxyTag } ?: return false
+        val settings = ob.optJSONObject("settings") ?: return false
+        val target = settings.optJSONArray("vnext")?.optJSONObject(0) ?: settings.optJSONArray("servers")?.optJSONObject(0)
+            ?: return false
+        val address = target.optString("address").lowercase()
+        address in setOf("127.0.0.1", "0.0.0.0", "localhost", "::1") || (target.has("port") && target.optInt("port") <= 1)
+    }.getOrDefault(false)
 
     /** Leading flag emoji (two regional indicators) and the rest of the name. */
     fun splitFlag(name: String): Pair<String?, String> {

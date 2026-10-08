@@ -20,31 +20,27 @@ class ServerGroupsTest {
     }
 
     @Test
-    fun everythingAfterFirstBypassIsBypass() {
-        val all = listOf(s("🇦🇱 БЕЗЛИМИТНЫЕ"), s("🇫🇮 Финляндия"), s("🇷🇺 Обход 1"), s("🇷🇺 Обход 2"),
-            s("🇦🇱 ⚡ АВТО | Самые быстрые"), s("🇦🇱 СЕРВЕР ДЛЯ"), s("🇦🇱 ОБНОВЛЕНИЯ ПОДПИСКИ"))
+    fun onlyObhodNamesAreBypass() {
+        val all = listOf(s("🇫🇮 Финляндия"), s("🇷🇺 Обход 1"), s("🇦🇱 ⚡ АВТО | Быстрые обходы"),
+            s("🇱🇻 Латвия Naive"), s("🇷🇺 Обход 2"))
         val groups = ServerGroups.split(all).toMap()
-        assertEquals(listOf("🇦🇱 БЕЗЛИМИТНЫЕ", "🇫🇮 Финляндия"), groups[Group.SERVERS]!!.map { it.name })
-        assertEquals(5, groups[Group.BYPASS]!!.size)
-        assertEquals(Group.BYPASS, ServerGroups.groupOf(all.last(), all))
-        assertEquals(Group.SERVERS, ServerGroups.groupOf(all[1], all))
+        assertEquals(listOf("🇫🇮 Финляндия", "🇱🇻 Латвия Naive"), groups[Group.SERVERS]!!.map { it.name })
+        assertEquals(listOf("🇷🇺 Обход 1", "🇦🇱 ⚡ АВТО | Быстрые обходы", "🇷🇺 Обход 2"), groups[Group.BYPASS]!!.map { it.name })
+        assertEquals(Group.SERVERS, ServerGroups.groupOf(all[3], all))
+        assertEquals(Group.BYPASS, ServerGroups.groupOf(all[2], all))
     }
 
     @Test
-    fun limitedHeaderStartsBypassButUnlimitedDoesNot() {
-        val all = listOf(s("🇦🇱 👇БЕЗЛИМИТНЫЕ👇"), s("🇩🇪 Германия 1"),
-            s("🇦🇱 👇ЛИМИТНЫЕ ОСТ:1004.00 GB"), s("🇦🇱 ⚡ АВТО | Самые быстрые"), s("🇷🇺 Обход 1"))
-        val groups = ServerGroups.split(all).toMap()
-        assertEquals(2, groups[Group.SERVERS]!!.size)
-        assertEquals(listOf("🇦🇱 👇ЛИМИТНЫЕ ОСТ:1004.00 GB", "🇦🇱 ⚡ АВТО | Самые быстрые", "🇷🇺 Обход 1"),
-            groups[Group.BYPASS]!!.map { it.name })
-    }
-
-    @Test
-    fun unlimitedHeaderIsHidden() {
+    fun headersAndDummyEntriesAreHidden() {
         assert(ServerGroups.isHidden(s("🇦🇱 👇БЕЗЛИМИТНЫЕ👇")))
-        assert(!ServerGroups.isHidden(s("🇦🇱 👇ЛИМИТНЫЕ ОСТ:1004.00 GB")))
+        assert(ServerGroups.isHidden(s("🇦🇱 👇ЛИМИТНЫЕ ОСТ:1004.00 GB")))
         assert(!ServerGroups.isHidden(s("🇩🇪 Германия 1")))
+        val dummy = Server("x", "🇦🇱 СЕРВЕР ДЛЯ", """{"outbounds":[{"tag":"proxy","protocol":"vless",
+            "settings":{"vnext":[{"address":"127.0.0.1","port":1,"users":[{"id":"0"}]}]}}]}""", "proxy")
+        assert(ServerGroups.isHidden(dummy))
+        val real = Server("y", "🇦🇱 СЕРВЕР ДЛЯ", """{"outbounds":[{"tag":"proxy","protocol":"vless",
+            "settings":{"vnext":[{"address":"node.example","port":443,"users":[{"id":"0"}]}]}}]}""", "proxy")
+        assert(!ServerGroups.isHidden(real))
     }
 
     @Test
