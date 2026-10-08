@@ -68,6 +68,7 @@ fun main() {
             undecorated = true,
         ) {
             window.minimumSize = java.awt.Dimension(420, 600)
+            androidx.compose.runtime.LaunchedEffect(Unit) { WindowCorners.round(window) }
             TitanTheme(state.theme) {
                 CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
                     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -88,7 +89,7 @@ private fun FrameWindowScope.TitleBar(windowState: WindowState, onClose: () -> U
         windowState.placement = if (maximized) WindowPlacement.Floating else WindowPlacement.Maximized
     }
     var lastClick by remember { mutableStateOf(0L) }
-    Row(Modifier.fillMaxWidth().height(36.dp).background(MaterialTheme.colorScheme.surface), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(36.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)), verticalAlignment = Alignment.CenterVertically) {
         WindowDraggableArea(
             Modifier.weight(1f).fillMaxHeight().onPointerEvent(PointerEventType.Press) {
                 val now = System.currentTimeMillis()

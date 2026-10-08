@@ -151,3 +151,23 @@ class XrayProcess(private val name: String) {
         pidFile.delete()
     }
 }
+
+/** Windows 11 rounded corners for our frameless window (DWM; ignored on older Windows). */
+object WindowCorners {
+    @Suppress("FunctionName")
+    private interface Dwm : Library {
+        fun DwmSetWindowAttribute(hwnd: Pointer, attribute: Int, value: com.sun.jna.ptr.IntByReference, size: Int): Int
+    }
+
+    private const val DWMWA_WINDOW_CORNER_PREFERENCE = 33
+    private const val DWMWCP_ROUND = 2
+
+    fun round(window: java.awt.Window) {
+        if (!isWindows) return
+        runCatching {
+            val hwnd = Pointer(Native.getComponentID(window))
+            Native.load("dwmapi", Dwm::class.java)
+                .DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, com.sun.jna.ptr.IntByReference(DWMWCP_ROUND), 4)
+        }
+    }
+}

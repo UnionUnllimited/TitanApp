@@ -80,6 +80,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.AllInclusive
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.Modifier
@@ -116,41 +120,76 @@ fun App(state: AppState) {
         state.message?.let { snackbar.showSnackbar(it); state.message = null }
     }
     var tab by remember { mutableStateOf(Tab.HOME) }
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    val dark = isDark(state.theme)
+    val bg = if (dark) Brush.linearGradient(listOf(Color(0xFF0A0F1E), Color(0xFF0E1630), Color(0xFF0B1226)))
+    else Brush.linearGradient(listOf(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.background))
+    Box(Modifier.fillMaxSize().background(bg)) {
         val sub = state.subscription
         if (sub == null) {
             Welcome(state)
         } else {
-            Row(Modifier.fillMaxSize()) {
-                NavigationRail(containerColor = MaterialTheme.colorScheme.surface) {
-                    Spacer(Modifier.height(12.dp))
-                    Image(painterResource("logo.png"), null, Modifier.size(36.dp))
-                    Spacer(Modifier.height(16.dp))
-                    Tab.entries.forEach { t ->
-                        NavigationRailItem(
-                            selected = tab == t,
-                            onClick = { tab = t },
-                            icon = { Icon(t.icon, null) },
-                            label = { Text(t.title, fontSize = 12.sp) },
-                            colors = NavigationRailItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                            ),
-                        )
-                    }
-                }
-                Box(Modifier.weight(1f).fillMaxHeight()) {
-                    when (tab) {
-                        Tab.HOME -> Home(state, sub) { tab = Tab.SUBSCRIPTION }
-                        Tab.SUBSCRIPTION -> SubscriptionPage(state, sub)
-                        Tab.SETTINGS -> SettingsPage(state)
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val compact = maxWidth < 1000.dp
+                Row(Modifier.fillMaxSize()) {
+                    Sidebar(tab, compact, state) { tab = it }
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                        when (tab) {
+                            Tab.HOME -> Home(state, sub) { tab = Tab.SUBSCRIPTION }
+                            Tab.SUBSCRIPTION -> SubscriptionPage(state, sub)
+                            Tab.SETTINGS -> SettingsPage(state)
+                        }
                     }
                 }
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
         if (state.updateDialog) UpdateDialog(state)
+    }
+}
+
+/** Logo + "Titan VPS", pill-shaped sections, support at the bottom (icons only when narrow). */
+@Composable
+private fun Sidebar(tab: Tab, compact: Boolean, state: AppState, onTab: (Tab) -> Unit) {
+    val uri = LocalUriHandler.current
+    Column(
+        Modifier.width(if (compact) 76.dp else 210.dp).fillMaxHeight()
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+            .padding(horizontal = 12.dp, vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Image(painterResource("logo.png"), null, Modifier.size(if (compact) 40.dp else 64.dp))
+        if (!compact) {
+            Spacer(Modifier.height(8.dp))
+            Text("Titan VPS", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(28.dp))
+        Tab.entries.forEach { t ->
+            SidebarItem(t.icon, t.title, t == tab, compact) { onTab(t) }
+            Spacer(Modifier.height(6.dp))
+        }
+        Spacer(Modifier.weight(1f))
+        SidebarItem(Icons.Outlined.SupportAgent, "Поддержка", false, compact) {
+            uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL)
+        }
+    }
+}
+
+@Composable
+private fun SidebarItem(icon: ImageVector, title: String, selected: Boolean, compact: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(14.dp)
+    val color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier.fillMaxWidth().clip(shape)
+            .background(if (selected) Brush.horizontalGradient(listOf(Brand, Color(0xFF2F7BFF))) else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent)))
+            .clickable(onClick = onClick).heightIn(min = 48.dp).padding(horizontal = if (compact) 0.dp else 16.dp),
+        horizontalArrangement = if (compact) Arrangement.Center else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, title, Modifier.size(22.dp), tint = color)
+        if (!compact) {
+            Spacer(Modifier.width(14.dp))
+            Text(title, fontSize = 15.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, color = color)
+        }
     }
 }
 
@@ -230,6 +269,8 @@ private fun Welcome(state: AppState) {
 
 // ------------------------------------------------------------------ home
 
+private enum class Sort(val title: String) { RECOMMENDED("Рекомендуемые"), PING("По пингу"), NAME("По названию") }
+
 @Composable
 private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Unit) {
     val groups = remember(sub.servers) { ServerGroups.split(sub.servers) }
@@ -237,17 +278,21 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
         mutableStateOf(state.selected?.let { ServerGroups.groupOf(it, sub.servers) } ?: Group.SERVERS)
     }
     if (groups[page].isNullOrEmpty()) page = Group.SERVERS
+    var query by remember { mutableStateOf("") }
+    var sort by remember { mutableStateOf(Sort.RECOMMENDED) }
     val servers = groups[page].orEmpty()
+        .filter { query.isBlank() || query.trim().lowercase() in it.name.lowercase() }
+        .let { list ->
+            when (sort) {
+                Sort.RECOMMENDED -> list
+                Sort.PING -> list.sortedBy { s -> state.pings[s.id]?.takeIf { it >= 0 } ?: Long.MAX_VALUE }
+                Sort.NAME -> list.sortedBy { ServerGroups.splitFlag(it.name).second.lowercase() }
+            }
+        }
 
-    val controls: @Composable ColumnScope.() -> Unit = {
-        Header(state)
-        SubscriptionCard(sub, openSubscription)
-        PowerSwitch(state)
-        Status(state)
-    }
     val toolbar: @Composable () -> Unit = {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
                     Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -255,6 +300,10 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
                     groups.forEach { (g, items) -> GroupTab(g, items.size, g == page, Modifier.weight(1f)) { page = g } }
                 }
                 PingButton(state.pinging) { state.pingAll(servers.map { it.id }) }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SearchField(query, { query = it }, Modifier.weight(1f))
+                SortMenu(sort) { sort = it }
             }
             Text(
                 if (page == Group.SERVERS) "Безлимит на обычных серверах"
@@ -271,41 +320,26 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
             measuring = s.id in state.measuring,
             selected = s.id == state.selected?.id,
             connected = state.vpn is VpnState.Connected && s.id == state.selected?.id,
-            limited = page == Group.BYPASS,
+            limited = groups[Group.BYPASS]?.any { it.id == s.id } == true,
             onPing = { state.pingOne(s.id) },
         ) { state.select(s.id) }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        if (maxWidth >= 820.dp) {
-            // Wide window: controls on the left, the server list (in columns) on the right.
-            Row(Modifier.fillMaxSize()) {
-                Column(
-                    Modifier.width(380.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    content = controls,
-                )
-                Column(Modifier.weight(1f).fillMaxHeight().padding(top = 20.dp, end = 20.dp)) {
+        if (maxWidth >= 900.dp) {
+            Row(Modifier.fillMaxSize().padding(18.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                ControlPanel(state, sub, openSubscription, Modifier.width(440.dp).fillMaxHeight())
+                Column(Modifier.weight(1f).fillMaxHeight()) {
                     toolbar()
                     Spacer(Modifier.height(10.dp))
-                    androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                        columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(minSize = 340.dp),
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 20.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        items(servers.size, key = { servers[it].id }) { row(servers[it]) }
+                    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
+                        items(servers, key = { it.id }) { row(it) }
                     }
                 }
             }
         } else {
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                item { Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = controls) }
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item { ControlPanel(state, sub, openSubscription, Modifier.fillMaxWidth()) }
                 item { toolbar() }
                 items(servers, key = { it.id }) { row(it) }
             }
@@ -313,20 +347,129 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
     }
 }
 
-/** Support, title, refresh and theme — like the phone app's header. */
+/** Title, subscription, the big power button with status, selected server, features. */
 @Composable
-private fun Header(state: AppState) {
-    val dark = isDark(state.theme)
-    val uri = LocalUriHandler.current
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        SquareButton(Icons.Outlined.SupportAgent, "Поддержка") {
-            uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL)
+private fun ControlPanel(state: AppState, sub: Subscription, openSubscription: () -> Unit, modifier: Modifier) {
+    Surface(modifier, shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)) {
+        Column(
+            Modifier.verticalScroll(rememberScrollState()).padding(22.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Column {
+                Text("Titan VPS", fontSize = 34.sp, fontWeight = FontWeight.Bold)
+                Text("Быстрый. Стабильный. Без ограничений.", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            SubscriptionCard(sub, openSubscription)
+            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    BigPowerButton(state)
+                    Status(state)
+                    PowerSwitch(state)
+                }
+            }
+            state.selected?.let { SelectedServer(it, ServerGroups.groupOf(it, sub.servers) == Group.BYPASS) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Feature(Icons.Default.Bolt, "Высокая\nскорость")
+                Feature(Icons.Outlined.Shield, "Стабильное\nсоединение")
+                Feature(Icons.Default.AllInclusive, "Безлимитный\nтрафик")
+            }
         }
-        Text("Titan VPS", fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
-        SquareButton(Icons.Default.Refresh, "Обновить подписку", spinning = state.busy) { state.refresh() }
+    }
+}
+
+/** Round power button with a glow: blue when off, spinning while connecting, green when on. */
+@Composable
+private fun BigPowerButton(state: AppState) {
+    val vpn = state.vpn
+    val on = vpn is VpnState.Connected
+    val busy = vpn == VpnState.Connecting || vpn == VpnState.Disconnecting
+    val color by animateColorAsState(if (on) Green else Brand)
+    Box(Modifier.size(170.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(170.dp).background(Brush.radialGradient(listOf(color.copy(alpha = 0.35f), Color.Transparent)), CircleShape))
+        Box(
+            Modifier.size(128.dp).clip(CircleShape)
+                .background(Brush.linearGradient(listOf(color.copy(alpha = 0.95f), color.copy(alpha = 0.55f))))
+                .border(3.dp, color.copy(alpha = 0.9f), CircleShape)
+                .clickable(enabled = !busy) { if (on) state.disconnect() else state.connect() },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (busy) CircularProgressIndicator(Modifier.size(54.dp), strokeWidth = 4.dp, color = Color.White)
+            else Icon(Icons.Default.PowerSettingsNew, if (on) "Выключить" else "Включить", Modifier.size(58.dp), tint = Color.White)
+        }
+    }
+}
+
+@Composable
+private fun SelectedServer(server: Server, limited: Boolean) {
+    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text("Выбранный сервер", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FlagCircle(server, 28.dp)
+                Spacer(Modifier.width(10.dp))
+                MarqueeText(ServerGroups.splitFlag(server.name).second, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f, fill = false))
+                Spacer(Modifier.width(8.dp))
+                Badge(if (limited) "Лимитный" else "Безлимит", if (limited) Yellow else Green)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Badge(text: String, color: Color) {
+    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(color.copy(alpha = 0.15f)).padding(horizontal = 7.dp, vertical = 2.dp)) {
+        Text(text, fontSize = 11.sp, color = color, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun Feature(icon: ImageVector, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(22.dp), tint = Brand)
         Spacer(Modifier.width(8.dp))
-        SquareButton(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, "Тема") {
-            state.changeTheme(if (dark) "light" else "dark")
+        Text(text, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 15.sp)
+    }
+}
+
+@Composable
+private fun SearchField(value: String, onChange: (String) -> Unit, modifier: Modifier) {
+    Row(
+        modifier.clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surface).heightIn(min = 44.dp).padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Search, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f)) {
+            if (value.isEmpty()) Text("Поиск сервера…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            androidx.compose.foundation.text.BasicTextField(
+                value, onChange, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(Brand),
+            )
+        }
+        if (value.isNotEmpty()) Icon(Icons.Default.Close, "Очистить", Modifier.size(16.dp).clickable { onChange("") }, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun SortMenu(sort: Sort, onSort: (Sort) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier.clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surface).clickable { open = true }
+                .heightIn(min = 44.dp).padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Сортировка: ", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(sort.title, fontSize = 13.sp)
+            Spacer(Modifier.width(4.dp))
+            Icon(Icons.Default.KeyboardArrowDown, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        androidx.compose.material3.DropdownMenu(open, { open = false }) {
+            Sort.entries.forEach { s ->
+                androidx.compose.material3.DropdownMenuItem(text = { Text(s.title) }, onClick = { onSort(s); open = false })
+            }
         }
     }
 }
@@ -495,11 +638,11 @@ private fun ServerRow(
     server: Server, ping: Long?, measuring: Boolean, selected: Boolean, connected: Boolean, limited: Boolean,
     onPing: () -> Unit, onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(18.dp)
     val accent = if (connected) Green else Brand
     Row(
         Modifier.fillMaxWidth().clip(shape)
-            .background(if (selected) accent.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface)
+            .background(if (selected) accent.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
             .then(if (selected) Modifier.border(1.5.dp, accent, shape) else Modifier)
             .clickable(onClick = onClick).heightIn(min = 60.dp).padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -520,10 +663,11 @@ private fun ServerRow(
             when {
                 ping != null -> Row(verticalAlignment = Alignment.CenterVertically) {
                     if (measuring) { CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp); Spacer(Modifier.width(4.dp)) }
-                    Text(
-                        if (ping >= 0) "$ping мс" else "таймаут", color = pingColor(ping), fontSize = 13.sp,
-                        modifier = Modifier.graphicsLayer { alpha = if (measuring) 0.5f else 1f },
-                    )
+                    Row(Modifier.graphicsLayer { alpha = if (measuring) 0.5f else 1f }, verticalAlignment = Alignment.CenterVertically) {
+                        SignalBars(ping)
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (ping >= 0) "$ping мс" else "таймаут", color = pingColor(ping), fontSize = 13.sp)
+                    }
                 }
                 measuring -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                 else -> Icon(Icons.Default.Speed, "Пинг", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
@@ -538,6 +682,18 @@ private fun ServerRow(
                 Box(Modifier.size(12.dp).clip(CircleShape).background(accent))
             }
             else -> Box(Modifier.size(24.dp).border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape))
+        }
+    }
+}
+
+/** Three bars coloured like the ping: 3 green, 2 yellow, 1 red. */
+@Composable
+private fun SignalBars(ping: Long) {
+    val color = pingColor(ping)
+    val level = when { ping < 0 -> 0; ping < 500 -> 3; ping < 1500 -> 2; else -> 1 }
+    Row(Modifier.height(14.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        listOf(6.dp, 10.dp, 14.dp).forEachIndexed { i, h ->
+            Box(Modifier.width(3.dp).height(h).clip(RoundedCornerShape(1.dp)).background(if (i < level) color else color.copy(alpha = 0.25f)))
         }
     }
 }
