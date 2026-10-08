@@ -2,7 +2,9 @@
 # NaiveProxy and Mieru clients for Android, packaged as executables in jniLibs
 # (lib*.so so Android extracts them to nativeLibraryDir, where they may be run).
 #   naive: from the official plugin APKs (lib/<abi>/libnaive.so)
-#   mieru: android_arm64 build; linux_armv7 (static Go) for 32-bit phones
+#   mieru: android_arm64 / android_amd64 builds; linux_armv7 (static Go) for 32-bit phones
+# x86_64 too: the app ships x86_64 libXray, so x86 devices (Chromebooks, PC emulators)
+# install as x86_64 and only get that ABI's libs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT=app/src/main/jniLibs
@@ -12,20 +14,20 @@ tmp=$(mktemp -d)
 
 asset() { # repo regex -> download url of the latest release's matching asset
   curl -fsSL "${AUTH[@]}" "https://api.github.com/repos/$1/releases/latest" |
-    jq -r --arg re "$2" '.assets[] | select(.name | test($re)) | .browser_download_url' | head -1
+    jq -r --arg re "$2" '.assets[] | select(.name | test($re)) | .browser_download_url'
 }
 
-for abi in arm64-v8a armeabi-v7a; do
-  url=$(asset klzgrad/naiveproxy "^naiveproxy-plugin-.*-${abi}\\.apk$")
+for abi in arm64-v8a armeabi-v7a x86_64; do
+  url=$(asset klzgrad/naiveproxy "^naiveproxy-plugin-.*-${abi}\\.apk$" | head -1)
   echo "naive $abi: $url"
   curl -fsSL -o "$tmp/naive-$abi.apk" "$url"
   mkdir -p "$OUT/$abi"
   unzip -p "$tmp/naive-$abi.apk" "lib/$abi/libnaive.so" > "$OUT/$abi/libnaive.so"
 done
 
-declare -A MIERU=([arm64-v8a]="_android_arm64\\.tar\\.gz$" [armeabi-v7a]="_linux_armv7\\.tar\\.gz$")
+declare -A MIERU=([arm64-v8a]="_android_arm64\\.tar\\.gz$" [armeabi-v7a]="_linux_armv7\\.tar\\.gz$" [x86_64]="_(android|linux)_amd64\\.tar\\.gz$")
 for abi in "${!MIERU[@]}"; do
-  url=$(asset enfein/mieru "^mieru_.*${MIERU[$abi]}")
+  url=$(asset enfein/mieru "^mieru_.*${MIERU[$abi]}" | sort | head -1)  # android_ before linux_
   echo "mieru $abi: $url"
   mkdir -p "$tmp/mieru-$abi"
   curl -fsSL "$url" | tar -xz -C "$tmp/mieru-$abi"
