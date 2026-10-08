@@ -34,10 +34,16 @@ sealed interface VpnState {
 class AppState {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
     private val core = XrayProcess("core")
+    private val tun = SingBoxProcess()
 
     var subscription by mutableStateOf<Subscription?>(null); private set
     var selectedId by mutableStateOf<String?>(null); private set
     var theme by mutableStateOf("system"); private set
+    /** "proxy" (system proxy) or "tun" (whole PC, needs administrator rights). */
+    var mode by mutableStateOf("proxy"); private set
+    var excludedApps by mutableStateOf<Set<String>>(emptySet()); private set
+    /** Asks to restart as administrator (TUN). */
+    var needAdmin by mutableStateOf(false)
     var vpn by mutableStateOf<VpnState>(VpnState.Off); private set
     var busy by mutableStateOf(false); private set
     var pinging by mutableStateOf(false); private set
@@ -60,11 +66,13 @@ class AppState {
         subscription = st.subscription
         selectedId = st.selectedId
         theme = st.theme
+        mode = st.mode
+        excludedApps = st.excludedApps
         Runtime.getRuntime().addShutdownHook(Thread { shutdown() })
         if (subscription != null) refresh(silent = true)
     }
 
-    private fun persist() = Repository.save(Repository.State(subscription, selectedId, theme))
+    private fun persist() = Repository.save(Repository.State(subscription, selectedId, theme, mode, excludedApps))
 
     fun activate(text: String) {
         val url = Links.find(text.trim()) ?: run { message = "Это не ключ Titan VPS"; return }
@@ -101,6 +109,53 @@ class AppState {
         if (vpn is VpnState.Connected) connect()
     }
 
+    /** System proxy ↔ TUN; reconnects if on. TUN needs administrator rights. */
+    fun changeMode(value: String) {
+        if (value == mode) return
+        if (value == "tun" && !Admin.isAdmin) {
+            mode = value
+            scope.launch(Dispatchers.IO) { persist() }
+            needAdmin = true
+            return
+        }
+        mode = value
+        scope.launch(Dispatchers.IO) { persist() }
+        if (vpn is VpnState.Connected) connect()
+    }
+
+    fun setExcluded(exe: String, excluded: Boolean) {
+        excludedApps = if (excluded) excludedApps + exe else excludedApps.filterNot { it.equals(exe, true) }.toSet()
+        scope.launch(Dispatchers.IO) { persist() }
+    }
+
+    /** Applies the exclusion list (TUN restarts with it). */
+    fun applyExclusions() {
+        if (vpn is VpnState.Connected && mode == "tun") connect()
+    }
+
+    /** Restart as administrator for TUN; on refusal fall back to the system proxy. */
+    fun restartAsAdmin() {
+        needAdmin = false
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                persist()
+                Admin.relaunchElevated()
+            }
+            if (ok) {
+                withContext(Dispatchers.IO) { shutdown() }
+                kotlin.system.exitProcess(0)
+            } else {
+                message = "Без прав администратора режим TUN недоступен"
+            }
+        }
+    }
+
+    fun cancelAdmin() {
+        needAdmin = false
+        mode = "proxy"
+        scope.launch(Dispatchers.IO) { persist() }
+    }
+
     fun changeTheme(value: String) {
         theme = value
         scope.launch(Dispatchers.IO) { persist() }
@@ -109,21 +164,30 @@ class AppState {
     fun connect() {
         val sub = subscription ?: return
         val server = selected ?: return
+        if (mode == "tun" && !Admin.isAdmin) { needAdmin = true; return }
         vpn = VpnState.Connecting
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     val geo = GeoFiles.prepare(sub.servers.map { it.xrayJson })
                     val (socks, http) = freePorts(2)
-                    core.start(XrayConfigs.buildProxyConfig(server.xrayJson, socks, http, AppPaths.logDir.absolutePath.replace('\\', '/'), server.proxyTag), geo)
-                    SystemProxy.enable(http)
+                    val logDir = AppPaths.logDir.absolutePath.replace('\\', '/')
+                    core.start(XrayConfigs.buildProxyConfig(server.xrayJson, socks, http, logDir, server.proxyTag), geo)
+                    if (mode == "tun") {
+                        // The whole PC through the tunnel; no system proxy then.
+                        runCatching { SystemProxy.restore() }
+                        tun.start(TunConfig.build(socks, excludedApps, logDir))
+                    } else {
+                        tun.stop()
+                        SystemProxy.enable(http)
+                    }
                     proxyPort = http
                 }
                 vpn = VpnState.Connected(System.currentTimeMillis())
                 watchUpdates()
             } catch (e: Exception) {
                 System.err.println("connect failed: $e")
-                withContext(Dispatchers.IO) { core.stop(); runCatching { SystemProxy.restore() } }
+                withContext(Dispatchers.IO) { tun.stop(); core.stop(); runCatching { SystemProxy.restore() } }
                 // No technical details for clients.
                 vpn = VpnState.Error("Не удалось подключиться. Попробуйте другой сервер или ещё раз")
             }
@@ -270,6 +334,7 @@ class AppState {
         updateJob?.cancel()
         proxyPort = 0
         runCatching { Pinger.stop() }
+        tun.stop()
         core.stop()
         runCatching { SystemProxy.restore() }
     }

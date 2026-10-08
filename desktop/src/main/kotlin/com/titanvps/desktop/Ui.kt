@@ -80,6 +80,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
@@ -143,6 +144,75 @@ fun App(state: AppState) {
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
         if (state.updateDialog) UpdateDialog(state)
+        if (state.needAdmin) AdminDialog(state)
+    }
+}
+
+@Composable
+private fun AdminDialog(state: AppState) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { state.cancelAdmin() },
+        title = { Text("Нужны права администратора") },
+        text = {
+            Text(
+                "Режим «Весь компьютер» создаёт виртуальную сетевую карту — для этого Windows требует права администратора. " +
+                    "Приложение перезапустится, Windows покажет запрос — нажмите «Да»."
+            )
+        },
+        confirmButton = { androidx.compose.material3.Button(onClick = { state.restartAsAdmin() }) { Text("Перезапустить") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { state.cancelAdmin() }) { Text("Системный прокси") } },
+    )
+}
+
+/** Programs that bypass the VPN in TUN mode: running ones + any .exe picked by hand. */
+@Composable
+private fun AppsPage(state: AppState, onBack: () -> Unit) {
+    var apps by remember { mutableStateOf<List<RunningApps.App>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { apps = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { RunningApps.list() } }
+    val excluded = state.excludedApps
+    // Excluded ones first (also those not running now), then the running ones.
+    val rows = (excluded.sortedBy { it.lowercase() }.map { e -> apps.firstOrNull { it.exe.equals(e, true) } ?: RunningApps.App(e, "") } +
+        apps.filter { a -> excluded.none { it.equals(a.exe, true) } })
+        .filter { query.isBlank() || query.trim().lowercase() in it.exe.lowercase() }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(Modifier.widthIn(max = 700.dp).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
+                Text("Раздельное туннелирование", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+            Text(
+                "Отмеченные программы идут в интернет напрямую, мимо VPN. Остальные — через VPN. " +
+                    "Изменения применятся при выходе с этой страницы.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                SearchField(query, { query = it }, Modifier.weight(1f))
+                OutlinedButton(onClick = {
+                    val fd = java.awt.FileDialog(null as java.awt.Frame?, "Выберите программу", java.awt.FileDialog.LOAD)
+                    fd.setFilenameFilter { _, name -> name.endsWith(".exe", true) }
+                    fd.file = "*.exe"
+                    fd.isVisible = true
+                    fd.file?.let { state.setExcluded(it, true) }
+                }) { Text("Добавить .exe") }
+            }
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(rows, key = { it.exe.lowercase() }) { app ->
+                    val on = excluded.any { it.equals(app.exe, true) }
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface)
+                            .clickable { state.setExcluded(app.exe, !on) }.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(app.exe, fontWeight = FontWeight.Medium)
+                            if (app.path.isNotEmpty()) Text(app.path, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        androidx.compose.material3.Switch(checked = on, onCheckedChange = { state.setExcluded(app.exe, it) })
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -573,7 +643,10 @@ private fun Status(state: AppState) {
                 LaunchedEffect(vpn.since) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
                 val s = (now - vpn.since) / 1000
                 Text("%02d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Браузеры и большинство программ идут через VPN", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (state.mode == "tun") "Весь трафик компьютера идёт через VPN" else "Браузеры и большинство программ идут через VPN",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             VpnState.Connecting -> Text("Устанавливаем соединение", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             is VpnState.Error -> Text(vpn.message, fontSize = 13.sp, color = Red, textAlign = TextAlign.Center)
@@ -805,6 +878,8 @@ private fun Card(content: @Composable ColumnScope.() -> Unit) {
 private fun SettingsPage(state: AppState) {
     val uri = LocalUriHandler.current
     var confirmLogout by remember { mutableStateOf(false) }
+    var showApps by remember { mutableStateOf(false) }
+    if (showApps) { AppsPage(state) { showApps = false; state.applyExclusions() }; return }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(
             Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -827,11 +902,32 @@ private fun SettingsPage(state: AppState) {
             }
             Card {
                 Text("Режим подключения", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(3.dp)) {
+                    listOf("tun" to "Весь компьютер (TUN)", "proxy" to "Системный прокси").forEach { (v, t) ->
+                        val sel = state.mode == v
+                        Box(
+                            Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(if (sel) Brand else Color.Transparent)
+                                .clickable { state.changeMode(v) }.padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { Text(t, color = if (sel) Color.White else MaterialTheme.colorScheme.onSurface, fontSize = 13.sp) }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
                 Text(
-                    "Системный прокси: через VPN идут браузеры и большинство программ. Игры и часть приложений его не используют — " +
-                        "для них появится режим TUN. При выходе из приложения прокси выключается.",
+                    if (state.mode == "tun")
+                        "Через VPN идёт весь трафик компьютера: браузеры, игры, Discord, торренты. Нужны права администратора — " +
+                            "Windows спросит при включении. Отдельные программы можно пустить мимо VPN."
+                    else
+                        "Через VPN идут браузеры и программы, которые используют системный прокси. Игры и часть приложений " +
+                            "его не используют — для них выберите «Весь компьютер».",
                     fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (state.mode == "tun") {
+                    Spacer(Modifier.height(6.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    SettingsRow("Раздельное туннелирование" + if (state.excludedApps.isNotEmpty()) " · ${state.excludedApps.size}" else "") { showApps = true }
+                }
             }
             Card {
                 SettingsRow("Обновить подписку") { state.refresh() }

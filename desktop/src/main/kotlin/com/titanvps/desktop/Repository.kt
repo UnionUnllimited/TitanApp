@@ -65,7 +65,15 @@ object Repository {
 
     // ------------------------------------------------------------------ state
 
-    data class State(val subscription: Subscription?, val selectedId: String?, val theme: String)
+    data class State(
+        val subscription: Subscription?,
+        val selectedId: String?,
+        val theme: String,
+        /** "proxy" (system proxy) or "tun". */
+        val mode: String = "proxy",
+        /** Exe names that bypass the VPN in TUN mode. */
+        val excludedApps: Set<String> = emptySet(),
+    )
 
     fun load(): State {
         val o = runCatching { JSONObject(stateFile.readText()) }.getOrNull() ?: return State(null, null, "system")
@@ -84,11 +92,13 @@ object Repository {
                 fetchedAt = s.optLong("fetchedAt"),
             )
         }
-        return State(sub, o.optString("selected").ifEmpty { null }, o.optString("theme", "system"))
+        val excluded = o.optJSONArray("excludedApps")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
+        return State(sub, o.optString("selected").ifEmpty { null }, o.optString("theme", "system"), o.optString("mode", "proxy"), excluded)
     }
 
     fun save(state: State) {
         val o = JSONObject().put("theme", state.theme).put("selected", state.selectedId ?: "")
+            .put("mode", state.mode).put("excludedApps", JSONArray(state.excludedApps.sorted()))
         state.subscription?.let { s ->
             o.put("subscription", JSONObject()
                 .put("url", s.url).put("fetchedAt", s.fetchedAt)

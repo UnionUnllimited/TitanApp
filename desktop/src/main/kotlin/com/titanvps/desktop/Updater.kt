@@ -93,7 +93,7 @@ object Updater {
                 // locked: a locked file makes Windows Installer hang on "configuring".
                 appendLine(":wait")
                 appendLine("tasklist /FI \"PID eq $pid\" | find \"$pid\" >nul && (timeout /t 1 /nobreak >nul & goto wait)")
-                appendLine("powershell -NoProfile -Command \"Get-Process xray -ErrorAction SilentlyContinue | Where-Object { \$_.Path -like '$coreDir*' } | Stop-Process -Force\"")
+                appendLine("powershell -NoProfile -Command \"Get-Process xray,sing-box -ErrorAction SilentlyContinue | Where-Object { \$_.Path -like '$coreDir*' } | Stop-Process -Force\"")
                 appendLine("timeout /t 1 /nobreak >nul")
                 appendLine("msiexec /i \"${msi.absolutePath}\" /passive /norestart")
                 if (exe != null) appendLine("start \"\" \"$exe\"")
