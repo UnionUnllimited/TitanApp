@@ -124,6 +124,7 @@ object Pinger {
     private val core = XrayProcess("ping")
     private val listPool = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL) { r -> Thread(r).apply { isDaemon = true } }
     private val singlePool = java.util.concurrent.Executors.newCachedThreadPool { r -> Thread(r).apply { isDaemon = true } }
+    private val recheckPool = java.util.concurrent.Executors.newFixedThreadPool(3) { r -> Thread(r).apply { isDaemon = true } }
     private val timer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r).apply { isDaemon = true } }
     private val active = java.util.concurrent.atomic.AtomicInteger()
     private var idleStop: java.util.concurrent.ScheduledFuture<*>? = null
@@ -193,15 +194,19 @@ object Pinger {
             pool.submit {
                 synchronized(lock) { ids.filter { started.add(it) }.takeIf { it.isNotEmpty() }?.let(onStart) }
                 val port = s.ports.getValue(key)
-                // Best of two cold attempts, then one patient retry.
-                var ms = bestOf(timed(port, 5), timed(port, 5))
-                if (ms < 0) ms = timed(port, 10)
+                // One cold attempt (a dead server costs 4 s); if it answered, a second one
+                // and the better of the two.
+                var ms = timed(port, 4)
+                if (ms >= 0) ms = bestOf(ms, timed(port, 3))
                 // In a full run a bad result is often just the crowd (Hysteria/QUIC suffers
                 // most): measure it again alone once the list is done.
                 if (!single && (ms < 0 || ms > RECHECK_ABOVE_MS)) recheck[key] = ms else report(key, ms)
             }
         }.forEach { runCatching { it.get() } }
-        for ((key, first) in recheck.toList()) report(key, bestOf(first, timed(s.ports.getValue(key), 10)))
+        // A few at a time, one attempt each; keep the better of the two runs.
+        recheck.toList().map { (key, first) ->
+            recheckPool.submit { report(key, bestOf(first, timed(s.ports.getValue(key), 6))) }
+        }.forEach { runCatching { it.get() } }
     }
 
     private fun bestOf(a: Long, b: Long): Long = when {
@@ -216,7 +221,7 @@ object Pinger {
             .proxy(java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port)))
             .connectTimeout(timeoutSec, TimeUnit.SECONDS)
             .readTimeout(timeoutSec, TimeUnit.SECONDS)
-            .callTimeout(timeoutSec + 2, TimeUnit.SECONDS)
+            .callTimeout(timeoutSec, TimeUnit.SECONDS) // the whole attempt, not per phase
             .retryOnConnectionFailure(false)
             .build()
         return try {

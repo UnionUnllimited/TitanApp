@@ -37,6 +37,7 @@ class PingService : Service() {
     private val requests = Executors.newCachedThreadPool()
     private val listPool: ExecutorService = Executors.newFixedThreadPool(PARALLEL)
     private val singlePool: ExecutorService = Executors.newCachedThreadPool()
+    private val recheckPool: ExecutorService = Executors.newFixedThreadPool(RECHECK_PARALLEL)
     private val main = Handler(Looper.getMainLooper())
     private val coreLock = Any()
     private var session: Session? = null
@@ -135,14 +136,20 @@ class PingService : Service() {
             }
         }.forEach { runCatching { it.get() } }
         // One attempt each, one at a time; keep the better of the two runs.
-        for ((key, first) in recheck.toList()) report(key, bestOf(first, measure(s.ports.getValue(key), RETRY_TIMEOUT_SEC)))
+        // A few at a time, one attempt each; keep the better of the two runs.
+        recheck.toList().map { (key, first) ->
+            recheckPool.submit { report(key, bestOf(first, measure(s.ports.getValue(key), RECHECK_TIMEOUT_SEC))) }
+        }.forEach { runCatching { it.get() } }
         return best.isNotEmpty()
     }
 
-    /** Best of two cold attempts, then one patient retry if both failed. */
+    /**
+     * One cold attempt; if it answered, a second one (the first handshake is often the
+     * slow part) and the better of the two. A dead server costs [TIMEOUT_SEC] here.
+     */
     private fun measureKey(port: Int): Long {
-        val r = bestOf(measure(port, TIMEOUT_SEC), measure(port, TIMEOUT_SEC))
-        return if (r >= 0) r else measure(port, RETRY_TIMEOUT_SEC)
+        val first = measure(port, TIMEOUT_SEC)
+        return if (first < 0) first else bestOf(first, measure(port, SECOND_TIMEOUT_SEC))
     }
 
     private fun bestOf(a: Long, b: Long): Long = when {
@@ -157,7 +164,7 @@ class PingService : Service() {
             .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
             .connectTimeout(timeoutSec.toLong(), TimeUnit.SECONDS)
             .readTimeout(timeoutSec.toLong(), TimeUnit.SECONDS)
-            .callTimeout(timeoutSec + 2L, TimeUnit.SECONDS)
+            .callTimeout(timeoutSec.toLong(), TimeUnit.SECONDS) // the whole attempt, not per phase
             .retryOnConnectionFailure(false)
             .build()
         val request = Request.Builder().url(PING_URL).build()
@@ -217,6 +224,7 @@ class PingService : Service() {
         requests.shutdownNow()
         listPool.shutdownNow()
         singlePool.shutdownNow()
+        recheckPool.shutdownNow()
         super.onDestroy()
     }
 
@@ -230,8 +238,11 @@ class PingService : Service() {
         const val RESULT_STARTED = 2
         const val RESULT_DONE = 0
         private const val PING_URL = "https://www.gstatic.com/generate_204"
-        private const val TIMEOUT_SEC = 5
-        private const val RETRY_TIMEOUT_SEC = 10
+        private const val TIMEOUT_SEC = 4
+        private const val SECOND_TIMEOUT_SEC = 3
+        private const val RECHECK_TIMEOUT_SEC = 6
+        private const val RECHECK_PARALLEL = 3
+        private const val RETRY_TIMEOUT_SEC = 10 // pingBatch fallback
         private const val PARALLEL = 6 // more at once crowd each other out on a weak mobile network
         private const val MAX_PROBES = 200
         private const val RECHECK_ABOVE_MS = 1500L
