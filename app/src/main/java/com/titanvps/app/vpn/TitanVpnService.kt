@@ -109,7 +109,13 @@ class TitanVpnService : VpnService() {
                 user = java.util.UUID.randomUUID().toString(),
                 password = java.util.UUID.randomUUID().toString(),
             )
-            val config = XrayConfigs.buildRunConfig(server.xrayJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir, server.proxyTag, localProxy)
+            // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound points at it.
+            val serverJson = com.titanvps.app.core.Plugins.endpoint(server.name, server.xrayJson, server.proxyTag)?.let { ep ->
+                val p = com.titanvps.app.core.PluginProcess(this, ep).also { plugin = it }
+                p.start()
+                com.titanvps.app.core.Plugins.withLocalSocks(server.xrayJson, server.proxyTag, p.port)
+            } ?: server.xrayJson
+            val config = XrayConfigs.buildRunConfig(serverJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir, server.proxyTag, localProxy)
             XrayCore.start(config, underlyingDns) { fd -> protect(fd) }
             VpnStatus.localProxy = localProxy
 
@@ -131,6 +137,9 @@ class TitanVpnService : VpnService() {
             stopSelf()
         }
     }
+
+    /** Naive / Mieru client of the current server, if it is one. */
+    private var plugin: com.titanvps.app.core.PluginProcess? = null
 
     private var wifiJob: Job? = null
     private var updateJob: Job? = null
@@ -294,6 +303,8 @@ class TitanVpnService : VpnService() {
         VpnStatus.localProxy = null
         if (tun != null) VpnStatus.set(VpnState.Disconnecting)
         XrayCore.stop()
+        plugin?.close()
+        plugin = null
         runCatching { tun?.close() }
         tun = null
         VpnStatus.set(VpnState.Disconnected)

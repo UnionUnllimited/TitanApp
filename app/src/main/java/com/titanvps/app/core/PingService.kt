@@ -32,7 +32,13 @@ import java.util.concurrent.TimeUnit
 class PingService : Service() {
 
     /** The running ping core: endpoint key → local port, server id → its endpoint keys. */
-    private class Session(val serverSigs: Map<String, Int>, val ports: Map<String, Int>, val serverKeys: Map<String, List<String>>)
+    private class Session(
+        val serverSigs: Map<String, Int>,
+        val ports: Map<String, Int>,
+        val serverKeys: Map<String, List<String>>,
+        /** Naive / Mieru clients for the servers that need one. */
+        val plugins: List<PluginProcess> = emptyList(),
+    )
 
     private val requests = Executors.newCachedThreadPool()
     private val listPool: ExecutorService = Executors.newFixedThreadPool(PARALLEL)
@@ -76,14 +82,26 @@ class PingService : Service() {
         val sigs = servers.associate { it.getString("id") to (it.getString("json") + it.getString("tag")).hashCode() }
         // Reuse the warm core if it already has these servers unchanged (e.g. a subset).
         session?.takeIf { s -> sigs.all { (id, sig) -> s.serverSigs[id] == sig } }?.let { return it }
-        if (session != null) XrayCore.stopPlain()
-        session = null
+        stopSession()
         XrayCore.ensurePingDns()
+
+        // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it.
+        val plugins = mutableListOf<PluginProcess>()
+        val jsonOf = servers.associate { item ->
+            val json = item.getString("json")
+            val tag = item.getString("tag")
+            val ep = Plugins.endpoint(item.optString("name"), json, tag)
+            item.getString("id") to (ep?.let {
+                runCatching { PluginProcess(this, it).also { p -> p.start(); plugins += p } }
+                    .map { p -> Plugins.withLocalSocks(json, tag, p.port) }
+                    .getOrDefault(json) // client didn't start: the probe just times out
+            } ?: json)
+        }
 
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
         val serverKeys = servers.associate { item ->
-            val json = item.getString("json")
+            val json = jsonOf.getValue(item.getString("id"))
             item.getString("id") to XrayConfigs.pingTags(json, item.getString("tag")).mapNotNull { tag ->
                 val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
                 if (key !in probes && probes.size < MAX_PROBES) probes[key] = Probe(json, tag)
@@ -92,8 +110,13 @@ class PingService : Service() {
         }
         val keys = probes.keys.toList()
         val ports = XrayCore.freePorts(keys.size)
-        XrayCore.runPlain(PingConfig.build(keys.map { probes.getValue(it).let { p -> PingConfig.Item(p.json, p.tag) } }, ports))
-        Session(sigs, keys.zip(ports).toMap(), serverKeys).also { session = it }
+        try {
+            XrayCore.runPlain(PingConfig.build(keys.map { probes.getValue(it).let { p -> PingConfig.Item(p.json, p.tag) } }, ports))
+        } catch (e: Exception) {
+            plugins.forEach { runCatching { it.close() } }
+            throw e
+        }
+        Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins).also { session = it }
     }
 
     /**
@@ -206,21 +229,26 @@ class PingService : Service() {
         receiver?.send(RESULT_STARTED, Bundle().apply { putStringArray(KEY_IDS, ids.toTypedArray()) })
     }
 
+    /** Stops the ping core and its Naive / Mieru clients (call under [coreLock]). */
+    private fun stopSession() {
+        session?.let { s ->
+            XrayCore.stopPlain()
+            s.plugins.forEach { runCatching { it.close() } }
+        }
+        session = null
+    }
+
     private fun shutdownIfIdle() {
         synchronized(coreLock) {
             if (active.get() > 0) return
-            if (session != null) XrayCore.stopPlain()
-            session = null
+            stopSession()
         }
         stopSelf()
     }
 
     override fun onDestroy() {
         main.removeCallbacks(idleStop)
-        synchronized(coreLock) {
-            if (session != null) runCatching { XrayCore.stopPlain() }
-            session = null
-        }
+        synchronized(coreLock) { runCatching { stopSession() } }
         requests.shutdownNow()
         listPool.shutdownNow()
         singlePool.shutdownNow()

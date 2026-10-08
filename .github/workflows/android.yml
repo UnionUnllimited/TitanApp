@@ -46,6 +46,12 @@ jobs:
       - name: Download geo files
         run: ./scripts/download-geo.sh
 
+      # Naive / Mieru servers: their clients run as local SOCKS (core/Plugins.kt).
+      - name: Download Naive and Mieru clients
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./scripts/download-plugins.sh
+
       - name: Unit tests
         run: ./gradlew testDebugUnitTest
 

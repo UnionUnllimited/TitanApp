@@ -19,3 +19,5 @@ app/src/main/assets/*.dat
 # Shared signing key so new builds install over old ones.
 !app/titan.keystore
 desktop/src/main/resources/flags/
+# Downloaded by scripts/download-plugins.sh
+app/src/main/jniLibs/

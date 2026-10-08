@@ -5,9 +5,11 @@ Titan VPS: Naive + Mieru users from Remnawave.
 Runs on a node with Caddy (forwardproxy@naive) and/or mita (Mieru). Every run it reads
 the active users from the Remnawave API and writes them as logins for both protocols:
 
-    login = password = the user's credential from Remnawave: the VLESS UUID, or the
-    Shadowsocks password when the Naive/Mieru hosts sit on Shadowsocks placeholder
-    inbounds (CREDENTIAL=ss) — whatever the app finds in that host's outbound
+    secret = the user's credential from Remnawave: the VLESS UUID, or the Shadowsocks
+    password when the Naive/Mieru hosts sit on Shadowsocks placeholder inbounds
+    (CREDENTIAL=ss) — whatever the app finds in that host's outbound;
+    h = sha256("titan:" + secret) as hex; login = h[0:16], password = h[16:48]
+    (URL-safe for naive links; the app derives the same, see app core/Plugins.kt)
 
 so only active subscriptions can connect; expired/disabled ones drop out on the next run.
 Files are rewritten and the services reloaded only when the user list changed.
@@ -91,6 +93,11 @@ def active_users(base, token, only_squads, credential):
     return sorted(set(out))
 
 
+def derive(secret):
+    h = hashlib.sha256(("titan:" + secret).encode()).hexdigest()
+    return h[:16], h[16:48]
+
+
 def extra(spec):
     pairs = []
     for item in (spec or "").split():
@@ -116,7 +123,7 @@ def write_if_changed(path, content):
 
 
 def sync_naive(path, uuids, extras):
-    lines = [f"basic_auth {u} {u}" for u in uuids] + [f"basic_auth {n} {p}" for n, p in extras]
+    lines = [f"basic_auth {u} {p}" for u, p in map(derive, uuids)] + [f"basic_auth {n} {p}" for n, p in extras]
     if not lines:
         # Caddy needs at least one credential, or forward_proxy becomes open to everyone.
         lines = [f"basic_auth disabled-{os.urandom(8).hex()} {os.urandom(16).hex()}"]
@@ -133,7 +140,7 @@ def sync_mieru(path, uuids, extras):
     except FileNotFoundError:
         print(f"mieru: no {path}, skipped")
         return False
-    users = [{"name": u, "password": u} for u in uuids] + [{"name": n, "password": p} for n, p in extras]
+    users = [{"name": u, "password": p} for u, p in map(derive, uuids)] + [{"name": n, "password": p} for n, p in extras]
     if not users:
         users = [{"name": "disabled-" + os.urandom(8).hex(), "password": os.urandom(16).hex()}]
     if cfg.get("users") == users:

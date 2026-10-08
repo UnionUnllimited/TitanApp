@@ -33,7 +33,7 @@ object PingClient {
     fun ping(context: Context, all: List<Server>, targets: List<String>): Flow<Event> = callbackFlow {
         val file = File(context.cacheDir, "ping-${System.nanoTime()}.json")
         val arr = JSONArray()
-        all.forEach { arr.put(JSONObject().put("id", it.id).put("json", it.xrayJson).put("tag", it.proxyTag)) }
+        all.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name).put("json", it.xrayJson).put("tag", it.proxyTag)) }
         file.writeText(JSONObject().put("servers", arr).put("targets", JSONArray(targets)).toString())
 
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {

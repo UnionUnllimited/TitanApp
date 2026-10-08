@@ -73,6 +73,8 @@ android {
         // Compressed native libs: the APK is far smaller to download (libXray is ~3x
         // compressible); only the phone's own ABI gets extracted on install.
         jniLibs.useLegacyPackaging = true
+        // Naive / Mieru clients are executables, not libraries: package them as they are.
+        jniLibs.keepDebugSymbols += setOf("**/libnaive.so", "**/libmieru.so")
     }
 }
 
