@@ -33,8 +33,9 @@ class SubscriptionRepository(private val context: Context) {
     val selectedId: StateFlow<String?> = _selectedId.asStateFlow()
 
     private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(20, TimeUnit.SECONDS)
         .build()
 
     fun select(serverId: String?) {

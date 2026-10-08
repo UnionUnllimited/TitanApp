@@ -62,7 +62,9 @@ class TitanVpnService : VpnService() {
         val repo = TitanApp.get(this).repository
         try {
             if (repo.subscription.value == null) error("Приложение не активировано")
-            if (repo.isStale()) runCatching { repo.refresh() }
+            // Connect on the saved configs right away; the subscription is refreshed in the
+            // background once connected, so a down subscription server never blocks connecting.
+            val refreshAfter = repo.isStale()
             var server = repo.selectedServer() ?: error("В подписке нет серверов")
             // Bypass servers only on mobile data (tile / always-on can start us on Wi-Fi).
             val all = repo.subscription.value!!.servers
@@ -116,6 +118,7 @@ class TitanVpnService : VpnService() {
             startWatcher(server)
             watchWifi(server, all)
             watchUpdates()
+            if (refreshAfter) scope.launch { runCatching { repo.refresh() } }
         } catch (e: Exception) {
             stopVpn()
             android.util.Log.w("Titan", "connect failed", e)
