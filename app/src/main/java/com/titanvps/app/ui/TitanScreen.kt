@@ -151,12 +151,11 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
                     viewModel, sub, busy, onConnect,
                     onOpenSubscription = { tab = MainTab.SUBSCRIPTION },
                 )
-                tab == MainTab.SUBSCRIPTION -> SubscriptionScreen(viewModel, sub) { tab = MainTab.HOME }
+                tab == MainTab.SUBSCRIPTION -> SubscriptionScreen(viewModel, sub, onOpenDevices = { overlay = Overlay.DEVICES }) { tab = MainTab.HOME }
                 else -> ProfileScreen(
                     viewModel, sub,
                     onOpenApps = { overlay = Overlay.APPS },
                     onOpenDiagnostics = { overlay = Overlay.DIAGNOSTICS },
-                    onOpenDevices = { overlay = Overlay.DEVICES },
                     onOpenHome = { tab = MainTab.HOME },
                 )
             }

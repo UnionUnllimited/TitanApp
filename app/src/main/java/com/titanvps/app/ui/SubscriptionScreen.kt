@@ -31,6 +31,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,8 +52,9 @@ import java.util.concurrent.TimeUnit
  * button; renewing, buying GB etc. all happen in the cabinet.
  */
 @Composable
-internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onBack: () -> Unit) {
+internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onOpenDevices: () -> Unit, onBack: () -> Unit) {
     val info = sub.info
+    val account by viewModel.account.collectAsState()
     val now = System.currentTimeMillis() / 1000
     val active = info.expireAt <= 0 || info.expireAt > now
 
@@ -124,6 +127,16 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onB
             } else {
                 expiry(Modifier.fillMaxWidth())
                 traffic(Modifier.fillMaxWidth())
+            }
+
+            SectionCard {
+                NavRow(
+                    "Мои устройства",
+                    icon = Icons.Outlined.Devices,
+                    value = account?.takeIf { it.devicesEnabled }?.devices?.size?.toString(),
+                    divider = false,
+                    onClick = onOpenDevices,
+                )
             }
 
             Button(
