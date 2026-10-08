@@ -43,6 +43,7 @@ internal fun ProfileScreen(
     sub: Subscription,
     onOpenApps: () -> Unit,
     onOpenDiagnostics: () -> Unit,
+    onOpenDevices: () -> Unit,
     onOpenHome: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -55,6 +56,7 @@ internal fun ProfileScreen(
     var confirmLogout by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
+    val account by viewModel.account.collectAsState()
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(
@@ -101,6 +103,7 @@ internal fun ProfileScreen(
                     subtitle = "VPN включится сам при запуске приложения, включении и после сна устройства",
                 ) { viewModel.setAutoConnect(it) }
                 NavRow("Раздельное туннелирование", onClick = onOpenApps)
+                NavRow("Мои устройства", value = account?.takeIf { it.devicesEnabled }?.devices?.size?.toString(), onClick = onOpenDevices)
                 ToggleRow("Автопереход на обходы", autoBypass, divider = false) { viewModel.setAutoBypass(it) }
             }
 

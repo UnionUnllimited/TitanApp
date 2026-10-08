@@ -90,8 +90,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _pinging = MutableStateFlow(false)
     val pinging = _pinging.asStateFlow()
 
+    /** Account status and devices from the bot (null until loaded or if unavailable). */
+    private val _account = MutableStateFlow<com.titanvps.app.data.AccountApi.Info?>(null)
+    val account = _account.asStateFlow()
+    private val _accountLoading = MutableStateFlow(false)
+    val accountLoading = _accountLoading.asStateFlow()
+
     init {
         if (repo.isStale()) refresh(silent = true)
+        loadAccount()
+    }
+
+    fun loadAccount() {
+        val url = subscription.value?.url ?: return
+        if (_accountLoading.value) return
+        viewModelScope.launch {
+            _accountLoading.value = true
+            runCatching { com.titanvps.app.data.AccountApi.fetch(url) }
+                .onSuccess { _account.value = it }
+                .onFailure { android.util.Log.w("Titan", "account info: $it") }
+            _accountLoading.value = false
+        }
     }
 
     // ------------------------------------------------------------ subscription
@@ -103,6 +122,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun activate(link: String) = launchBusy {
         val first = repo.subscription.value == null
         repo.activate(link)
+        loadAccount()
         _message.value = "Подписка подключена"
         if (first || vpnState.value !is VpnState.Connected) _connectRequests.send(Unit)
     }
@@ -129,6 +149,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         disconnect()
         repo.logout()
         _pings.value = emptyMap()
+        _account.value = null
     }
 
     fun consumeMessage() {

@@ -132,6 +132,7 @@ internal fun HomeScreen(
     val pings by viewModel.pings.collectAsState()
     val pinging by viewModel.pinging.collectAsState()
     val measuring by viewModel.measuring.collectAsState()
+    val account by viewModel.account.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
     val onMobile by viewModel.onMobile.collectAsState()
     val theme by viewModel.theme.collectAsState()
@@ -158,6 +159,14 @@ internal fun HomeScreen(
         item { SubscriptionCard(sub, onOpenSubscription) }
         item { PowerSwitch(state, Modifier.padding(top = 6.dp), onToggle) }
         item { StatusBlock(state, selected, selected?.let { pings[it.id] }, selectedLocked) }
+        account?.status?.let { status ->
+            val text = when (status) {
+                "BLOCKED" -> "Аккаунт заблокирован. Напишите в поддержку"
+                "MAINTENANCE" -> "Идут технические работы. Подключение может не работать"
+                else -> null
+            }
+            if (text != null) item { AccountBanner(text) { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) } }
+        }
     }
     val listItems: LazyListScope.() -> Unit = {
         item {
@@ -777,3 +786,15 @@ private fun Modifier.marqueeName(): Modifier = this
         )
     }
     .basicMarquee(initialDelayMillis = 2000, repeatDelayMillis = 2500)
+
+/** Blocked account / maintenance, from the bot; tap → support. */
+@Composable
+private fun AccountBanner(text: String, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+    ) {
+        Text(text, Modifier.padding(14.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}

@@ -146,6 +146,7 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
                 sub == null -> WelcomeScreen(viewModel, busy)
                 overlay == Overlay.APPS -> AppsScreen(viewModel) { overlay = null; viewModel.reconnectIfConnected() }
                 overlay == Overlay.DIAGNOSTICS -> DiagnosticsScreen { overlay = null }
+                overlay == Overlay.DEVICES -> DevicesScreen(viewModel) { overlay = null }
                 tab == MainTab.HOME -> HomeScreen(
                     viewModel, sub, busy, onConnect,
                     onOpenSubscription = { tab = MainTab.SUBSCRIPTION },
@@ -155,6 +156,7 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
                     viewModel, sub,
                     onOpenApps = { overlay = Overlay.APPS },
                     onOpenDiagnostics = { overlay = Overlay.DIAGNOSTICS },
+                    onOpenDevices = { overlay = Overlay.DEVICES },
                     onOpenHome = { tab = MainTab.HOME },
                 )
             }
@@ -168,7 +170,7 @@ private enum class MainTab(val title: String, val icon: ImageVector, val selecte
     PROFILE("Профиль", Icons.Outlined.Person, Icons.Filled.Person),
 }
 
-private enum class Overlay { APPS, DIAGNOSTICS }
+private enum class Overlay { APPS, DIAGNOSTICS, DEVICES }
 
 /** Logo and "Titan VPS" on a plain background, as in the mockup. */
 @Composable
