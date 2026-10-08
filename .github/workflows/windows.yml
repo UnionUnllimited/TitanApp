@@ -6,6 +6,11 @@ on:
     paths: ["desktop/**", ".github/workflows/windows.yml"]
   workflow_dispatch:
 
+# One run at a time per branch: two runs publishing releases at once made one fail.
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: windows-latest

@@ -10,6 +10,11 @@ on:
         description: libXray git ref (tag or branch)
         default: main
 
+# One run at a time per branch: two runs publishing releases at once made one fail.
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
