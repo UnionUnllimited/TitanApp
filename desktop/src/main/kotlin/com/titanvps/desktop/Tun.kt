@@ -40,7 +40,7 @@ object TunConfig {
     const val INTERFACE = "Titan VPS"
 
     /** Exe names that must never go into the tunnel (loops otherwise). */
-    private val ALWAYS_DIRECT = listOf("xray.exe", "sing-box.exe", "naive.exe", "mieru.exe", "Titan VPS.exe")
+    private val ALWAYS_DIRECT = listOf("xray.exe", "sing-box.exe", "naive.exe", "mieru.exe", "samizdat.exe", "Titan VPS.exe")
 
     fun build(socksPort: Int, excluded: Collection<String>, logDir: String): String {
         val direct = (ALWAYS_DIRECT + excluded).distinctBy { it.lowercase() }
@@ -149,7 +149,7 @@ object RunningApps {
         "svchost.exe", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe", "smss.exe",
         "dwm.exe", "fontdrvhost.exe", "conhost.exe", "runtimebroker.exe", "sihost.exe", "taskhostw.exe",
         "ctfmon.exe", "searchindexer.exe", "system", "registry", "dllhost.exe", "wmiprvse.exe",
-        "xray.exe", "sing-box.exe", "naive.exe", "mieru.exe", "titan vps.exe", "java.exe", "javaw.exe",
+        "xray.exe", "sing-box.exe", "naive.exe", "mieru.exe", "samizdat.exe", "titan vps.exe", "java.exe", "javaw.exe",
     )
 
     fun list(): List<App> = ProcessHandle.allProcesses().toList()

@@ -3,7 +3,7 @@ name: Windows
 on:
   push:
     branches: [main, "claude/**"]
-    paths: ["desktop/**", ".github/workflows/windows.yml"]
+    paths: ["desktop/**", "plugins/**", ".github/workflows/windows.yml"]
   workflow_dispatch:
 
 # One run at a time per branch: two runs publishing releases at once made one fail.
@@ -25,6 +25,11 @@ jobs:
           java-version: 17
 
       - uses: gradle/actions/setup-gradle@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/samizdat/go.mod
+          cache-dependency-path: plugins/samizdat/go.sum
 
       # Xray core for Windows + the same geo files as Android.
       - name: Download xray.exe and geo files
@@ -64,6 +69,10 @@ jobs:
           Invoke-WebRequest -Uri $mr.browser_download_url -OutFile mieru.zip
           Expand-Archive mieru.zip -DestinationPath mieru
           Copy-Item (Get-ChildItem mieru -Recurse -Filter mieru.exe | Select-Object -First 1).FullName $dest/
+          # Samizdat: our small client on getlantern/samizdat (plugins/samizdat).
+          $env:CGO_ENABLED = "0"
+          go build -C plugins/samizdat -trimpath -ldflags "-s -w" -o "$PWD/$dest/samizdat.exe" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem $dest
 
       # Round flag images: Windows has no flag emoji.

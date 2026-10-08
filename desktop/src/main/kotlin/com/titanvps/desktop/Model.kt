@@ -10,6 +10,13 @@ object Config {
     const val TELEGRAM_URL = "https://t.me/TitanVPS_bot"
     /** Our own UA first; "Xray" if the server doesn't answer it (same as Android). */
     val USER_AGENTS = listOf("Titan", "Xray")
+
+    /**
+     * Samizdat nodes (lantern-box): the server's X25519 public key and the cover site it
+     * masquerades as. Public by design (like a Reality pbk); one key for all our nodes.
+     */
+    const val SAMIZDAT_PUBLIC_KEY = ""
+    const val SAMIZDAT_SNI = "ok.ru"
 }
 
 data class SubscriptionInfo(

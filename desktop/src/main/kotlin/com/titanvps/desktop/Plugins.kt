@@ -10,17 +10,19 @@ import java.net.Socket
 import java.security.MessageDigest
 
 /**
- * NaiveProxy and Mieru servers, same as on Android: hosts named "… Naive" / "… Mieru"
+ * NaiveProxy, Mieru and Samizdat servers: hosts named "… Naive" / "… Mieru" / "… Samizdat"
  * carry the node's address, port and the user's secret; we run the protocol's own client
- * (naive.exe / mieru.exe next to xray.exe) as a local SOCKS and point Xray's proxy
- * outbound at it. Credentials: sha256("titan:" + secret), as server/titan-node-sync.py.
+ * (naive.exe / mieru.exe / samizdat.exe next to xray.exe) as a local SOCKS and point Xray's
+ * proxy outbound at it. Credentials: sha256("titan:" + secret), as server/titan-node-sync.py.
  */
 object Plugins {
-    enum class Kind(val exe: String) { NAIVE("naive.exe"), MIERU("mieru.exe") }
+    enum class Kind(val exe: String) { NAIVE("naive.exe"), MIERU("mieru.exe"), SAMIZDAT("samizdat.exe") }
 
     data class Endpoint(val kind: Kind, val host: String, val port: Int, val secret: String) {
         val user: String get() = derived().substring(0, 16)
         val password: String get() = derived().substring(16, 48)
+        /** Samizdat short id (8 bytes as hex). */
+        val shortId: String get() = derived().substring(48, 64)
         private fun derived(): String = MessageDigest.getInstance("SHA-256")
             .digest("titan:$secret".toByteArray()).joinToString("") { "%02x".format(it) }
     }
@@ -30,6 +32,7 @@ object Plugins {
         return when {
             "naive" in n -> Kind.NAIVE
             "mieru" in n -> Kind.MIERU
+            "samizdat" in n -> Kind.SAMIZDAT
             else -> null
         }
     }
@@ -86,6 +89,14 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
                 ProcessBuilder(exe.absolutePath, "run").apply {
                     environment()["MIERU_CONFIG_JSON_FILE"] = config.absolutePath
                 }
+            }
+            Plugins.Kind.SAMIZDAT -> {
+                if (Config.SAMIZDAT_PUBLIC_KEY.isEmpty()) throw IllegalStateException("Сервер пока не настроен")
+                ProcessBuilder(
+                    exe.absolutePath, "-listen", "127.0.0.1:$port",
+                    "-server", "${endpoint.host}:${endpoint.port}", "-sni", Config.SAMIZDAT_SNI,
+                    "-pubkey", Config.SAMIZDAT_PUBLIC_KEY, "-sid", endpoint.shortId,
+                )
             }
         }
         process = pb.directory(dir).redirectErrorStream(true).redirectOutput(log).start()
