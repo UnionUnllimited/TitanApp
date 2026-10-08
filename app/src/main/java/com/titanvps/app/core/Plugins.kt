@@ -95,12 +95,14 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
     /** Starts the client and waits until its SOCKS port answers. */
     fun start() {
         val exe = File(context.applicationInfo.nativeLibraryDir, endpoint.kind.lib)
+        note("${endpoint.kind}: start ${endpoint.host}:${endpoint.port} → 127.0.0.1:$port, exe=${exe.exists()} ${exe.canExecute()}")
         if (!exe.exists()) error("Этот сервер пока не поддерживается на вашем устройстве")
         val dir = File(context.filesDir, "plugins").apply { mkdirs() }
         val log = File(context.cacheDir, "${endpoint.kind.name.lowercase()}.log")
         val pb = when (endpoint.kind) {
             Plugins.Kind.NAIVE -> ProcessBuilder(
                 exe.absolutePath,
+                "--log",
                 "--listen=socks://127.0.0.1:$port",
                 "--proxy=https://${endpoint.user}:${endpoint.password}@${endpoint.host}:${endpoint.port}",
             )
@@ -117,14 +119,31 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
         // Ready when the local SOCKS port accepts connections (up to ~6 s).
         repeat(60) {
             if (process?.isAlive != true) {
-                Log.w("Titan", "${endpoint.kind} exited: " + runCatching { log.readLines().takeLast(5).joinToString(" | ") }.getOrDefault(""))
+                val tail = runCatching { log.readLines().takeLast(5).joinToString(" | ") }.getOrDefault("")
+                Log.w("Titan", "${endpoint.kind} exited: $tail")
+                note("${endpoint.kind}: exited ${runCatching { process?.exitValue() }.getOrNull()}: $tail")
                 error("Не удалось подключиться к серверу")
             }
-            if (runCatching { Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 200) } }.isSuccess) return
+            if (runCatching { Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 200) } }.isSuccess) {
+                note("${endpoint.kind}: ready on $port")
+                return
+            }
             Thread.sleep(100)
         }
+        note("${endpoint.kind}: no SOCKS on $port after 6 s")
         close()
         error("Не удалось подключиться к серверу")
+    }
+
+    /** One line in plugins.log (shown in Диагностика) — no secrets. */
+    private fun note(line: String) = runCatching {
+        val f = File(context.cacheDir, PLUGINS_LOG)
+        if (f.length() > 64 * 1024) f.writeText("")
+        f.appendText("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $line\n")
+    }
+
+    companion object {
+        const val PLUGINS_LOG = "plugins.log"
     }
 
     /** Mieru wants an IP: Go's resolver has no system DNS on Android, so we resolve here. */
