@@ -54,17 +54,27 @@ jobs:
           (Get-ChildItem desktop/src/main/resources/flags).Count
 
       - name: Build installer
-        run: .\gradlew.bat -p desktop packageExe packageMsi createDistributable --no-daemon
+        run: .\gradlew.bat -p desktop packageMsi createDistributable --no-daemon
+
+      # Our own installer (Inno Setup): branded wizard in Russian; /VERYSILENT for app updates.
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          $app = Resolve-Path "desktop/build/compose/binaries/main/app/Titan VPS"
+          & $iscc "/DAppVersion=1.0.${{ github.run_number }}" "/DAppDir=$app" desktop/installer/titan.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Collect files
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path out | Out-Null
-          Copy-Item "desktop/build/compose/binaries/main/exe/*.exe" "out/Titan VPS Setup.exe"
+          New-Item -ItemType Directory -Force -Path out, release | Out-Null
+          Copy-Item "out/inno/titan-vps-setup.exe" "out/Titan VPS Setup.exe"
           Copy-Item "desktop/build/compose/binaries/main/msi/*.msi" "out/Titan VPS.msi"
           Compress-Archive -Path "desktop/build/compose/binaries/main/app/Titan VPS" -DestinationPath "out/Titan VPS portable.zip"
-          New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item "out/Titan VPS Setup.exe" "release/titan-vps-setup.exe"
+          Copy-Item "out/inno/titan-vps-setup.exe" "release/titan-vps-setup.exe"
+          # Kept for apps up to windows-<this>: their updater installs the MSI.
           Copy-Item "out/Titan VPS.msi" "release/titan-vps.msi"
           Get-ChildItem out, release
 

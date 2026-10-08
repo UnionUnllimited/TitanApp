@@ -9,14 +9,15 @@ import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 /**
- * App updates from GitHub Releases (tag windows-<build>, asset titan-vps.msi), downloaded
- * only through the VPN (the local HTTP inbound), like on Android.
+ * App updates from GitHub Releases (tag windows-<build>, asset titan-vps-setup.exe — our
+ * Inno Setup installer, run silently), downloaded only through the VPN (the local HTTP
+ * inbound), like on Android.
  */
 object Updater {
-    data class Release(val build: Int, val name: String, val msiUrl: String)
+    data class Release(val build: Int, val name: String, val url: String)
 
     private const val RELEASES = "https://api.github.com/repos/UnionUnllimited/TitanApp/releases?per_page=30"
-    private const val ASSET = "titan-vps.msi"
+    private const val ASSET = "titan-vps-setup.exe"
 
     /** "1.0.<build>" from jpackage; 0 when run from the IDE. */
     val currentBuild: Int
@@ -54,8 +55,8 @@ object Updater {
     fun download(release: Release, proxyPort: Int, onProgress: (Float) -> Unit): File {
         val dir = File(System.getProperty("java.io.tmpdir"), "TitanVPS-update").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
-        val file = File(dir, "titan-vps-${release.build}.msi")
-        client(proxyPort, readSec = 60).newCall(Request.Builder().url(release.msiUrl).build()).execute().use { r ->
+        val file = File(dir, "titan-vps-setup-${release.build}.exe")
+        client(proxyPort, readSec = 60).newCall(Request.Builder().url(release.url).build()).execute().use { r ->
             if (!r.isSuccessful) error("HTTP ${r.code}")
             val total = r.body.contentLength()
             r.body.byteStream().use { input ->
@@ -76,15 +77,13 @@ object Updater {
     }
 
     /**
-     * Installs [msi] after this app exits and starts the new version. The caller must
-     * quit right after (the running app's files are locked).
+     * Installs [setup] silently after this app exits; the installer starts the new
+     * version. The caller must quit right after (the running app's files are locked).
      */
-    fun installAndRestart(msi: File) {
-        val exe = ProcessHandle.current().info().command().orElse(null)
-            ?.takeIf { it.endsWith(".exe", ignoreCase = true) && !it.endsWith("java.exe", ignoreCase = true) }
+    fun installAndRestart(setup: File) {
         val pid = ProcessHandle.current().pid()
         val coreDir = AppPaths.coreDir.absolutePath
-        val script = File(msi.parentFile, "update.cmd")
+        val script = File(setup.parentFile, "update.cmd")
         script.writeText(
             buildString {
                 appendLine("@echo off")
@@ -95,8 +94,7 @@ object Updater {
                 appendLine("tasklist /FI \"PID eq $pid\" | find \"$pid\" >nul && (timeout /t 1 /nobreak >nul & goto wait)")
                 appendLine("powershell -NoProfile -Command \"Get-Process xray,sing-box -ErrorAction SilentlyContinue | Where-Object { \$_.Path -like '$coreDir*' } | Stop-Process -Force\"")
                 appendLine("timeout /t 1 /nobreak >nul")
-                appendLine("msiexec /i \"${msi.absolutePath}\" /passive /norestart")
-                if (exe != null) appendLine("start \"\" \"$exe\"")
+                appendLine("\"${setup.absolutePath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS")
             }.replace("\n", "\r\n"),
             Charsets.UTF_8,
         )
