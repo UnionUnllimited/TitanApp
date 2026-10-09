@@ -3,6 +3,7 @@
 // and point Xray's proxy outbound at it (see desktop Plugins.kt / app core/Plugins.kt).
 //
 //	samizdat-client -listen 127.0.0.1:1080 -server host:port -sni ok.ru -pubkey <hex> -sid <hex>
+//	  [-fp chrome|firefox|safari] [-frag=false] [-recfrag=false] [-jitter=false] [-v]
 //
 // Only TCP (SOCKS5 CONNECT); Samizdat itself carries no UDP.
 package main
@@ -29,6 +30,11 @@ func main() {
 	sni := flag.String("sni", "ok.ru", "cover site (server's masquerade domain)")
 	pubkey := flag.String("pubkey", "", "server X25519 public key, hex")
 	sid := flag.String("sid", "", "short id, 16 hex chars")
+	fp := flag.String("fp", "chrome", "TLS fingerprint: chrome, firefox, safari")
+	frag := flag.Bool("frag", true, "split the ClientHello across TCP segments")
+	recfrag := flag.Bool("recfrag", true, "split inner TLS records across H2 frames")
+	jitter := flag.Bool("jitter", true, "timing jitter")
+	verbose := flag.Bool("v", false, "log every connection")
 	flag.Parse()
 
 	pk, err := hex.DecodeString(*pubkey)
@@ -46,9 +52,10 @@ func main() {
 		ServerName:          *sni,
 		PublicKey:           pk,
 		ShortID:             shortID,
-		Jitter:              true,
-		TCPFragmentation:    true,
-		RecordFragmentation: true,
+		Fingerprint:         *fp,
+		Jitter:              *jitter,
+		TCPFragmentation:    *frag,
+		RecordFragmentation: *recfrag,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -57,7 +64,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("socks5 on %s -> %s", ln.Addr(), *server)
+	log.Printf("socks5 on %s -> %s (fp=%s frag=%v recfrag=%v jitter=%v)", ln.Addr(), *server, *fp, *frag, *recfrag, *jitter)
+	logEach = *verbose
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -67,6 +75,8 @@ func main() {
 	}
 }
 
+var logEach bool
+
 func serve(client *samizdat.Client, c net.Conn) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
@@ -75,8 +85,12 @@ func serve(client *samizdat.Client, c net.Conn) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	start := time.Now()
 	up, err := client.DialContext(ctx, "tcp", dest)
 	cancel()
+	if logEach && err == nil {
+		log.Printf("%s: ok in %v", dest, time.Since(start).Round(time.Millisecond))
+	}
 	if err != nil {
 		log.Printf("%s: %v", dest, err)
 		_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0}) // connection refused
