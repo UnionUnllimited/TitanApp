@@ -29,6 +29,11 @@ class PluginsTest {
         assertEquals(Plugins.Kind.TUIC, tuic.kind)
         assertEquals("2d45b8b1-7e55-3aef-357e-e9286dc51f35", tuic.tuicUuid)
         assertEquals(Plugins.Kind.MASQUE, Plugins.endpoint("Латвия MASQUE TCP", json, "proxy")!!.kind)
+        // Must match server/titan-node-sync.py: SS2022_SERVER_KEY + ":" + ss2022_key("titan-ss2022:" + secret).
+        val stls = Plugins.endpoint("🇱🇻 Латвия ShadowTLS", json, "proxy")!!
+        assertEquals(Plugins.Kind.SHADOWTLS, stls.kind)
+        assertEquals("QIkOC+7qEbZ9NjHwFOeGOg==:f/MV3BuEkMAGhNsqz2TzIQ==", stls.ss2022Password)
+        assertEquals(Plugins.Kind.ANYTLS, Plugins.endpoint("Латвия AnyTLS", json, "proxy")!!.kind)
         assertNull(Plugins.endpoint("Латвия WiFi LTE", json, "proxy"))
     }
 

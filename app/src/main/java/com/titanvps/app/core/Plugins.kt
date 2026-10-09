@@ -12,7 +12,7 @@ import java.net.Socket
 import java.security.MessageDigest
 
 /**
- * NaiveProxy, Mieru and TUIC servers. Xray has none of them, so for such a server we run
+ * NaiveProxy, Mieru, TUIC, AnyTLS and ShadowTLS servers. Xray has none of them, so for such a server we run
  * the protocol's own client (bundled as libnaive.so / libmieru.so / libsingbox.so) as a
  * local SOCKS proxy and point the server's proxy outbound at it; routing, bypasses and
  * ping stay Xray's.
@@ -27,12 +27,14 @@ import java.security.MessageDigest
  */
 object Plugins {
     /** [lib]: the client we run as a local SOCKS; null when Xray speaks the protocol itself. */
-    enum class Kind(val lib: String?) { NAIVE("libnaive.so"), MIERU("libmieru.so"), TUIC("libsingbox.so"), MASQUE(null) }
+    enum class Kind(val lib: String?) { NAIVE("libnaive.so"), MIERU("libmieru.so"), TUIC("libsingbox.so"), ANYTLS("libsingbox.so"), SHADOWTLS("libsingbox.so"), MASQUE(null) }
 
     data class Endpoint(val kind: Kind, val host: String, val port: Int, val secret: String) {
         /** URL-safe credentials, same derivation as the node sync. */
         val user: String get() = derived().substring(0, 16)
         val password: String get() = derived().substring(16, 48)
+        /** ShadowTLS: "server key:user key" of the Shadowsocks 2022 inside (as the node sync). */
+        val ss2022Password: String get() = "${ss2022Key("titan-ss2022-server")}:${ss2022Key("titan-ss2022:$secret")}"
         /** TUIC needs a UUID too: the second half of the hash. */
         val tuicUuid: String get() = derived().substring(32, 64).let {
             "${it.substring(0, 8)}-${it.substring(8, 12)}-${it.substring(12, 16)}-${it.substring(16, 20)}-${it.substring(20)}"
@@ -41,6 +43,12 @@ object Plugins {
             .digest("titan:$secret".toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
+    private fun ss2022Key(text: String): String = java.util.Base64.getEncoder()
+        .encodeToString(MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).copyOf(16))
+
+    /** ShadowTLS handshakes with this real site (the node's "handshake" server). */
+    const val SHADOWTLS_SNI = "www.amd.com"
+
     fun kindOf(name: String): Kind? {
         val n = name.lowercase()
         return when {
@@ -48,6 +56,8 @@ object Plugins {
             "mieru" in n -> Kind.MIERU
             "masque" in n -> Kind.MASQUE
             "tuic" in n -> Kind.TUIC
+            "anytls" in n -> Kind.ANYTLS
+            "shadowtls" in n -> Kind.SHADOWTLS
             else -> null
         }
     }
@@ -173,9 +183,11 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
                     environment()["HOME"] = dir.absolutePath
                 }
             }
-            Plugins.Kind.TUIC -> {
-                val config = File(dir, "tuic-$port.json")
-                config.writeText(tuicConfig())
+            Plugins.Kind.TUIC, Plugins.Kind.ANYTLS, Plugins.Kind.SHADOWTLS -> {
+                val config = File(dir, "${endpoint.kind.name.lowercase()}-$port.json")
+                // No system DNS for Go on Android: we resolve, the name stays the TLS SNI.
+                val ip = runCatching { InetAddress.getByName(endpoint.host).hostAddress }.getOrNull() ?: endpoint.host
+                config.writeText(singBoxConfig(ip))
                 ProcessBuilder(exe.absolutePath, "run", "-c", config.absolutePath, "-D", dir.absolutePath)
             }
             Plugins.Kind.MASQUE -> error("MASQUE needs no client")
@@ -212,23 +224,45 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
     }
 
     /**
-     * sing-box as a TUIC v5 client behind a local SOCKS (mixed) port. Like Mieru it gets the
-     * server's IP from us (no system DNS for Go on Android); the name stays the TLS SNI.
+     * sing-box as the client for TUIC / AnyTLS / ShadowTLS behind a local SOCKS (mixed) port.
+     * [server] is what to dial (on Android: the resolved IP); TLS names stay the host's.
      */
-    private fun tuicConfig(): String {
-        val ip = runCatching { InetAddress.getByName(endpoint.host).hostAddress }.getOrNull() ?: endpoint.host
+    private fun singBoxConfig(server: String): String {
+        val tls = { sni: String -> JSONObject().put("enabled", true).put("server_name", sni) }
+        // Firefox: Russian DPI stalls the large Chrome ClientHello.
+        val firefox = JSONObject().put("enabled", true).put("fingerprint", "firefox")
+        val outbounds = JSONArray()
+        when (endpoint.kind) {
+            Plugins.Kind.TUIC -> outbounds.put(
+                JSONObject().put("type", "tuic").put("tag", "proxy")
+                    .put("server", server).put("server_port", endpoint.port)
+                    .put("uuid", endpoint.tuicUuid).put("password", endpoint.password)
+                    .put("congestion_control", "bbr").put("udp_relay_mode", "native")
+                    .put("tls", tls(endpoint.host).put("alpn", JSONArray().put("h3"))),
+            )
+            Plugins.Kind.ANYTLS -> outbounds.put(
+                JSONObject().put("type", "anytls").put("tag", "proxy")
+                    .put("server", server).put("server_port", endpoint.port).put("password", endpoint.password)
+                    .put("tls", tls(endpoint.host).put("utls", firefox)),
+            )
+            // ShadowTLS v3: a real TLS handshake with the cover site, then Shadowsocks 2022
+            // whose per-user key tells the node who it is.
+            Plugins.Kind.SHADOWTLS -> outbounds
+                .put(
+                    JSONObject().put("type", "shadowsocks").put("tag", "proxy")
+                        .put("method", "2022-blake3-aes-128-gcm").put("password", endpoint.ss2022Password).put("detour", "shadowtls"),
+                )
+                .put(
+                    JSONObject().put("type", "shadowtls").put("tag", "shadowtls")
+                        .put("server", server).put("server_port", endpoint.port).put("version", 3).put("password", endpoint.password)
+                        .put("tls", tls(Plugins.SHADOWTLS_SNI).put("utls", firefox)),
+                )
+            else -> error("${endpoint.kind} is not a sing-box client")
+        }
         return JSONObject()
             .put("log", JSONObject().put("level", "warn"))
             .put("inbounds", JSONArray().put(JSONObject().put("type", "mixed").put("listen", "127.0.0.1").put("listen_port", port)))
-            .put(
-                "outbounds", JSONArray().put(
-                    JSONObject().put("type", "tuic").put("tag", "proxy")
-                        .put("server", ip).put("server_port", endpoint.port)
-                        .put("uuid", endpoint.tuicUuid).put("password", endpoint.password)
-                        .put("congestion_control", "bbr").put("udp_relay_mode", "native")
-                        .put("tls", JSONObject().put("enabled", true).put("server_name", endpoint.host).put("alpn", JSONArray().put("h3"))),
-                ),
-            )
+            .put("outbounds", outbounds)
             .put("route", JSONObject().put("final", "proxy"))
             .toString()
     }

@@ -11,6 +11,10 @@ the active users from the Remnawave API and writes them as logins for both proto
     h = sha256("titan:" + secret) as hex; login = h[0:16], password = h[16:48]
     (URL-safe for naive links; the app derives the same, see app core/Plugins.kt)
     TUIC: name = login, password = the same, uuid = h[32:64] as a UUID
+    AnyTLS: name = login, password = the same
+    ShadowTLS v3: name = login, password = the same; inside, Shadowsocks 2022 with the
+    server key base64(sha256("titan-ss2022-server")[:16]) and a per-user key
+    base64(sha256("titan-ss2022:" + secret)[:16]) (the user is known only there)
 
 so only active subscriptions can connect; expired/disabled ones drop out on the next run.
 Files are rewritten and the services reloaded only when the user list changed.
@@ -39,7 +43,9 @@ Gateways (accounting): config templates whose server entries get every user, plu
 Each user's traffic leaves through that placeholder with the user's own Shadowsocks
 password, so Remnawave counts it, shows the connections and applies the node's rules.
 Needs CREDENTIAL=ss (the secret is that password).
-  - GATEWAY_TEMPLATE: sing-box; its naive and tuic inbounds (and masque-server endpoints, though
+  - GATEWAY_TEMPLATE: sing-box; its naive, tuic, anytls and shadowtls inbounds (the
+    shadowtls one's detour: a 2022-blake3-aes-128-gcm shadowsocks inbound, which is the
+    one to map in "xray"), and masque-server endpoints (though
     sing-box doesn't tell MASQUE users apart, so those can't be accounted).
   - MASQUE_GATEWAY_TEMPLATE: Xray 26.9.30+; its masque inbounds (Xray knows the user).
   - MIERU_GATEWAY_TEMPLATE: titan-mieru-gw settings (listen, portRange, xray, method,
@@ -50,6 +56,7 @@ Needs CREDENTIAL=ss (the secret is that password).
 Run: python3 titan-node-sync.py  (a systemd timer runs it every minute)
 """
 
+import base64
 import hashlib
 import json
 import os
@@ -119,6 +126,13 @@ def active_users(base, token, only_squads, credential):
 def derive(secret):
     h = hashlib.sha256(("titan:" + secret).encode()).hexdigest()
     return h[:16], h[16:48]
+
+
+def ss2022_key(text):
+    return base64.b64encode(hashlib.sha256(text.encode()).digest()[:16]).decode()
+
+
+SS2022_SERVER_KEY = ss2022_key("titan-ss2022-server")
 
 
 def tuic_uuid(secret):
@@ -224,9 +238,21 @@ def build_gateway(template, secrets, extras):
     if not users:
         users = [{"username": "disabled-" + os.urandom(8).hex(), "password": os.urandom(16).hex()}]
     tuic_users = [{"name": u, "uuid": tuic_uuid(s), "password": p} for (u, p), s in pairs]
-    entries = [i for i in cfg.get("inbounds", []) if i.get("type") in ("naive", "tuic")] + [
-        e for e in cfg.get("endpoints", []) if e.get("type") == "masque-server"
-    ]
+    # AnyTLS / ShadowTLS users are {"name", "password"} (Naive / MASQUE: "username").
+    named_users = [{"name": u["username"], "password": u["password"]} for u in users]
+    ss2022_users = [{"name": u, "password": ss2022_key("titan-ss2022:" + s)} for (u, _), s in pairs]
+    inbounds = cfg.get("inbounds", [])
+    detours = {i.get("detour") for i in inbounds if i.get("type") == "shadowtls"}
+    for i in inbounds:
+        if i.get("type") == "shadowtls":
+            i["users"] = named_users
+            i["version"] = 3
+        if i.get("type") == "shadowsocks" and i.get("tag") in detours:
+            i["method"] = "2022-blake3-aes-128-gcm"
+            i["password"] = SS2022_SERVER_KEY
+    entries = [i for i in inbounds if i.get("type") in ("naive", "tuic", "anytls")] + [
+        i for i in inbounds if i.get("type") == "shadowsocks" and i.get("tag") in detours
+    ] + [e for e in cfg.get("endpoints", []) if e.get("type") == "masque-server"]
     outbounds = [o for o in cfg.get("outbounds", []) if not o.get("tag", "").startswith("u-")]
     tags = {o.get("tag") for o in outbounds}
     if "direct" not in tags:
@@ -236,7 +262,14 @@ def build_gateway(template, secrets, extras):
     rules = []
     for entry in entries:
         # TUIC users also need a UUID; test users (EXTRA_GATEWAY_USERS) are Naive/MASQUE only.
-        entry["users"] = (tuic_users or users) if entry.get("type") == "tuic" else users
+        if entry.get("type") == "tuic":
+            entry["users"] = tuic_users or users
+        elif entry.get("type") == "shadowsocks":
+            entry["users"] = ss2022_users or [{"name": "disabled", "password": ss2022_key(os.urandom(8).hex())}]
+        elif entry.get("type") == "anytls":
+            entry["users"] = named_users
+        else:
+            entry["users"] = users
         tag = entry["tag"]
         target = xray.get(tag)
         if not target:
