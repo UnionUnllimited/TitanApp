@@ -10,6 +10,7 @@ the active users from the Remnawave API and writes them as logins for both proto
     (CREDENTIAL=ss) — whatever the app finds in that host's outbound;
     h = sha256("titan:" + secret) as hex; login = h[0:16], password = h[16:48]
     (URL-safe for naive links; the app derives the same, see app core/Plugins.kt)
+    TUIC: name = login, password = the same, uuid = h[32:64] as a UUID
 
 so only active subscriptions can connect; expired/disabled ones drop out on the next run.
 Files are rewritten and the services reloaded only when the user list changed.
@@ -38,7 +39,7 @@ Gateways (accounting): config templates whose server entries get every user, plu
 Each user's traffic leaves through that placeholder with the user's own Shadowsocks
 password, so Remnawave counts it, shows the connections and applies the node's rules.
 Needs CREDENTIAL=ss (the secret is that password).
-  - GATEWAY_TEMPLATE: sing-box; its naive inbounds (and masque-server endpoints, though
+  - GATEWAY_TEMPLATE: sing-box; its naive and tuic inbounds (and masque-server endpoints, though
     sing-box doesn't tell MASQUE users apart, so those can't be accounted).
   - MASQUE_GATEWAY_TEMPLATE: Xray 26.9.30+; its masque inbounds (Xray knows the user).
   - MIERU_GATEWAY_TEMPLATE: titan-mieru-gw settings (listen, portRange, xray, method,
@@ -118,6 +119,11 @@ def active_users(base, token, only_squads, credential):
 def derive(secret):
     h = hashlib.sha256(("titan:" + secret).encode()).hexdigest()
     return h[:16], h[16:48]
+
+
+def tuic_uuid(secret):
+    u = hashlib.sha256(("titan:" + secret).encode()).hexdigest()[32:64]
+    return f"{u[:8]}-{u[8:12]}-{u[12:16]}-{u[16:20]}-{u[20:]}"
 
 
 def extra(spec):
@@ -217,7 +223,8 @@ def build_gateway(template, secrets, extras):
     ]
     if not users:
         users = [{"username": "disabled-" + os.urandom(8).hex(), "password": os.urandom(16).hex()}]
-    entries = [i for i in cfg.get("inbounds", []) if i.get("type") == "naive"] + [
+    tuic_users = [{"name": u, "uuid": tuic_uuid(s), "password": p} for (u, p), s in pairs]
+    entries = [i for i in cfg.get("inbounds", []) if i.get("type") in ("naive", "tuic")] + [
         e for e in cfg.get("endpoints", []) if e.get("type") == "masque-server"
     ]
     outbounds = [o for o in cfg.get("outbounds", []) if not o.get("tag", "").startswith("u-")]
@@ -228,7 +235,8 @@ def build_gateway(template, secrets, extras):
         outbounds.append({"type": "block", "tag": "block"})
     rules = []
     for entry in entries:
-        entry["users"] = users
+        # TUIC users also need a UUID; test users (EXTRA_GATEWAY_USERS) are Naive/MASQUE only.
+        entry["users"] = (tuic_users or users) if entry.get("type") == "tuic" else users
         tag = entry["tag"]
         target = xray.get(tag)
         if not target:

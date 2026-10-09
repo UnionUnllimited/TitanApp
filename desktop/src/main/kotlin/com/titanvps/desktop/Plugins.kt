@@ -10,21 +10,25 @@ import java.net.Socket
 import java.security.MessageDigest
 
 /**
- * NaiveProxy and Mieru servers, same as on Android: hosts named "… Naive" / "… Mieru"
- * carry the node's address, port and the user's secret; we run the protocol's own client
- * (naive.exe / mieru.exe next to xray.exe) as a local SOCKS and point Xray's proxy
- * outbound at it. Credentials: sha256("titan:" + secret), as server/titan-node-sync.py.
+ * NaiveProxy, Mieru and TUIC servers, same as on Android: hosts named "… Naive" / "… Mieru" /
+ * "… TUIC" carry the node's address, port and the user's secret; we run the protocol's own
+ * client (naive.exe / mieru.exe / sing-box.exe next to xray.exe) as a local SOCKS and point
+ * Xray's proxy outbound at it. Credentials: sha256("titan:" + secret), as server/titan-node-sync.py.
  *
  * MASQUE ("… MASQUE" hosts) needs no separate client: Xray has it, so the proxy outbound
  * is rewritten into a masque one (HTTP/3; "TCP" or "H2" in the name: HTTP/2 over TLS).
  */
 object Plugins {
     /** [exe]: the client we run as a local SOCKS; null when Xray speaks the protocol itself. */
-    enum class Kind(val exe: String?) { NAIVE("naive.exe"), MIERU("mieru.exe"), MASQUE(null) }
+    enum class Kind(val exe: String?) { NAIVE("naive.exe"), MIERU("mieru.exe"), TUIC("sing-box.exe"), MASQUE(null) }
 
     data class Endpoint(val kind: Kind, val host: String, val port: Int, val secret: String) {
         val user: String get() = derived().substring(0, 16)
         val password: String get() = derived().substring(16, 48)
+        /** TUIC needs a UUID too: the second half of the hash. */
+        val tuicUuid: String get() = derived().substring(32, 64).let {
+            "${it.substring(0, 8)}-${it.substring(8, 12)}-${it.substring(12, 16)}-${it.substring(16, 20)}-${it.substring(20)}"
+        }
         private fun derived(): String = MessageDigest.getInstance("SHA-256")
             .digest("titan:$secret".toByteArray()).joinToString("") { "%02x".format(it) }
     }
@@ -35,6 +39,7 @@ object Plugins {
             "naive" in n -> Kind.NAIVE
             "mieru" in n -> Kind.MIERU
             "masque" in n -> Kind.MASQUE
+            "tuic" in n -> Kind.TUIC
             else -> null
         }
     }
@@ -134,6 +139,10 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
                     environment()["MIERU_CONFIG_JSON_FILE"] = config.absolutePath
                 }
             }
+            Plugins.Kind.TUIC -> {
+                val config = File(dir, "tuic-$port.json").apply { writeText(tuicConfig()) }
+                ProcessBuilder(exe.absolutePath, "run", "-c", config.absolutePath)
+            }
             Plugins.Kind.MASQUE -> error("MASQUE needs no client")
         }
         process = pb.directory(dir).redirectErrorStream(true).redirectOutput(log).start()
@@ -161,6 +170,22 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
             .put("loggingLevel", "WARN")
             .toString()
     }
+
+    /** sing-box as a TUIC v5 client behind a local SOCKS (mixed) port. */
+    private fun tuicConfig(): String = JSONObject()
+        .put("log", JSONObject().put("level", "warn"))
+        .put("inbounds", JSONArray().put(JSONObject().put("type", "mixed").put("listen", "127.0.0.1").put("listen_port", port)))
+        .put(
+            "outbounds", JSONArray().put(
+                JSONObject().put("type", "tuic").put("tag", "proxy")
+                    .put("server", endpoint.host).put("server_port", endpoint.port)
+                    .put("uuid", endpoint.tuicUuid).put("password", endpoint.password)
+                    .put("congestion_control", "bbr").put("udp_relay_mode", "native")
+                    .put("tls", JSONObject().put("enabled", true).put("server_name", endpoint.host).put("alpn", JSONArray().put("h3"))),
+            ),
+        )
+        .put("route", JSONObject().put("final", "proxy"))
+        .toString()
 
     override fun close() {
         process?.let { p ->

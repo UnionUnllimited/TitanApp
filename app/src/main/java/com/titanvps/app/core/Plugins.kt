@@ -12,9 +12,10 @@ import java.net.Socket
 import java.security.MessageDigest
 
 /**
- * NaiveProxy and Mieru servers. Xray has neither, so for such a server we run the
- * protocol's own client (bundled as libnaive.so / libmieru.so) as a local SOCKS proxy and
- * point the server's proxy outbound at it; routing, bypasses and ping stay Xray's.
+ * NaiveProxy, Mieru and TUIC servers. Xray has none of them, so for such a server we run
+ * the protocol's own client (bundled as libnaive.so / libmieru.so / libsingbox.so) as a
+ * local SOCKS proxy and point the server's proxy outbound at it; routing, bypasses and
+ * ping stay Xray's.
  *
  * In the panel these are ordinary hosts (on placeholder inbounds) whose name contains
  * "Naive" or "Mieru"; their outbound carries the server's address, port and the user's
@@ -26,12 +27,16 @@ import java.security.MessageDigest
  */
 object Plugins {
     /** [lib]: the client we run as a local SOCKS; null when Xray speaks the protocol itself. */
-    enum class Kind(val lib: String?) { NAIVE("libnaive.so"), MIERU("libmieru.so"), MASQUE(null) }
+    enum class Kind(val lib: String?) { NAIVE("libnaive.so"), MIERU("libmieru.so"), TUIC("libsingbox.so"), MASQUE(null) }
 
     data class Endpoint(val kind: Kind, val host: String, val port: Int, val secret: String) {
         /** URL-safe credentials, same derivation as the node sync. */
         val user: String get() = derived().substring(0, 16)
         val password: String get() = derived().substring(16, 48)
+        /** TUIC needs a UUID too: the second half of the hash. */
+        val tuicUuid: String get() = derived().substring(32, 64).let {
+            "${it.substring(0, 8)}-${it.substring(8, 12)}-${it.substring(12, 16)}-${it.substring(16, 20)}-${it.substring(20)}"
+        }
         private fun derived(): String = MessageDigest.getInstance("SHA-256")
             .digest("titan:$secret".toByteArray()).joinToString("") { "%02x".format(it) }
     }
@@ -42,6 +47,7 @@ object Plugins {
             "naive" in n -> Kind.NAIVE
             "mieru" in n -> Kind.MIERU
             "masque" in n -> Kind.MASQUE
+            "tuic" in n -> Kind.TUIC
             else -> null
         }
     }
@@ -167,6 +173,11 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
                     environment()["HOME"] = dir.absolutePath
                 }
             }
+            Plugins.Kind.TUIC -> {
+                val config = File(dir, "tuic-$port.json")
+                config.writeText(tuicConfig())
+                ProcessBuilder(exe.absolutePath, "run", "-c", config.absolutePath, "-D", dir.absolutePath)
+            }
             Plugins.Kind.MASQUE -> error("MASQUE needs no client")
         }
         process = pb.directory(dir).redirectErrorStream(true).redirectOutput(log).start()
@@ -198,6 +209,28 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
 
     companion object {
         const val PLUGINS_LOG = "plugins.log"
+    }
+
+    /**
+     * sing-box as a TUIC v5 client behind a local SOCKS (mixed) port. Like Mieru it gets the
+     * server's IP from us (no system DNS for Go on Android); the name stays the TLS SNI.
+     */
+    private fun tuicConfig(): String {
+        val ip = runCatching { InetAddress.getByName(endpoint.host).hostAddress }.getOrNull() ?: endpoint.host
+        return JSONObject()
+            .put("log", JSONObject().put("level", "warn"))
+            .put("inbounds", JSONArray().put(JSONObject().put("type", "mixed").put("listen", "127.0.0.1").put("listen_port", port)))
+            .put(
+                "outbounds", JSONArray().put(
+                    JSONObject().put("type", "tuic").put("tag", "proxy")
+                        .put("server", ip).put("server_port", endpoint.port)
+                        .put("uuid", endpoint.tuicUuid).put("password", endpoint.password)
+                        .put("congestion_control", "bbr").put("udp_relay_mode", "native")
+                        .put("tls", JSONObject().put("enabled", true).put("server_name", endpoint.host).put("alpn", JSONArray().put("h3"))),
+                ),
+            )
+            .put("route", JSONObject().put("final", "proxy"))
+            .toString()
     }
 
     /** Mieru wants an IP: Go's resolver has no system DNS on Android, so we resolve here. */

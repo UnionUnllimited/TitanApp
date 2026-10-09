@@ -74,7 +74,7 @@ android {
         // compressible); only the phone's own ABI gets extracted on install.
         jniLibs.useLegacyPackaging = true
         // Naive / Mieru clients are executables, not libraries: package them as they are.
-        jniLibs.keepDebugSymbols += setOf("**/libnaive.so", "**/libmieru.so")
+        jniLibs.keepDebugSymbols += setOf("**/libnaive.so", "**/libmieru.so", "**/libsingbox.so")
     }
 }
 

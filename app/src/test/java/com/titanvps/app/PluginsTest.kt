@@ -24,6 +24,11 @@ class PluginsTest {
         assertEquals("53d28cea4f8aaf1e", ep.user)
         assertEquals("aefdd92ef0207ee32d45b8b17e553aef", ep.password)
         assertEquals(Plugins.Kind.MIERU, Plugins.endpoint("Латвия MIERU", json, "proxy")!!.kind)
+        // Must match server/titan-node-sync.py tuic_uuid("Pw+1/x=").
+        val tuic = Plugins.endpoint("🇱🇻 Латвия TUIC", json, "proxy")!!
+        assertEquals(Plugins.Kind.TUIC, tuic.kind)
+        assertEquals("2d45b8b1-7e55-3aef-357e-e9286dc51f35", tuic.tuicUuid)
+        assertEquals(Plugins.Kind.MASQUE, Plugins.endpoint("Латвия MASQUE TCP", json, "proxy")!!.kind)
         assertNull(Plugins.endpoint("Латвия WiFi LTE", json, "proxy"))
     }
 
