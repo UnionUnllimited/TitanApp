@@ -394,6 +394,7 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
             selected = s.id == state.selected?.id,
             connected = state.vpn is VpnState.Connected && s.id == state.selected?.id,
             limited = groups[Group.BYPASS]?.any { it.id == s.id } == true,
+            relayed = s.id in state.relayed,
             onPing = { state.pingOne(s.id) },
         ) { state.select(s.id) }
     }
@@ -723,7 +724,7 @@ private fun FlagCircle(server: Server, size: Dp) {
 @Composable
 private fun ServerRow(
     server: Server, ping: Long?, measuring: Boolean, selected: Boolean, connected: Boolean, limited: Boolean,
-    onPing: () -> Unit, onClick: () -> Unit,
+    relayed: Boolean, onPing: () -> Unit, onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(18.dp)
     val accent = if (connected) Green else Brand
@@ -738,7 +739,10 @@ private fun ServerRow(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             MarqueeText(ServerGroups.splitFlag(server.name).second, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text(if (limited) "Лимитный · расходует ГБ" else "Безлимит", fontSize = 11.sp, color = if (limited) Yellow else Green)
+            Text(
+                (if (limited) "Лимитный · расходует ГБ" else "Безлимит") + (if (relayed) " · обход блокировки" else ""),
+                fontSize = 11.sp, color = if (limited) Yellow else Green,
+            )
         }
         Spacer(Modifier.width(10.dp))
         // Click the ping to re-measure just this server (like Happ).

@@ -128,11 +128,18 @@ object Repository {
  * and kept warm for a minute, shared by every request (the whole list or one server, also
  * while the list is still being measured). A few nodes at a time; results arrive one by one.
  */
-object Pinger {
-    private const val URL = "https://www.gstatic.com/generate_204"
-    private const val PARALLEL = 6 // more at once crowd each other out on a weak network
-    private const val RECHECK_ABOVE_MS = 1500L
-    private const val KEEP_WARM_MS = 60_000L
+val Pinger = PingEngine("ping")
+
+/** Servers already in their final form (chained through a relay): plugins not applied again. */
+val RelayPinger = PingEngine("ping-relay", preparePlugins = false)
+
+class PingEngine(name: String, private val preparePlugins: Boolean = true) {
+    private companion object {
+        const val URL = "https://www.gstatic.com/generate_204"
+        const val PARALLEL = 6 // more at once crowd each other out on a weak network
+        const val RECHECK_ABOVE_MS = 1500L
+        const val KEEP_WARM_MS = 60_000L
+    }
 
     private class Session(
         val sigs: Map<String, Int>,
@@ -141,7 +148,7 @@ object Pinger {
         val plugins: List<PluginProcess> = emptyList(),
     )
 
-    private val core = XrayProcess("ping")
+    private val core = XrayProcess(name)
     private val listPool = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL) { r -> Thread(r).apply { isDaemon = true } }
     private val singlePool = java.util.concurrent.Executors.newCachedThreadPool { r -> Thread(r).apply { isDaemon = true } }
     private val recheckPool = java.util.concurrent.Executors.newFixedThreadPool(3) { r -> Thread(r).apply { isDaemon = true } }
@@ -185,6 +192,7 @@ object Pinger {
         // MASQUE: rewritten for Xray itself.
         val plugins = mutableListOf<PluginProcess>()
         val jsonOf = servers.associate { s ->
+            if (!preparePlugins) return@associate s.id to s.xrayJson
             s.id to runCatching { Plugins.prepare(s) }
                 .map { (json, p) -> p?.let(plugins::add); json }
                 .getOrDefault(s.xrayJson)

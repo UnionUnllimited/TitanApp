@@ -56,6 +56,8 @@ class AppState {
     var pinging by mutableStateOf(false); private set
     var message by mutableStateOf<String?>(null)
     val pings = mutableStateMapOf<String, Long>()
+    /** Servers unreachable directly that work through another one: server id → relay id. */
+    val relayed = mutableStateMapOf<String, String>()
     var update by mutableStateOf<UpdateState>(UpdateState.Idle); private set
     /** Shown as a dialog: set by a manual check or when a new version is found. */
     var updateDialog by mutableStateOf(false)
@@ -214,9 +216,13 @@ class AppState {
                     // points at it; MASQUE: Xray's own client.
                     plugin?.close()
                     plugin = null
-                    val (serverJson, p) = Plugins.prepare(server)
-                    if ("\"tcpFastOpen\":true" in serverJson) Admin.enableTcpFastOpen()
+                    val (prepared, p) = Plugins.prepare(server)
                     plugin = p
+                    // Blocked directly: through the relay the ping found (or the best one now).
+                    val relay = relayed[server.id]?.let { id -> sub.servers.firstOrNull { it.id == id } }
+                        ?: if (pings[server.id] == -1L && Relay.canChain(server)) Relay.pick(sub.servers, pings.toMap(), server) else null
+                    val serverJson = relay?.let { Relay.chain(prepared, server.proxyTag, it) } ?: prepared
+                    if ("\"tcpFastOpen\":true" in serverJson) Admin.enableTcpFastOpen()
                     core.start(XrayConfigs.buildProxyConfig(serverJson, socks, http, logDir, server.proxyTag), geo)
                     if (mode == "tun") {
                         // The whole PC through the tunnel; no system proxy then.
@@ -344,11 +350,16 @@ class AppState {
             val answered = HashSet<String>()
             try {
                 withContext(Dispatchers.IO) {
+                    val direct = java.util.concurrent.ConcurrentHashMap<String, Long>()
                     Pinger.ping(
                         servers, targets,
                         onStart = { ids -> scope.launch { measuring = measuring + ids } },
-                        onResult = { id, ms -> scope.launch { answered += id; pings[id] = ms; measuring = measuring - id } },
+                        onResult = { id, ms ->
+                            direct[id] = ms
+                            scope.launch { answered += id; pings[id] = ms; if (ms >= 0) relayed.remove(id); measuring = measuring - id }
+                        },
                     )
+                    tryRelays(servers, direct)
                 }
             } catch (e: Exception) {
                 if (targets.size > 1) message = "Не удалось проверить пинг. Попробуйте ещё раз"
@@ -362,6 +373,37 @@ class AppState {
         }
     }
 
+    /**
+     * Servers that timed out directly (an IP blocked on this network): measured again through
+     * the fastest server that answered; the ones that work are connected that way.
+     */
+    private fun tryRelays(servers: List<Server>, direct: Map<String, Long>) {
+        val known = HashMap<String, Long>(pings.toMap()).apply { putAll(direct) }
+        val probes = direct.filterValues { it < 0 }.keys
+            .mapNotNull { id -> servers.firstOrNull { it.id == id } }
+            .filter(Relay::canChain)
+            .mapNotNull { s ->
+                val relay = Relay.pick(servers, known, s) ?: return@mapNotNull null
+                val (json, p) = runCatching { Plugins.prepare(s) }.getOrNull() ?: return@mapNotNull null
+                p?.close()
+                s.copy(xrayJson = Relay.chain(json, s.proxyTag, relay)) to relay.id
+            }
+        if (probes.isEmpty()) return
+        val via = probes.associate { (s, relayId) -> s.id to relayId }
+        runCatching {
+            RelayPinger.ping(
+                probes.map { it.first }, probes.map { it.first.id },
+                onStart = { ids -> scope.launch { measuring = measuring + ids } },
+                onResult = { id, ms ->
+                    scope.launch {
+                        if (ms >= 0) { pings[id] = ms; relayed[id] = via.getValue(id) }
+                        measuring = measuring - id
+                    }
+                },
+            )
+        }
+    }
+
     /** Личный кабинет: the Telegram bot (renewal, extra GB). */
     fun openCabinetUrl(): String = Config.TELEGRAM_URL
 
@@ -371,6 +413,7 @@ class AppState {
         selectedId = null
         account = null
         pings.clear()
+        relayed.clear()
         measuring = emptySet()
         scope.launch(Dispatchers.IO) { persist() }
     }
@@ -380,6 +423,7 @@ class AppState {
         updateJob?.cancel()
         proxyPort = 0
         runCatching { Pinger.stop() }
+        runCatching { RelayPinger.stop() }
         tun.stop()
         core.stop()
         plugin?.close()
