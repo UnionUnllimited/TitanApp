@@ -33,6 +33,7 @@ Settings: /etc/titan-sync.env (never in this repo)
     EXTRA_GATEWAY_USERS=                         # "name:pass", not accounted (go out directly)
     MASQUE_GATEWAY_TEMPLATE=                     # Xray gateway for MASQUE (accounted), see below
     MASQUE_GATEWAY_CONFIG=/etc/titan-masque/config.json
+    GATEWAY_USERS=                               # titan-sbgw users file, e.g. /etc/titan-gateway/users.json
     MIERU_GATEWAY_TEMPLATE=                      # titan-mieru-gw (server/titan-mieru-gw), see below
     MIERU_GATEWAY_CONFIG=/etc/titan-mieru/config.json
 
@@ -47,6 +48,9 @@ Needs CREDENTIAL=ss (the secret is that password).
     shadowtls one's detour: a 2022-blake3-aes-128-gcm shadowsocks inbound, which is the
     one to map in "xray"), and masque-server endpoints (though
     sing-box doesn't tell MASQUE users apart, so those can't be accounted).
+  - GATEWAY_USERS: for titan-sbgw (server/titan-sbgw: patched sing-box that takes user
+    changes without restarting). Only the users file is written; the gateway reads its
+    template itself and picks the file up, no reload. Replaces GATEWAY_TEMPLATE.
   - MASQUE_GATEWAY_TEMPLATE: Xray 26.9.30+; its masque inbounds (Xray knows the user).
   - MIERU_GATEWAY_TEMPLATE: titan-mieru-gw settings (listen, portRange, xray, method,
     ipsFile, and optionally "ssh": {listen, xray, hostKey} for SSH tunnels with the same
@@ -355,6 +359,14 @@ def sync_mieru_gateway(template_path, path, secrets):
     return write_if_changed(path, json.dumps(cfg, indent=1) + "\n")
 
 
+def sync_gateway_users(path, secrets, extras):
+    users = [{"name": u, "password": p, "secret": s} for (u, p), s in ((derive(s), s) for s in secrets)]
+    users += [{"name": n, "password": p, "secret": ""} for n, p in extras]
+    if not users:
+        return False  # the gateway keeps its last users rather than open up
+    return write_if_changed(path, json.dumps(users) + "\n")
+
+
 def sync_gateway(template_path, path, secrets, extras):
     try:
         with open(template_path, encoding="utf-8") as f:
@@ -410,8 +422,12 @@ def main():
     if masque_cfg and sync_masque(masque_cfg, uuids, extra(env.get("EXTRA_MASQUE_USERS"))):
         changed.append("masque")
 
+    gateway_users = env.get("GATEWAY_USERS", "")
     gateway_template = env.get("GATEWAY_TEMPLATE", "")
-    if gateway_template:
+    if gateway_users:
+        if sync_gateway_users(gateway_users, uuids, extra(env.get("EXTRA_GATEWAY_USERS"))):
+            changed.append("gateway-users")
+    elif gateway_template:
         gateway_config = env.get("GATEWAY_CONFIG", "/etc/titan-gateway/config.json")
         if sync_gateway(gateway_template, gateway_config, uuids, extra(env.get("EXTRA_GATEWAY_USERS"))):
             changed.append("gateway")

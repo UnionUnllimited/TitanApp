@@ -2,10 +2,11 @@ name: Node binaries
 
 # Programs for our nodes, built here so a node needs no Go:
 #   titan-mieru-gw (server/titan-mieru-gw), linux amd64 → release "node-binaries".
+#   titan-sbgw (server/titan-sbgw): official sing-box + patches/hot-users.patch.
 on:
   push:
     branches: [main, "claude/**"]
-    paths: ["server/titan-mieru-gw/**", ".github/workflows/node-binaries.yml"]
+    paths: ["server/titan-mieru-gw/**", "server/titan-sbgw/**", ".github/workflows/node-binaries.yml"]
   workflow_dispatch:
 
 concurrency:
@@ -22,8 +23,10 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: server/titan-mieru-gw/go.mod
-          cache-dependency-path: server/titan-mieru-gw/go.sum
+          go-version-file: server/titan-sbgw/go.mod
+          cache-dependency-path: |
+            server/titan-mieru-gw/go.sum
+            server/titan-sbgw/go.sum
 
       - name: Build
         run: |
@@ -31,7 +34,12 @@ jobs:
           cd server/titan-mieru-gw
           go vet .
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o ../../out/titan-mieru-gw-linux-amd64 .
-          cd ../../out && sha256sum titan-mieru-gw-* | tee SHA256SUMS
+          # sing-box with runtime user updates: vendor the official modules, patch, build.
+          cd ../titan-sbgw
+          go mod vendor
+          patch -p1 < patches/hot-users.patch
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -tags with_quic -trimpath -ldflags "-s -w" -o ../../out/titan-sbgw-linux-amd64 .
+          cd ../../out && sha256sum titan-* | tee SHA256SUMS
 
       - name: Publish
         if: github.event_name == 'push'

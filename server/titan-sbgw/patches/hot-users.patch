@@ -1,0 +1,202 @@
+--- a/vendor/github.com/sagernet/sing-box/protocol/naive/inbound.go
++++ b/vendor/github.com/sagernet/sing-box/protocol/naive/inbound.go
+@@ -6,6 +6,7 @@
+ 	"io"
+ 	"net"
+ 	"net/http"
++	"sync"
+ 
+ 	"github.com/sagernet/sing-box/adapter"
+ 	"github.com/sagernet/sing-box/adapter/inbound"
+@@ -44,9 +45,11 @@
+ 	network          []string
+ 	networkIsDefault bool
+ 	authenticator    *auth.Authenticator
+-	tlsConfig        tls.ServerConfig
+-	httpServer       *http.Server
+-	h3Server         io.Closer
++	// titan: users can be replaced at runtime (UpdateUsers)
++	authenticatorAccess sync.RWMutex
++	tlsConfig           tls.ServerConfig
++	httpServer          *http.Server
++	h3Server            io.Closer
+ }
+ 
+ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.NaiveInboundOptions) (adapter.Inbound, error) {
+@@ -156,7 +159,9 @@
+ 	}
+ 	userName, password, authOk := sHttp.ParseBasicAuth(request.Header.Get("Proxy-Authorization"))
+ 	if authOk {
++		n.authenticatorAccess.RLock()
+ 		authOk = n.authenticator.Verify(userName, password)
++		n.authenticatorAccess.RUnlock()
+ 	}
+ 	if !authOk {
+ 		rejectHTTP(writer, http.StatusProxyAuthRequired)
+@@ -246,3 +251,11 @@
+ 	}
+ 	conn.Close()
+ }
++
++// UpdateUsers replaces the users without restarting (titan).
++func (n *Inbound) UpdateUsers(users []auth.User) {
++	authenticator := auth.NewAuthenticator(users)
++	n.authenticatorAccess.Lock()
++	n.authenticator = authenticator
++	n.authenticatorAccess.Unlock()
++}
+--- a/vendor/github.com/sagernet/sing-box/protocol/tuic/inbound.go
++++ b/vendor/github.com/sagernet/sing-box/protocol/tuic/inbound.go
+@@ -3,6 +3,7 @@
+ import (
+ 	"context"
+ 	"net"
++	"sync"
+ 	"time"
+ 
+ 	"github.com/sagernet/sing-box/adapter"
+@@ -35,6 +36,9 @@
+ 	tlsConfig    tls.ServerConfig
+ 	server       *tuic.Service[int]
+ 	userNameList []string
++	// titan: users can be replaced at runtime (UpdateUsers)
++	userAccess sync.RWMutex
++	userIDs    map[string]int
+ }
+ 
+ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.TUICInboundOptions) (adapter.Inbound, error) {
+@@ -114,7 +118,7 @@
+ 	metadata.Destination = destination
+ 	h.logger.InfoContext(ctx, "inbound connection from ", metadata.Source)
+ 	userID, _ := auth.UserFromContext[int](ctx)
+-	if userName := h.userNameList[userID]; userName != "" {
++	if userName := h.userName(userID); userName != "" {
+ 		metadata.User = userName
+ 		h.logger.InfoContext(ctx, "[", userName, "] inbound connection to ", metadata.Destination)
+ 	} else {
+@@ -137,7 +141,7 @@
+ 	metadata.Destination = destination
+ 	h.logger.InfoContext(ctx, "inbound packet connection from ", metadata.Source)
+ 	userID, _ := auth.UserFromContext[int](ctx)
+-	if userName := h.userNameList[userID]; userName != "" {
++	if userName := h.userName(userID); userName != "" {
+ 		metadata.User = userName
+ 		h.logger.InfoContext(ctx, "[", userName, "] inbound packet connection to ", metadata.Destination)
+ 	} else {
+@@ -170,3 +174,49 @@
+ 		common.PtrOrNil(h.server),
+ 	)
+ }
++
++func (h *Inbound) userName(userID int) string {
++	h.userAccess.RLock()
++	defer h.userAccess.RUnlock()
++	if userID < 0 || userID >= len(h.userNameList) {
++		return ""
++	}
++	return h.userNameList[userID]
++}
++
++// UpdateUsers replaces the users without restarting (titan).
++func (h *Inbound) UpdateUsers(users []option.TUICUser) error {
++	h.userAccess.Lock()
++	defer h.userAccess.Unlock()
++	// Stable IDs: a QUIC connection keeps the ID it authenticated with and its streams
++	// look the name up later, so an ID must never come to mean another user.
++	if h.userIDs == nil {
++		h.userIDs = make(map[string]int, len(h.userNameList))
++		for id, name := range h.userNameList {
++			h.userIDs[name] = id
++		}
++	}
++	var userList []int
++	var userUUIDList [][16]byte
++	var userPasswordList []string
++	for index, user := range users {
++		if user.UUID == "" {
++			return E.New("missing uuid for user ", index)
++		}
++		userUUID, err := uuid.FromString(user.UUID)
++		if err != nil {
++			return E.Cause(err, "invalid uuid for user ", index)
++		}
++		id, known := h.userIDs[user.Name]
++		if !known {
++			id = len(h.userNameList)
++			h.userNameList = append(h.userNameList, user.Name)
++			h.userIDs[user.Name] = id
++		}
++		userList = append(userList, id)
++		userUUIDList = append(userUUIDList, userUUID)
++		userPasswordList = append(userPasswordList, user.Password)
++	}
++	h.server.UpdateUsers(userList, userUUIDList, userPasswordList)
++	return nil
++}
+--- a/vendor/github.com/sagernet/sing-box/protocol/anytls/inbound.go
++++ b/vendor/github.com/sagernet/sing-box/protocol/anytls/inbound.go
+@@ -133,3 +133,10 @@
+ 	}
+ 	h.router.RouteConnectionEx(ctx, conn, metadata, onClose)
+ }
++
++// UpdateUsers replaces the users without restarting (titan).
++func (h *Inbound) UpdateUsers(users []option.AnyTLSUser) {
++	h.service.UpdateUsers(common.Map(users, func(it option.AnyTLSUser) anytls.User {
++		return anytls.User{Name: it.Name, Password: it.Password}
++	}))
++}
+--- a/vendor/github.com/sagernet/sing-box/protocol/shadowtls/inbound.go
++++ b/vendor/github.com/sagernet/sing-box/protocol/shadowtls/inbound.go
+@@ -140,3 +140,10 @@
+ 	}
+ 	h.router.RouteConnectionEx(ctx, conn, metadata, onClose)
+ }
++
++// UpdateUsers replaces the users without restarting (titan).
++func (h *Inbound) UpdateUsers(users []option.ShadowTLSUser) {
++	h.service.UpdateUsers(common.Map(users, func(it option.ShadowTLSUser) shadowtls.User {
++		return shadowtls.User(it)
++	}))
++}
+--- a/vendor/github.com/sagernet/sing-shadowtls/service.go
++++ b/vendor/github.com/sagernet/sing-shadowtls/service.go
+@@ -7,6 +7,7 @@
+ 	"encoding/hex"
+ 	"net"
+ 	"os"
++	"sync"
+ 
+ 	"github.com/sagernet/sing/common"
+ 	"github.com/sagernet/sing/common/auth"
+@@ -24,6 +25,7 @@
+ 	version                int
+ 	password               string
+ 	users                  []User
++	usersAccess            sync.RWMutex // titan: UpdateUsers
+ 	handshake              HandshakeConfig
+ 	handshakeForServerName map[string]HandshakeConfig
+ 	strictMode             bool
+@@ -186,7 +188,10 @@
+ 			}
+ 		}
+ 		var handshakeConn net.Conn
+-		user, err := verifyClientHello(clientHelloFrame.Bytes(), s.users)
++		s.usersAccess.RLock()
++		users := s.users
++		s.usersAccess.RUnlock()
++		user, err := verifyClientHello(clientHelloFrame.Bytes(), users)
+ 		if err != nil {
+ 			s.logger.WarnContext(ctx, E.Cause(err, "client hello verify failed"))
+ 			if s.wildcardSNI == WildcardSNIAll || isCustom {
+@@ -286,3 +291,10 @@
+ 		return nil
+ 	}
+ }
++
++// UpdateUsers replaces the users without restarting (titan).
++func (s *Service) UpdateUsers(users []User) {
++	s.usersAccess.Lock()
++	s.users = users
++	s.usersAccess.Unlock()
++}
