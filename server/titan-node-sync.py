@@ -23,6 +23,22 @@ Settings: /etc/titan-sync.env (never in this repo)
     EXTRA_MIERU_USERS=
     MASQUE_CONFIG=                               # e.g. /etc/masque/config.json; empty to skip MASQUE
     EXTRA_MASQUE_USERS=
+    GATEWAY_TEMPLATE=                            # sing-box gateway for Naive (accounted), see below
+    GATEWAY_CONFIG=/etc/titan-gateway/config.json
+    EXTRA_GATEWAY_USERS=                         # "name:pass", not accounted (go out directly)
+    MASQUE_GATEWAY_TEMPLATE=                     # Xray gateway for MASQUE (accounted), see below
+    MASQUE_GATEWAY_CONFIG=/etc/titan-masque/config.json
+
+Gateways (accounting): config templates whose server entries get every user, plus a
+"titan" block mapping each entry's tag to the node's Xray placeholder (Shadowsocks on
+127.0.0.1, managed by Remnawave):
+    "titan": {"method": "chacha20-ietf-poly1305", "xray": {"naive-in": "127.0.0.1:61001"}}
+Each user's traffic leaves through that placeholder with the user's own Shadowsocks
+password, so Remnawave counts it, shows the connections and applies the node's rules.
+Needs CREDENTIAL=ss (the secret is that password).
+  - GATEWAY_TEMPLATE: sing-box; its naive inbounds (and masque-server endpoints, though
+    sing-box doesn't tell MASQUE users apart, so those can't be accounted).
+  - MASQUE_GATEWAY_TEMPLATE: Xray 26.9.30+; its masque inbounds (Xray knows the user).
     ONLY_SQUADS=                                 # optional: internal squad UUIDs, comma-separated
     CREDENTIAL=vless                             # vless (vlessUuid) or ss (ssPassword)
 
@@ -185,6 +201,116 @@ def sync_masque(path, uuids, extras):
     return True
 
 
+def build_gateway(template, secrets, extras):
+    """The sing-box config: users on every naive/masque entry, per-user Shadowsocks out to Xray."""
+    cfg = json.loads(json.dumps(template))
+    titan = cfg.pop("titan", {})
+    method = titan.get("method", "chacha20-ietf-poly1305")
+    xray = titan.get("xray", {})
+    pairs = [(derive(s), s) for s in secrets]
+    users = [{"username": u, "password": p} for (u, p), _ in pairs] + [
+        {"username": n, "password": p} for n, p in extras
+    ]
+    if not users:
+        users = [{"username": "disabled-" + os.urandom(8).hex(), "password": os.urandom(16).hex()}]
+    entries = [i for i in cfg.get("inbounds", []) if i.get("type") == "naive"] + [
+        e for e in cfg.get("endpoints", []) if e.get("type") == "masque-server"
+    ]
+    outbounds = [o for o in cfg.get("outbounds", []) if not o.get("tag", "").startswith("u-")]
+    tags = {o.get("tag") for o in outbounds}
+    if "direct" not in tags:
+        outbounds.append({"type": "direct", "tag": "direct"})
+    if "block" not in tags:
+        outbounds.append({"type": "block", "tag": "block"})
+    rules = []
+    for entry in entries:
+        entry["users"] = users
+        tag = entry["tag"]
+        target = xray.get(tag)
+        if not target:
+            continue  # not accounted: everyone goes out directly
+        host, port = target.rsplit(":", 1)
+        for (login, _), secret in pairs:
+            out = f"u-{tag}-{login}"
+            outbounds.append({"type": "shadowsocks", "tag": out, "server": host, "server_port": int(port),
+                              "method": method, "password": secret})
+            rules.append({"inbound": [tag], "auth_user": [login], "outbound": out})
+    # Test users (EXTRA_GATEWAY_USERS) have no Remnawave account: straight out.
+    if extras:
+        rules.append({"auth_user": [n for n, _ in extras], "outbound": "direct"})
+    route = cfg.setdefault("route", {})
+    route["rules"] = rules + [r for r in route.get("rules", []) if "auth_user" not in r]
+    # Unknown users never reach the internet unaccounted.
+    route["final"] = "block" if xray else route.get("final", "direct")
+    cfg["outbounds"] = outbounds
+    return cfg
+
+
+def build_xray_masque(template, secrets):
+    """The Xray MASQUE gateway: users on every masque inbound, per-user Shadowsocks out."""
+    cfg = json.loads(json.dumps(template))
+    titan = cfg.pop("titan", {})
+    method = titan.get("method", "chacha20-ietf-poly1305")
+    xray = titan.get("xray", {})
+    pairs = [(derive(s), s) for s in secrets]
+    clients = [{"email": u, "pass": p} for (u, p), _ in pairs]
+    if not clients:
+        clients = [{"email": "disabled-" + os.urandom(8).hex(), "pass": os.urandom(16).hex()}]
+    outbounds = [o for o in cfg.get("outbounds", []) if not o.get("tag", "").startswith("u-")]
+    if not any(o.get("tag") == "block" for o in outbounds):
+        outbounds.append({"tag": "block", "protocol": "blackhole"})
+    rules = []
+    for inbound in cfg.get("inbounds", []):
+        if inbound.get("protocol") != "masque":
+            continue
+        inbound.setdefault("settings", {})["clients"] = clients
+        tag = inbound["tag"]
+        target = xray.get(tag)
+        if not target:
+            continue
+        host, port = target.rsplit(":", 1)
+        for (login, _), secret in pairs:
+            out = f"u-{tag}-{login}"
+            outbounds.append({"tag": out, "protocol": "shadowsocks", "settings": {"servers": [
+                {"address": host, "port": int(port), "method": method, "password": secret}]}})
+            rules.append({"inboundTag": [tag], "user": [login], "outboundTag": out})
+    routing = cfg.setdefault("routing", {})
+    # Unknown users never reach the internet unaccounted.
+    routing["rules"] = rules + [{"network": "tcp,udp", "outboundTag": "block"}]
+    cfg["outbounds"] = outbounds
+    return cfg
+
+
+def sync_xray_masque(template_path, path, secrets):
+    try:
+        with open(template_path, encoding="utf-8") as f:
+            template = json.load(f)
+    except FileNotFoundError:
+        print(f"masque gateway: no {template_path}, skipped")
+        return False
+    content = json.dumps(build_xray_masque(template, secrets), indent=1) + "\n"
+    if not write_if_changed(path, content):
+        return False
+    # Xray has no config reload: a restart (tunnels reconnect within seconds).
+    subprocess.run(["systemctl", "restart", "titan-masque"], check=False)
+    return True
+
+
+def sync_gateway(template_path, path, secrets, extras):
+    try:
+        with open(template_path, encoding="utf-8") as f:
+            template = json.load(f)
+    except FileNotFoundError:
+        print(f"gateway: no {template_path}, skipped")
+        return False
+    content = json.dumps(build_gateway(template, secrets, extras), indent=1) + "\n"
+    if not write_if_changed(path, content):
+        return False
+    if subprocess.run(["systemctl", "reload", "titan-gateway"], check=False).returncode != 0:
+        subprocess.run(["systemctl", "restart", "titan-gateway"], check=False)
+    return True
+
+
 def main():
     env = load_env(ENV_FILE)
     base, token = env.get("REMNAWAVE_URL", ""), env.get("REMNAWAVE_TOKEN", "")
@@ -212,6 +338,17 @@ def main():
     masque_cfg = env.get("MASQUE_CONFIG", "")
     if masque_cfg and sync_masque(masque_cfg, uuids, extra(env.get("EXTRA_MASQUE_USERS"))):
         changed.append("masque")
+
+    gateway_template = env.get("GATEWAY_TEMPLATE", "")
+    if gateway_template:
+        gateway_config = env.get("GATEWAY_CONFIG", "/etc/titan-gateway/config.json")
+        if sync_gateway(gateway_template, gateway_config, uuids, extra(env.get("EXTRA_GATEWAY_USERS"))):
+            changed.append("gateway")
+    masque_template = env.get("MASQUE_GATEWAY_TEMPLATE", "")
+    if masque_template:
+        masque_config = env.get("MASQUE_GATEWAY_CONFIG", "/etc/titan-masque/config.json")
+        if sync_xray_masque(masque_template, masque_config, uuids):
+            changed.append("masque-gateway")
 
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:
