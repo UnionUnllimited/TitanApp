@@ -46,7 +46,7 @@ ask() { # var prompt default secret
   printf -v "$1" '%s' "$value"
 }
 ask DOMAIN "Domain of this node (A record to this server, no proxy)" "$(cat /etc/titan-node-domain 2>/dev/null)"
-ask REMNAWAVE_URL "Remnawave panel address (https://…)" "$(saved REMNAWAVE_URL)"
+ask REMNAWAVE_URL "Remnawave panel address (https://…)" "$(saved REMNAWAVE_URL)" secret  # never echoed: the panel address is private
 ask REMNAWAVE_TOKEN "Remnawave API token" "$(saved REMNAWAVE_TOKEN)" secret
 case "$REMNAWAVE_URL" in http://*|https://*) ;; *) fail "the panel address must start with https://";; esac
 echo "$DOMAIN" > /etc/titan-node-domain
