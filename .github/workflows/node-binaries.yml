@@ -1,0 +1,44 @@
+name: Node binaries
+
+# Programs for our nodes, built here so a node needs no Go:
+#   titan-mieru-gw (server/titan-mieru-gw), linux amd64 → release "node-binaries".
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths: ["server/titan-mieru-gw/**", ".github/workflows/node-binaries.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: node-binaries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/titan-mieru-gw/go.mod
+          cache-dependency-path: server/titan-mieru-gw/go.sum
+
+      - name: Build
+        run: |
+          mkdir -p out
+          cd server/titan-mieru-gw
+          go vet .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o ../../out/titan-mieru-gw-linux-amd64 .
+          cd ../../out && sha256sum titan-mieru-gw-* | tee SHA256SUMS
+
+      - name: Publish
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: node-binaries
+          target_commitish: ${{ github.sha }}
+          name: Программы для нод
+          make_latest: false
+          files: out/*

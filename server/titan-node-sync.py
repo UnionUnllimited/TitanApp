@@ -28,6 +28,8 @@ Settings: /etc/titan-sync.env (never in this repo)
     EXTRA_GATEWAY_USERS=                         # "name:pass", not accounted (go out directly)
     MASQUE_GATEWAY_TEMPLATE=                     # Xray gateway for MASQUE (accounted), see below
     MASQUE_GATEWAY_CONFIG=/etc/titan-masque/config.json
+    MIERU_GATEWAY_TEMPLATE=                      # titan-mieru-gw (server/titan-mieru-gw), see below
+    MIERU_GATEWAY_CONFIG=/etc/titan-mieru/config.json
 
 Gateways (accounting): config templates whose server entries get every user, plus a
 "titan" block mapping each entry's tag to the node's Xray placeholder (Shadowsocks on
@@ -39,6 +41,8 @@ Needs CREDENTIAL=ss (the secret is that password).
   - GATEWAY_TEMPLATE: sing-box; its naive inbounds (and masque-server endpoints, though
     sing-box doesn't tell MASQUE users apart, so those can't be accounted).
   - MASQUE_GATEWAY_TEMPLATE: Xray 26.9.30+; its masque inbounds (Xray knows the user).
+  - MIERU_GATEWAY_TEMPLATE: titan-mieru-gw settings (listen, portRange, xray, method,
+    ipsFile); the users are added here. The gateway re-reads the file by itself.
     ONLY_SQUADS=                                 # optional: internal squad UUIDs, comma-separated
     CREDENTIAL=vless                             # vless (vlessUuid) or ss (ssPassword)
 
@@ -296,6 +300,19 @@ def sync_xray_masque(template_path, path, secrets):
     return True
 
 
+def sync_mieru_gateway(template_path, path, secrets):
+    try:
+        with open(template_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        print(f"mieru gateway: no {template_path}, skipped")
+        return False
+    cfg["users"] = [{"name": u, "password": p, "secret": s} for (u, p), s in ((derive(s), s) for s in secrets)]
+    if not cfg["users"]:
+        return False  # the gateway keeps its last users rather than open up
+    return write_if_changed(path, json.dumps(cfg, indent=1) + "\n")
+
+
 def sync_gateway(template_path, path, secrets, extras):
     try:
         with open(template_path, encoding="utf-8") as f:
@@ -349,6 +366,11 @@ def main():
         masque_config = env.get("MASQUE_GATEWAY_CONFIG", "/etc/titan-masque/config.json")
         if sync_xray_masque(masque_template, masque_config, uuids):
             changed.append("masque-gateway")
+    mieru_template = env.get("MIERU_GATEWAY_TEMPLATE", "")
+    if mieru_template:
+        mieru_config = env.get("MIERU_GATEWAY_CONFIG", "/etc/titan-mieru/config.json")
+        if sync_mieru_gateway(mieru_template, mieru_config, uuids):
+            changed.append("mieru-gateway")
 
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:
