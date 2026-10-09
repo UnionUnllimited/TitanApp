@@ -15,7 +15,7 @@ object Config {
      * Samizdat nodes (lantern-box): the server's X25519 public key and the cover site it
      * masquerades as. Public by design (like a Reality pbk); one key for all our nodes.
      */
-    const val SAMIZDAT_PUBLIC_KEY = ""
+    const val SAMIZDAT_PUBLIC_KEY = "291599e66335df1f75872203a42e7061a2af5e5db6d8053c67a073693a02b012"
     const val SAMIZDAT_SNI = "ok.ru"
 }
 
