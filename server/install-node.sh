@@ -114,6 +114,15 @@ cat > /etc/caddy/Caddyfile <<EOF
 {
 	http_port 80
 	https_port 9443
+	auto_https disable_redirects
+	cert_issuer acme {
+		disable_tlsalpn_challenge
+	}
+}
+# Port 80 must be public: Let's Encrypt checks the domain there (HTTP-01).
+# TLS-ALPN is off because 443 belongs to Xray.
+http://$DOMAIN {
+	respond "ok"
 }
 $DOMAIN:9443 {
 	bind 127.0.0.1
