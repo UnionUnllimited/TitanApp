@@ -83,6 +83,10 @@ object Updater {
     fun installAndRestart(setup: File) {
         val pid = ProcessHandle.current().pid()
         val coreDir = AppPaths.coreDir.absolutePath
+        // Where the installer puts the app (DefaultDirName in titan.iss); else this exe.
+        val installed = File(System.getenv("LOCALAPPDATA") ?: "", "Programs\\Titan VPS\\Titan VPS.exe")
+        val exe = installed.takeIf { it.isFile }?.absolutePath
+            ?: ProcessHandle.current().info().command().orElse(null)
         val script = File(setup.parentFile, "update.cmd")
         script.writeText(
             buildString {
@@ -95,6 +99,12 @@ object Updater {
                 appendLine("powershell -NoProfile -Command \"Get-Process xray,sing-box -ErrorAction SilentlyContinue | Where-Object { \$_.Path -like '$coreDir*' } | Stop-Process -Force\"")
                 appendLine("timeout /t 1 /nobreak >nul")
                 appendLine("\"${setup.absolutePath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS")
+                // The installer should start the new version itself, but doesn't always:
+                // start it here unless it's already running.
+                if (exe != null) {
+                    appendLine("timeout /t 3 /nobreak >nul")
+                    appendLine("tasklist /FI \"IMAGENAME eq Titan VPS.exe\" | find /I \"Titan VPS.exe\" >nul || start \"\" \"$exe\"")
+                }
             }.replace("\n", "\r\n"),
             Charsets.UTF_8,
         )
