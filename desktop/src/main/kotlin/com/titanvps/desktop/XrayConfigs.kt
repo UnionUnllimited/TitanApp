@@ -34,6 +34,17 @@ object XrayConfigs {
         }
     }
 
+    /**
+     * Experimental TCP Fast Open: hosts whose name (or Host Mapper "titan" field) says "tfo"
+     * dial with TFO, so it can be tried on one host without touching the others.
+     */
+    private fun applyTfo(name: String, proxy: JSONObject) {
+        if ("tfo" !in name.lowercase() && "tfo" !in proxy.optString("titan").lowercase()) return
+        val stream = proxy.optJSONObject("streamSettings") ?: JSONObject().also { proxy.put("streamSettings", it) }
+        val sockopt = stream.optJSONObject("sockopt") ?: JSONObject().also { stream.put("sockopt", it) }
+        sockopt.put("tcpFastOpen", true)
+    }
+
     private fun serverFromConfig(src: JSONObject, index: Int): Server? {
         val cfg = JSONObject(src.toString())
         val outbounds = cfg.optJSONArray("outbounds") ?: return null
@@ -53,6 +64,7 @@ object XrayConfigs {
         cfg.put(INBOUND_KEY, tags)
         cfg.remove("inbounds")
         dropAllowInsecure(outbounds)
+        applyTfo(name, proxy)
         return Server(id = "json-$index-${name.hashCode()}", name = name, xrayJson = cfg.toString(), proxyTag = proxy.getString("tag"))
     }
 
