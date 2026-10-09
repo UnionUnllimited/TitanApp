@@ -101,8 +101,23 @@ class AppSettings(context: Context) {
         _ruAppsOff.value = off
     }
 
+    private val _relays = MutableStateFlow(
+        runCatching { org.json.JSONObject(prefs.getString(KEY_RELAYS, null) ?: "{}") }.getOrDefault(org.json.JSONObject())
+            .let { o -> o.keys().asSequence().associateWith { o.getString(it) } }
+    )
+    /** Servers blocked directly that work through another one: server id → relay id. */
+    val relays: StateFlow<Map<String, String>> = _relays.asStateFlow()
+
+    fun setRelay(serverId: String, relayId: String?) {
+        val next = if (relayId == null) _relays.value - serverId else _relays.value + (serverId to relayId)
+        if (next == _relays.value) return
+        prefs.edit().putString(KEY_RELAYS, org.json.JSONObject(next).toString()).apply()
+        _relays.value = next
+    }
+
     fun reset() {
         prefs.edit().clear().apply()
+        _relays.value = emptyMap()
         _excludedApps.value = emptySet()
         _ruAppsOff.value = emptySet()
         _autoBypass.value = true
@@ -122,5 +137,6 @@ class AppSettings(context: Context) {
         const val KEY_AUTO_CONNECT = "auto_connect"
         const val KEY_NOTIFICATIONS = "notifications"
         const val KEY_FAVORITES = "favorites"
+        const val KEY_RELAYS = "relays"
     }
 }

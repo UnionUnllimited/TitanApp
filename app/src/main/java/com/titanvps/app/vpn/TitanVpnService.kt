@@ -111,8 +111,11 @@ class TitanVpnService : VpnService() {
             )
             // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound points
             // at it; MASQUE: Xray's own client.
-            val (serverJson, p) = com.titanvps.app.core.Plugins.prepare(this, server.name, server.xrayJson, server.proxyTag)
+            val (prepared, p) = com.titanvps.app.core.Plugins.prepare(this, server.name, server.xrayJson, server.proxyTag)
             plugin = p
+            // Blocked directly on this network: through the server the ping found for it.
+            val relay = TitanApp.get(this).settings.relays.value[server.id]?.let { id -> all.firstOrNull { it.id == id } }
+            val serverJson = relay?.let { com.titanvps.app.core.Relay.chain(prepared, server.proxyTag, it) } ?: prepared
             val config = XrayConfigs.buildRunConfig(serverJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir, server.proxyTag, localProxy)
             XrayCore.start(config, underlyingDns) { fd -> protect(fd) }
             VpnStatus.localProxy = localProxy

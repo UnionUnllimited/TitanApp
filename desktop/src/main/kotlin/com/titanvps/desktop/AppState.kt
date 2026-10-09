@@ -396,7 +396,7 @@ class AppState {
                 onStart = { ids -> scope.launch { measuring = measuring + ids } },
                 onResult = { id, ms ->
                     scope.launch {
-                        if (ms >= 0) { pings[id] = ms; relayed[id] = via.getValue(id) }
+                        if (ms >= 0) { pings[id] = ms; relayed[id] = via.getValue(id) } else relayed.remove(id)
                         measuring = measuring - id
                     }
                 },

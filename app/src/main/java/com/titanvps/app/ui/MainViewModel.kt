@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.titanvps.app.BuildConfig
 import com.titanvps.app.TitanApp
 import com.titanvps.app.core.PingClient
+import com.titanvps.app.core.Relay
 import com.titanvps.app.vpn.TitanVpnService
 import com.titanvps.app.vpn.VpnState
 import com.titanvps.app.vpn.VpnStatus
@@ -29,6 +30,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val autoConnect = settings.autoConnect
     val notifications = settings.notifications
     val favorites = settings.favorites
+    val relays = settings.relays
     val onMobile = TitanApp.get(app).network.onMobile
 
     // Updates turn the VPN on themselves (through MainActivity, which handles the VPN prompt).
@@ -192,6 +194,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             is PingClient.Event.Partial -> {
                                 answered += event.delays.keys
                                 _pings.value = _pings.value + event.delays
+                                event.delays.filterValues { it >= 0 }.keys.forEach { settings.setRelay(it, null) }
                                 _measuring.value = _measuring.value - event.delays.keys
                             }
                             is PingClient.Event.Done -> error = event.error
@@ -204,8 +207,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _pings.value = _pings.value + missing.associateWith { -1L }
                 _measuring.value = _measuring.value - targets.toSet()
                 error?.let { android.util.Log.w("Titan", "ping failed: $it") }
-                onDone(error)
             }
+            runCatching { tryRelays(servers, targets) }
+            onDone(error)
+        }
+    }
+
+    /**
+     * Servers that timed out directly (an IP blocked on this network): measured again through
+     * the fastest server that answered; the ones that work are connected that way.
+     */
+    private suspend fun tryRelays(servers: List<com.titanvps.app.data.Server>, targets: List<String>) {
+        val known = _pings.value
+        val probes = targets.filter { known[it] == -1L }
+            .mapNotNull { id -> servers.firstOrNull { it.id == id } }
+            .filter(Relay::canChain)
+            .mapNotNull { s ->
+                val relay = Relay.pick(servers, known, s) ?: return@mapNotNull null
+                s.copy(id = Relay.PROBE_PREFIX + s.id, xrayJson = Relay.chain(s.xrayJson, s.proxyTag, relay)) to relay.id
+            }
+        if (probes.isEmpty()) return
+        val via = probes.associate { (probe, relayId) -> probe.id.removePrefix(Relay.PROBE_PREFIX) to relayId }
+        _measuring.value = _measuring.value + via.keys
+        try {
+            withTimeoutOrNull(120_000) {
+                // Together with every server, so the warm ping core keeps serving them all.
+                PingClient.ping(getApplication<Application>(), servers + probes.map { it.first }, probes.map { it.first.id }).collect { event ->
+                    if (event is PingClient.Event.Partial) {
+                        val ok = event.delays.filterValues { it >= 0 }.mapKeys { it.key.removePrefix(Relay.PROBE_PREFIX) }
+                        event.delays.keys.map { it.removePrefix(Relay.PROBE_PREFIX) }
+                            .forEach { id -> settings.setRelay(id, if (id in ok) via.getValue(id) else null) }
+                        _pings.value = _pings.value + ok
+                        _measuring.value = _measuring.value - event.delays.keys.map { it.removePrefix(Relay.PROBE_PREFIX) }.toSet()
+                    }
+                }
+            }
+        } finally {
+            _measuring.value = _measuring.value - via.keys
         }
     }
 
