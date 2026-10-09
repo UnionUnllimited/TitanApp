@@ -1,0 +1,51 @@
+name: Node binaries
+
+# Server-side programs for our nodes, built here so a node doesn't need Go and 2 GB RAM:
+#   lantern-box (Samizdat server), linux amd64/arm64 → release "node-binaries".
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths: [".github/workflows/node-binaries.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: node-binaries-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Pinned: the node config format follows this version.
+  LANTERN_BOX_REF: v0.0.99
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Get lantern-box
+        run: git clone --depth 1 --branch "$LANTERN_BOX_REF" https://github.com/getlantern/lantern-box src
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+
+      - name: Build
+        working-directory: src/cmd
+        run: |
+          mkdir -p ../../out
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" \
+              -tags "with_gvisor,with_quic,with_utls,with_acme" -o ../../out/lantern-box-linux-$arch .
+          done
+          cd ../../out && sha256sum lantern-box-* | tee SHA256SUMS
+
+      - name: Publish
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: node-binaries
+          target_commitish: ${{ github.sha }}
+          name: Программы для нод (lantern-box ${{ env.LANTERN_BOX_REF }})
+          make_latest: false
+          files: out/*
