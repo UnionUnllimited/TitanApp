@@ -94,7 +94,7 @@ class AppState {
 
     fun refresh(silent: Boolean = false) {
         val url = subscription?.url ?: return
-        load(url, silent)
+        load(url, silent) { if (!silent) message = "Подписка обновлена" }
     }
 
     private fun load(url: String, silent: Boolean, onDone: () -> Unit = {}) {

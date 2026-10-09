@@ -102,8 +102,14 @@ object Links {
 object ServerGroups {
     enum class Group(val title: String) { SERVERS("Серверы"), BYPASS("Обходы") }
 
-    /** Section headers (БЕЗЛИМИТНЫЕ / ЛИМИТНЫЕ ОСТ) and info entries with a dummy address. */
-    fun isHidden(server: Server): Boolean = "лимитн" in server.name.lowercase() || isPlaceholder(server)
+    /** Panel notices sent as hosts with a real address ("СЕРВЕР ДЛЯ / ОБНОВЛЕНИЯ ПОДПИСКИ"). */
+    private val NOTICES = listOf("сервер для", "обновления подписки")
+
+    /** Section headers (БЕЗЛИМИТНЫЕ / ЛИМИТНЫЕ ОСТ) and info entries (dummy address or notice text). */
+    fun isHidden(server: Server): Boolean {
+        val n = server.name.lowercase()
+        return "лимитн" in n || NOTICES.any { it in n } || isPlaceholder(server)
+    }
 
     /** "Обходы" are exactly the servers with "обход" in the name (same as on Android). */
     fun isBypass(server: Server): Boolean = "обход" in server.name.lowercase()

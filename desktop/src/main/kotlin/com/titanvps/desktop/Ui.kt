@@ -434,7 +434,7 @@ private fun ControlPanel(state: AppState, sub: Subscription, openSubscription: (
                 Text("Titan VPS", fontSize = 34.sp, fontWeight = FontWeight.Bold)
                 Text("Быстрый. Стабильный. Без ограничений.", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            SubscriptionCard(sub, openSubscription)
+            SubscriptionCard(sub, state.busy, { state.refresh() }, openSubscription)
             AccountBanner(state)
             Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -562,7 +562,7 @@ private fun SquareButton(icon: ImageVector, description: String, spinning: Boole
 }
 
 @Composable
-private fun SubscriptionCard(sub: Subscription, onOpen: () -> Unit) {
+private fun SubscriptionCard(sub: Subscription, refreshing: Boolean, onRefresh: () -> Unit, onOpen: () -> Unit) {
     val now = System.currentTimeMillis() / 1000
     val active = sub.info.expireAt <= 0 || sub.info.expireAt > now
     Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
@@ -575,6 +575,15 @@ private fun SubscriptionCard(sub: Subscription, onOpen: () -> Unit) {
                 Text(if (active) "Подписка активна" else "Подписка истекла", fontWeight = FontWeight.SemiBold)
                 Text(expiryText(sub.info.expireAt), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            // Refresh the server list right here, without going to Settings.
+            Box(
+                Modifier.size(36.dp).clip(CircleShape).clickable(enabled = !refreshing, onClick = onRefresh),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (refreshing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                else Icon(Icons.Default.Refresh, "Обновить подписку", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.width(4.dp))
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

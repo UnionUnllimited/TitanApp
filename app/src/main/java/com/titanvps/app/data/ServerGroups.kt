@@ -11,8 +11,11 @@ object ServerGroups {
      */
     fun isHidden(server: Server): Boolean {
         val n = server.name.lowercase()
-        return "лимитн" in n || isPlaceholder(server)
+        return "лимитн" in n || NOTICES.any { it in n } || isPlaceholder(server)
     }
+
+    /** Notices that come with a real address, so the dummy-address check misses them. */
+    private val NOTICES = listOf("сервер для", "обновления подписки")
 
     /** "Обходы" are exactly the servers with "обход" in the name (Обход 5, АВТО | Быстрые обходы). */
     fun isBypass(server: Server): Boolean = "обход" in server.name.lowercase()

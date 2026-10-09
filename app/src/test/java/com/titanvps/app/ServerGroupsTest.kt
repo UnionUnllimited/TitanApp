@@ -35,6 +35,8 @@ class ServerGroupsTest {
         assert(ServerGroups.isHidden(s("🇦🇱 👇БЕЗЛИМИТНЫЕ👇")))
         assert(ServerGroups.isHidden(s("🇦🇱 👇ЛИМИТНЫЕ ОСТ:1004.00 GB")))
         assert(!ServerGroups.isHidden(s("🇩🇪 Германия 1")))
+        assert(ServerGroups.isHidden(s("🇦🇱 СЕРВЕР ДЛЯ")))
+        assert(ServerGroups.isHidden(s("🇦🇱 ОБНОВЛЕНИЯ ПОДПИСКИ")))
         val dummy = Server("x", "🇦🇱 СЕРВЕР ДЛЯ", """{"outbounds":[{"tag":"proxy","protocol":"vless",
             "settings":{"vnext":[{"address":"127.0.0.1","port":1,"users":[{"id":"0"}]}]}}]}""", "proxy")
         assert(ServerGroups.isHidden(dummy))
