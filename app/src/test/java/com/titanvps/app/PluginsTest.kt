@@ -35,6 +35,14 @@ class PluginsTest {
         assertEquals("QIkOC+7qEbZ9NjHwFOeGOg==:f/MV3BuEkMAGhNsqz2TzIQ==", stls.ss2022Password)
         assertEquals(Plugins.Kind.ANYTLS, Plugins.endpoint("Латвия AnyTLS", json, "proxy")!!.kind)
         assertEquals(Plugins.Kind.SSH, Plugins.endpoint("Латвия SSH", json, "proxy")!!.kind)
+        // Host Mapper: protocol from the inbound tag Remnawave copies into the outbound.
+        fun mapped(value: String) = json.replace("\"tag\": \"proxy\",", "\"tag\": \"proxy\", \"titan\": \"$value\",")
+        assertEquals(Plugins.Kind.TUIC, Plugins.endpoint("🇱🇻 Латвия 2", mapped("titan-tuic-lv"), "proxy")!!.kind)
+        assertEquals(Plugins.Kind.NAIVE, Plugins.endpoint("Латвия TUIC", mapped("titan-naive-lv"), "proxy")!!.kind)
+        val masque = Plugins.endpoint("Латвия 3", mapped("masque-tcp"), "proxy")!!
+        assertEquals(Plugins.Kind.MASQUE, masque.kind)
+        assert(masque.http2)
+        assert(!Plugins.endpoint("Латвия 4", mapped("titan-masque-lv"), "proxy")!!.http2)
         assertNull(Plugins.endpoint("Латвия WiFi LTE", json, "proxy"))
     }
 

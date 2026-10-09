@@ -29,7 +29,14 @@ object Plugins {
     /** [lib]: the client we run as a local SOCKS; null when Xray speaks the protocol itself. */
     enum class Kind(val lib: String?) { NAIVE("libnaive.so"), MIERU("libmieru.so"), TUIC("libsingbox.so"), ANYTLS("libsingbox.so"), SHADOWTLS("libsingbox.so"), SSH("libsingbox.so"), MASQUE(null) }
 
-    data class Endpoint(val kind: Kind, val host: String, val port: Int, val secret: String) {
+    data class Endpoint(
+        val kind: Kind,
+        val host: String,
+        val port: Int,
+        val secret: String,
+        /** MASQUE over HTTP/2 (TCP) instead of HTTP/3. */
+        val http2: Boolean = false,
+    ) {
         /** URL-safe credentials, same derivation as the node sync. */
         val user: String get() = derived().substring(0, 16)
         val password: String get() = derived().substring(16, 48)
@@ -49,6 +56,20 @@ object Plugins {
     /** ShadowTLS handshakes with this real site (the node's "handshake" server). */
     const val SHADOWTLS_SNI = "www.amd.com"
 
+    /**
+     * Which protocol a host is. Preferably from the "titan" field that Remnawave's Host Mapper
+     * puts into the outbound — the host's inbound tag (titan-<protocol>-…, rule
+     * {"op": "copy", "from": "$host.metadata.inboundTag", "to": "titan"}) or a fixed value
+     * ("tuic", "masque-tcp", …); otherwise from the host's name.
+     */
+    fun spec(name: String, outbound: JSONObject?): Pair<Kind, Boolean>? {
+        val mapped = outbound?.optString("titan").orEmpty().lowercase().removePrefix("titan-")
+        val source = mapped.ifEmpty { name.lowercase() }
+        val kind = kindOf(source) ?: return null
+        val http2 = kind == Kind.MASQUE && ("tcp" in source || "h2" in source)
+        return kind to http2
+    }
+
     fun kindOf(name: String): Kind? {
         val n = name.lowercase()
         return when {
@@ -65,30 +86,29 @@ object Plugins {
 
     /** The plugin endpoint of a server, or null for a regular Xray server. */
     fun endpoint(name: String, xrayJson: String, proxyTag: String): Endpoint? {
-        val kind = kindOf(name) ?: return null
         val outbound = outbounds(xrayJson)?.let { arr ->
             (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.firstOrNull { it.optString("tag") == proxyTag }
         } ?: return null
+        val (kind, http2) = spec(name, outbound) ?: return null
         val settings = outbound.optJSONObject("settings") ?: return null
         settings.optJSONArray("servers")?.optJSONObject(0)?.let { s ->
             val secret = s.optString("password")
             if (s.optString("address").isNotEmpty() && secret.isNotEmpty()) {
-                return Endpoint(kind, s.optString("address"), s.optInt("port"), secret)
+                return Endpoint(kind, s.optString("address"), s.optInt("port"), secret, http2)
             }
         }
         settings.optJSONArray("vnext")?.optJSONObject(0)?.let { v ->
             val secret = v.optJSONArray("users")?.optJSONObject(0)?.optString("id").orEmpty().lowercase()
             if (v.optString("address").isNotEmpty() && secret.isNotEmpty()) {
-                return Endpoint(kind, v.optString("address"), v.optInt("port"), secret)
+                return Endpoint(kind, v.optString("address"), v.optInt("port"), secret, http2)
             }
         }
         return null
     }
 
     /** The server's config with its proxy outbound turned into Xray's own MASQUE client. */
-    fun withMasque(xrayJson: String, proxyTag: String, endpoint: Endpoint, name: String): String {
-        val n = name.lowercase()
-        val http2 = "tcp" in n || "h2" in n
+    fun withMasque(xrayJson: String, proxyTag: String, endpoint: Endpoint): String {
+        val http2 = endpoint.http2
         val cfg = JSONObject(xrayJson)
         val arr = cfg.optJSONArray("outbounds") ?: return xrayJson
         for (i in 0 until arr.length()) {
@@ -116,7 +136,7 @@ object Plugins {
      */
     fun prepare(context: Context, name: String, xrayJson: String, proxyTag: String): Pair<String, PluginProcess?> {
         val ep = endpoint(name, xrayJson, proxyTag) ?: return xrayJson to null
-        if (ep.kind.lib == null) return withMasque(xrayJson, proxyTag, ep, name) to null
+        if (ep.kind.lib == null) return withMasque(xrayJson, proxyTag, ep) to null
         val p = PluginProcess(context, ep)
         try {
             p.start()
