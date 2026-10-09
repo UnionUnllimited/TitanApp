@@ -40,7 +40,7 @@ class ServerGroupsTest {
         val dummy = Server("x", "🇦🇱 СЕРВЕР ДЛЯ", """{"outbounds":[{"tag":"proxy","protocol":"vless",
             "settings":{"vnext":[{"address":"127.0.0.1","port":1,"users":[{"id":"0"}]}]}}]}""", "proxy")
         assert(ServerGroups.isHidden(dummy))
-        val real = Server("y", "🇦🇱 СЕРВЕР ДЛЯ", """{"outbounds":[{"tag":"proxy","protocol":"vless",
+        val real = Server("y", "🇦🇱 Албания", """{"outbounds":[{"tag":"proxy","protocol":"vless",
             "settings":{"vnext":[{"address":"node.example","port":443,"users":[{"id":"0"}]}]}}]}""", "proxy")
         assert(!ServerGroups.isHidden(real))
     }
