@@ -215,6 +215,7 @@ class AppState {
                     plugin?.close()
                     plugin = null
                     val (serverJson, p) = Plugins.prepare(server)
+                    if ("\"tcpFastOpen\":true" in serverJson) Admin.enableTcpFastOpen()
                     plugin = p
                     core.start(XrayConfigs.buildProxyConfig(serverJson, socks, http, logDir, server.proxyTag), geo)
                     if (mode == "tun") {

@@ -21,6 +21,21 @@ object Admin {
     val isAdmin: Boolean
         get() = !isWindows || runCatching { Native.load("shell32", Shell::class.java).IsUserAnAdmin() }.getOrDefault(false)
 
+    private var tfoEnabled = false
+
+    /**
+     * Windows keeps outgoing TCP Fast Open off by default; turn it on (needs admin) the
+     * first time a TFO host connects. Without admin it's left as is.
+     */
+    fun enableTcpFastOpen() {
+        if (tfoEnabled || !isWindows || !isAdmin) return
+        tfoEnabled = runCatching {
+            ProcessBuilder("netsh", "int", "tcp", "set", "global", "fastopen=enabled")
+                .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .start().waitFor() == 0
+        }.getOrDefault(false)
+    }
+
     /** Starts this app again "as administrator" (Windows asks). True if it was started. */
     fun relaunchElevated(): Boolean {
         val exe = ProcessHandle.current().info().command().orElse(null) ?: return false
