@@ -4,7 +4,8 @@
 # with accounting through the node's Remnawave placeholders and users synced from
 # Remnawave (titan-node-sync), all taking user changes without restarts.
 #
-#   DOMAIN=swe.example.com REMNAWAVE_URL=https://panel… REMNAWAVE_TOKEN=… bash install-node.sh
+#   bash install-node.sh            # asks for the domain, the panel address and the token
+#   DOMAIN=… REMNAWAVE_URL=… REMNAWAVE_TOKEN=… bash install-node.sh   # or all at once
 #
 # DOMAIN must already point at this server (A record, no proxying), port 80 must be free
 # (certificate). The Remnawave placeholders (Shadowsocks chacha20-ietf-poly1305 on
@@ -14,7 +15,6 @@
 # Mieru 30120-30130, SSH 2222 (override with PORT_* the same way).
 set -euo pipefail
 
-: "${DOMAIN:?set DOMAIN: the name of this node, already pointing here}"
 REPO="https://github.com/UnionUnllimited/TitanApp"
 BRANCH="${BRANCH:-claude/exciting-ptolemy-oiy9r6}"
 XRAY_VERSION="${XRAY_VERSION:-v26.9.30}"
@@ -30,13 +30,36 @@ step() { printf '\n== %s\n' "$*"; }
 fail() { printf '\n!! %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail "run as root"
 
+# Ask for what isn't given; an existing /etc/titan-sync.env offers its values (Enter keeps them).
+saved() { [ -f /etc/titan-sync.env ] && sed -n "s/^$1=//p" /etc/titan-sync.env | head -1; }
+ask() { # var prompt default secret
+  local value
+  if [ -n "${!1:-}" ]; then return; fi
+  [ -t 0 ] || exec </dev/tty
+  if [ "${4:-}" = secret ]; then
+    read -r -s -p "$2${3:+ [Enter: keep the saved one]}: " value; echo
+  else
+    read -r -p "$2${3:+ [$3]}: " value
+  fi
+  value=$(printf '%s' "${value:-$3}" | tr -d '[:space:]')
+  [ -n "$value" ] || fail "$2: empty"
+  printf -v "$1" '%s' "$value"
+}
+ask DOMAIN "Domain of this node (A record to this server, no proxy)" "$(cat /etc/titan-node-domain 2>/dev/null)"
+ask REMNAWAVE_URL "Remnawave panel address (https://…)" "$(saved REMNAWAVE_URL)"
+ask REMNAWAVE_TOKEN "Remnawave API token" "$(saved REMNAWAVE_TOKEN)" secret
+case "$REMNAWAVE_URL" in http://*|https://*) ;; *) fail "the panel address must start with https://";; esac
+echo "$DOMAIN" > /etc/titan-node-domain
+
 step "Checks"
-# Remnawave credentials: from the environment, or an existing /etc/titan-sync.env.
-if [ -z "${REMNAWAVE_URL:-}" ] && [ -f /etc/titan-sync.env ]; then
-  REMNAWAVE_URL=$(sed -n 's/^REMNAWAVE_URL=//p' /etc/titan-sync.env)
-  REMNAWAVE_TOKEN=$(sed -n 's/^REMNAWAVE_TOKEN=//p' /etc/titan-sync.env)
-fi
-: "${REMNAWAVE_URL:?set REMNAWAVE_URL}"; : "${REMNAWAVE_TOKEN:?set REMNAWAVE_TOKEN}"
+ip=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}')
+here=$(curl -fsS4 --max-time 10 https://api.ipify.org 2>/dev/null || true)
+echo "   $DOMAIN -> ${ip:-?}, this server: ${here:-?}"
+[ -n "$ip" ] || fail "$DOMAIN doesn't resolve yet — add the A record (no proxy) and wait a minute"
+[ -z "$here" ] || [ "$ip" = "$here" ] || fail "$DOMAIN points to $ip, not to this server ($here). Proxied in Cloudflare? Turn the cloud grey."
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $REMNAWAVE_TOKEN" "${REMNAWAVE_URL%/}/api/users?start=0&size=1" || true)
+[ "$code" = 200 ] || fail "Remnawave API answers $code — check the address and the token (needs read access to users)"
+echo "   Remnawave API ok"
 busy=""
 for p in 80 "$PORT_NAIVE" "$PORT_ANYTLS" "$PORT_SHADOWTLS" "$PORT_MASQUE" "$PORT_SSH" 30120; do
   owner=$(ss -Hltnp "sport = :$p" 2>/dev/null | grep -o 'users:(("[^"]*' | head -1 | cut -d'"' -f2 || true)
