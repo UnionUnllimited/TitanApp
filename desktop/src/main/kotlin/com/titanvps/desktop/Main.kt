@@ -50,8 +50,17 @@ import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 
+/** Anything that kills the app lands in logs\crash.log: a window that never opens says nothing. */
+private fun logCrash(e: Throwable) {
+    runCatching {
+        java.io.File(AppPaths.logDir, "crash.log")
+            .appendText("${java.time.LocalDateTime.now()} build ${Updater.currentBuild}\n${e.stackTraceToString()}\n")
+    }
+}
+
 fun main() {
-    val state = AppState()
+    Thread.setDefaultUncaughtExceptionHandler { _, e -> logCrash(e) }
+    val state = try { AppState() } catch (e: Throwable) { logCrash(e); throw e }
     application {
         val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
         val quit = {
