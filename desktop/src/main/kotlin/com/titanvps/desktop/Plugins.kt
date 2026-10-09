@@ -10,31 +10,17 @@ import java.net.Socket
 import java.security.MessageDigest
 
 /**
- * NaiveProxy, Mieru and Samizdat servers: hosts named "… Naive" / "… Mieru" / "… Samizdat"
+ * NaiveProxy and Mieru servers, same as on Android: hosts named "… Naive" / "… Mieru"
  * carry the node's address, port and the user's secret; we run the protocol's own client
- * (naive.exe / mieru.exe / samizdat.exe next to xray.exe) as a local SOCKS and point Xray's
- * proxy outbound at it. Credentials: sha256("titan:" + secret), as server/titan-node-sync.py.
- *
- * Samizdat hosts sit on a VLESS + Reality placeholder inbound whose private key is the
- * Samizdat node's, so the subscription brings everything: Reality publicKey = the node's
- * key, serverName = the cover site; nothing about the node is built into the app.
+ * (naive.exe / mieru.exe next to xray.exe) as a local SOCKS and point Xray's proxy
+ * outbound at it. Credentials: sha256("titan:" + secret), as server/titan-node-sync.py.
  */
 object Plugins {
-    enum class Kind(val exe: String) { NAIVE("naive.exe"), MIERU("mieru.exe"), SAMIZDAT("samizdat.exe") }
+    enum class Kind(val exe: String) { NAIVE("naive.exe"), MIERU("mieru.exe") }
 
-    data class Endpoint(
-        val kind: Kind,
-        val host: String,
-        val port: Int,
-        val secret: String,
-        /** Samizdat: server X25519 public key (hex) and cover site, from realitySettings. */
-        val publicKey: String = "",
-        val sni: String = "",
-    ) {
+    data class Endpoint(val kind: Kind, val host: String, val port: Int, val secret: String) {
         val user: String get() = derived().substring(0, 16)
         val password: String get() = derived().substring(16, 48)
-        /** Samizdat short id (8 bytes as hex). */
-        val shortId: String get() = derived().substring(48, 64)
         private fun derived(): String = MessageDigest.getInstance("SHA-256")
             .digest("titan:$secret".toByteArray()).joinToString("") { "%02x".format(it) }
     }
@@ -44,7 +30,6 @@ object Plugins {
         return when {
             "naive" in n -> Kind.NAIVE
             "mieru" in n -> Kind.MIERU
-            "samizdat" in n -> Kind.SAMIZDAT
             else -> null
         }
     }
@@ -55,26 +40,16 @@ object Plugins {
         val ob = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.firstOrNull { it.optString("tag") == server.proxyTag }
             ?: return null
         val settings = ob.optJSONObject("settings") ?: return null
-        val reality = ob.optJSONObject("streamSettings")?.optJSONObject("realitySettings")
-        val publicKey = reality?.optString("publicKey").orEmpty().let(::base64UrlToHex)
-        val sni = reality?.optString("serverName").orEmpty()
         settings.optJSONArray("servers")?.optJSONObject(0)?.let { s ->
             val secret = s.optString("password")
             if (s.optString("address").isNotEmpty() && secret.isNotEmpty()) return Endpoint(kind, s.optString("address"), s.optInt("port"), secret)
         }
         settings.optJSONArray("vnext")?.optJSONObject(0)?.let { v ->
             val secret = v.optJSONArray("users")?.optJSONObject(0)?.optString("id").orEmpty().lowercase()
-            if (v.optString("address").isNotEmpty() && secret.isNotEmpty()) {
-                return Endpoint(kind, v.optString("address"), v.optInt("port"), secret, publicKey, sni)
-            }
+            if (v.optString("address").isNotEmpty() && secret.isNotEmpty()) return Endpoint(kind, v.optString("address"), v.optInt("port"), secret)
         }
         return null
     }
-
-    /** Reality keys are base64url (no padding); samizdat-client takes hex. "" if not 32 bytes. */
-    fun base64UrlToHex(key: String): String = runCatching {
-        java.util.Base64.getUrlDecoder().decode(key.trim().trimEnd('='))
-    }.getOrNull()?.takeIf { it.size == 32 }?.joinToString("") { "%02x".format(it) }.orEmpty()
 
     fun withLocalSocks(xrayJson: String, proxyTag: String, port: Int): String {
         val cfg = JSONObject(xrayJson)
@@ -111,14 +86,6 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
                 ProcessBuilder(exe.absolutePath, "run").apply {
                     environment()["MIERU_CONFIG_JSON_FILE"] = config.absolutePath
                 }
-            }
-            Plugins.Kind.SAMIZDAT -> {
-                if (endpoint.publicKey.isEmpty() || endpoint.sni.isEmpty()) throw IllegalStateException("Сервер пока не настроен")
-                ProcessBuilder(
-                    exe.absolutePath, "-listen", "127.0.0.1:$port",
-                    "-server", "${endpoint.host}:${endpoint.port}", "-sni", endpoint.sni,
-                    "-pubkey", endpoint.publicKey, "-sid", endpoint.shortId,
-                )
             }
         }
         process = pb.directory(dir).redirectErrorStream(true).redirectOutput(log).start()
