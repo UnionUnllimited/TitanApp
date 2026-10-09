@@ -52,6 +52,8 @@ Needs CREDENTIAL=ss (the secret is that password).
     changes without restarting). Only the users file is written; the gateway reads its
     template itself and picks the file up, no reload. Replaces GATEWAY_TEMPLATE.
   - MASQUE_GATEWAY_TEMPLATE: Xray 26.9.30+; its masque inbounds (Xray knows the user).
+    With "titan": {"api": "127.0.0.1:61099"} user changes go through Xray's API, no
+    restart (MASQUE_XRAY_BIN, default xray-masque, runs the `xray api` calls).
   - MIERU_GATEWAY_TEMPLATE: titan-mieru-gw settings (listen, portRange, xray, method,
     ipsFile, and optionally "ssh": {listen, xray, hostKey} for SSH tunnels with the same
     users: login / password); the users are added here. The gateway re-reads the file.
@@ -297,18 +299,24 @@ def build_gateway(template, secrets, extras):
 
 
 def build_xray_masque(template, secrets):
-    """The Xray MASQUE gateway: users on every masque inbound, per-user Shadowsocks out."""
+    """The Xray MASQUE gateway: users on every masque inbound, per-user Shadowsocks out.
+
+    The first outbound is a blackhole: Xray's default, so a user without a rule (unknown,
+    or just removed) goes nowhere, and new rules can simply be appended via the API.
+    """
     cfg = json.loads(json.dumps(template))
     titan = cfg.pop("titan", {})
     method = titan.get("method", "chacha20-ietf-poly1305")
     xray = titan.get("xray", {})
+    if titan.get("api"):
+        cfg["api"] = {"tag": "api", "listen": titan["api"], "services": ["HandlerService", "RoutingService"]}
     pairs = [(derive(s), s) for s in secrets]
     clients = [{"email": u, "pass": p} for (u, p), _ in pairs]
     if not clients:
         clients = [{"email": "disabled-" + os.urandom(8).hex(), "pass": os.urandom(16).hex()}]
-    outbounds = [o for o in cfg.get("outbounds", []) if not o.get("tag", "").startswith("u-")]
-    if not any(o.get("tag") == "block" for o in outbounds):
-        outbounds.append({"tag": "block", "protocol": "blackhole"})
+    outbounds = [{"tag": "block", "protocol": "blackhole"}] + [
+        o for o in cfg.get("outbounds", []) if not o.get("tag", "").startswith("u-") and o.get("tag") != "block"
+    ]
     rules = []
     for inbound in cfg.get("inbounds", []):
         if inbound.get("protocol") != "masque":
@@ -323,25 +331,106 @@ def build_xray_masque(template, secrets):
             out = f"u-{tag}-{login}"
             outbounds.append({"tag": out, "protocol": "shadowsocks", "settings": {"servers": [
                 {"address": host, "port": int(port), "method": method, "password": secret}]}})
-            rules.append({"inboundTag": [tag], "user": [login], "outboundTag": out})
-    routing = cfg.setdefault("routing", {})
-    # Unknown users never reach the internet unaccounted.
-    routing["rules"] = rules + [{"network": "tcp,udp", "outboundTag": "block"}]
+            rules.append({"ruleTag": out, "inboundTag": [tag], "user": [login], "outboundTag": out})
+    cfg.setdefault("routing", {})["rules"] = rules
     cfg["outbounds"] = outbounds
     return cfg
 
 
-def sync_xray_masque(template_path, path, secrets):
+def _masque_skeleton(cfg):
+    """The config without anything per user: when this differs, only a restart will do."""
+    c = json.loads(json.dumps(cfg))
+    for i in c.get("inbounds", []):
+        if i.get("protocol") == "masque":
+            i.get("settings", {}).pop("clients", None)
+    c["outbounds"] = [o for o in c.get("outbounds", []) if not o.get("tag", "").startswith("u-")]
+    c.get("routing", {}).pop("rules", None)
+    return c
+
+
+def _xray_api(binary, api, args, payload=None):
+    """One `xray api …` call; payload is written to a temp file passed as the last argument."""
+    tmp = None
+    if payload is not None:
+        tmp = f"/tmp/titan-masque-api-{os.getpid()}.json"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        args = args + [tmp]
+    try:
+        r = subprocess.run([binary, "api"] + args[:1] + [f"--server={api}"] + args[1:],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            raise RuntimeError((r.stderr or r.stdout).strip()[:300])
+        return r.stdout
+    finally:
+        if tmp:
+            os.remove(tmp)
+
+
+def _chunks(items, n=200):
+    return [items[i:i + n] for i in range(0, len(items), n)]
+
+
+def update_xray_masque_live(old, new, api, binary):
+    """Apply the user difference through Xray's API (no restart). Raises on failure."""
+    old_out = {o["tag"]: o for o in old.get("outbounds", []) if o.get("tag", "").startswith("u-")}
+    new_out = {o["tag"]: o for o in new.get("outbounds", []) if o.get("tag", "").startswith("u-")}
+    new_rules = {r["ruleTag"]: r for r in new.get("routing", {}).get("rules", []) if r.get("ruleTag")}
+    removed = [t for t in old_out if t not in new_out]
+    added = [t for t in new_out if t not in old_out]
+    for inbound_old, inbound_new in zip(
+        [i for i in old.get("inbounds", []) if i.get("protocol") == "masque"],
+        [i for i in new.get("inbounds", []) if i.get("protocol") == "masque"],
+    ):
+        tag = inbound_new["tag"]
+        old_c = {c["email"]: c for c in inbound_old.get("settings", {}).get("clients", [])}
+        new_c = {c["email"]: c for c in inbound_new.get("settings", {}).get("clients", [])}
+        gone = [e for e in old_c if e not in new_c or old_c[e] != new_c[e]]
+        come = [new_c[e] for e in new_c if e not in old_c or old_c[e] != new_c[e]]
+        for part in _chunks(gone):
+            _xray_api(binary, api, ["rmu", f"-tag={tag}"] + part)
+        for part in _chunks(come):
+            # The inbound must build as a whole (masque wants its address etc.), and adu
+            # exits 0 even when it added nobody: check the count it reports.
+            inbound = json.loads(json.dumps(inbound_new))
+            inbound["settings"]["clients"] = part
+            out = _xray_api(binary, api, ["adu"], {"inbounds": [inbound]})
+            if f"Added {len(part)} user" not in out:
+                raise RuntimeError(f"adu: {out.strip()[:300]}")
+    # Rules first out, then their outbounds; outbounds first in, then their rules.
+    for part in _chunks(removed):
+        _xray_api(binary, api, ["rmrules"] + part)
+        _xray_api(binary, api, ["rmo"] + part)
+    for part in _chunks(added):
+        _xray_api(binary, api, ["ado"], {"outbounds": [new_out[t] for t in part]})
+        _xray_api(binary, api, ["adrules", "-append"], {"routing": {"rules": [new_rules[t] for t in part if t in new_rules]}})
+
+
+def sync_xray_masque(template_path, path, secrets, binary="xray-masque"):
     try:
         with open(template_path, encoding="utf-8") as f:
             template = json.load(f)
     except FileNotFoundError:
         print(f"masque gateway: no {template_path}, skipped")
         return False
-    content = json.dumps(build_xray_masque(template, secrets), indent=1) + "\n"
-    if not write_if_changed(path, content):
+    new = build_xray_masque(template, secrets)
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = json.load(f)
+    except (FileNotFoundError, ValueError):
+        old = None
+    content = json.dumps(new, indent=1) + "\n"
+    if old == new:
         return False
-    # Xray has no config reload: a restart (tunnels reconnect within seconds).
+    api = template.get("titan", {}).get("api")
+    if old is not None and api and _masque_skeleton(old) == _masque_skeleton(new):
+        try:
+            update_xray_masque_live(old, new, api, binary)
+            write_if_changed(path, content)  # for the next start; no restart now
+            return True
+        except Exception as e:  # anything off: fall back to a restart with the full config
+            print(f"masque api: {e}; restarting")
+    write_if_changed(path, content)
     subprocess.run(["systemctl", "restart", "titan-masque"], check=False)
     return True
 
@@ -434,7 +523,7 @@ def main():
     masque_template = env.get("MASQUE_GATEWAY_TEMPLATE", "")
     if masque_template:
         masque_config = env.get("MASQUE_GATEWAY_CONFIG", "/etc/titan-masque/config.json")
-        if sync_xray_masque(masque_template, masque_config, uuids):
+        if sync_xray_masque(masque_template, masque_config, uuids, env.get("MASQUE_XRAY_BIN", "xray-masque")):
             changed.append("masque-gateway")
     mieru_template = env.get("MIERU_GATEWAY_TEMPLATE", "")
     if mieru_template:
