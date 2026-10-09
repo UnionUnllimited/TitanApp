@@ -181,14 +181,13 @@ object Pinger {
         val sigs = servers.associate { it.id to (it.xrayJson + it.proxyTag).hashCode() }
         session?.takeIf { s -> core.isRunning && sigs.all { (id, sig) -> s.sigs[id] == sig } }?.let { return it }
         session?.plugins?.forEach { runCatching { it.close() } }
-        // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it.
+        // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it;
+        // MASQUE: rewritten for Xray itself.
         val plugins = mutableListOf<PluginProcess>()
         val jsonOf = servers.associate { s ->
-            s.id to (Plugins.endpoint(s)?.let { ep ->
-                runCatching { PluginProcess(ep).also { p -> p.start(); plugins += p } }
-                    .map { p -> Plugins.withLocalSocks(s.xrayJson, s.proxyTag, p.port) }
-                    .getOrDefault(s.xrayJson)
-            } ?: s.xrayJson)
+            s.id to runCatching { Plugins.prepare(s) }
+                .map { (json, p) -> p?.let(plugins::add); json }
+                .getOrDefault(s.xrayJson)
         }
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()

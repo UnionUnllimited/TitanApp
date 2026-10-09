@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Titan VPS: Naive + Mieru users from Remnawave.
+Titan VPS: Naive + Mieru + MASQUE users from Remnawave.
 
-Runs on a node with Caddy (forwardproxy@naive) and/or mita (Mieru). Every run it reads
+Runs on a node with Caddy (forwardproxy@naive), mita (Mieru) and/or sing-box (MASQUE). Every run it reads
 the active users from the Remnawave API and writes them as logins for both protocols:
 
     secret = the user's credential from Remnawave: the VLESS UUID, or the Shadowsocks
@@ -21,6 +21,8 @@ Settings: /etc/titan-sync.env (never in this repo)
     MITA_CONFIG=/etc/mita-server.json            # empty to skip Mieru
     EXTRA_NAIVE_USERS=                           # "name:pass name2:pass2", e.g. for tests
     EXTRA_MIERU_USERS=
+    MASQUE_CONFIG=                               # e.g. /etc/masque/config.json; empty to skip MASQUE
+    EXTRA_MASQUE_USERS=
     ONLY_SQUADS=                                 # optional: internal squad UUIDs, comma-separated
     CREDENTIAL=vless                             # vless (vlessUuid) or ss (ssPassword)
 
@@ -155,6 +157,34 @@ def sync_mieru(path, uuids, extras):
     return True
 
 
+def sync_masque(path, uuids, extras):
+    """users of every masque-server endpoint in the sing-box config; reloads it on change."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        print(f"masque: no {path}, skipped")
+        return False
+    users = [{"username": u, "password": p} for u, p in map(derive, uuids)] + [
+        {"username": n, "password": p} for n, p in extras
+    ]
+    if not users:
+        # No users means no authentication in sing-box: never leave it open.
+        users = [{"username": "disabled-" + os.urandom(8).hex(), "password": os.urandom(16).hex()}]
+    changed = False
+    for endpoint in cfg.get("endpoints", []):
+        if endpoint.get("type") == "masque-server" and endpoint.get("users") != users:
+            endpoint["users"] = users
+            changed = True
+    if not changed:
+        return False
+    write_if_changed(path, json.dumps(cfg, indent=2) + "\n")
+    # SIGHUP: sing-box reloads the config (ExecReload in masque.service).
+    if subprocess.run(["systemctl", "reload", "masque"], check=False).returncode != 0:
+        subprocess.run(["systemctl", "restart", "masque"], check=False)
+    return True
+
+
 def main():
     env = load_env(ENV_FILE)
     base, token = env.get("REMNAWAVE_URL", ""), env.get("REMNAWAVE_TOKEN", "")
@@ -178,6 +208,10 @@ def main():
     mita_cfg = env.get("MITA_CONFIG", "/etc/mita-server.json")
     if mita_cfg and sync_mieru(mita_cfg, uuids, extra(env.get("EXTRA_MIERU_USERS"))):
         changed.append("mieru")
+
+    masque_cfg = env.get("MASQUE_CONFIG", "")
+    if masque_cfg and sync_masque(masque_cfg, uuids, extra(env.get("EXTRA_MASQUE_USERS"))):
+        changed.append("masque")
 
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:

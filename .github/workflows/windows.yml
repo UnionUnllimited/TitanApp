@@ -32,7 +32,8 @@ jobs:
         run: |
           $dest = "desktop/resources/windows"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-windows-64.zip" -OutFile xray.zip
+          # Pinned: MASQUE needs Xray 26.9.30+ (a pre-release, so not "latest" yet).
+          Invoke-WebRequest -Uri "https://github.com/XTLS/Xray-core/releases/download/v26.9.30/Xray-windows-64.zip" -OutFile xray.zip
           Expand-Archive xray.zip -DestinationPath xray
           Copy-Item xray/xray.exe $dest/
           $geo = "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download"

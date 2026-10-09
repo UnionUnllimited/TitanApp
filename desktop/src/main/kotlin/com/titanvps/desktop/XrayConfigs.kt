@@ -23,6 +23,17 @@ object XrayConfigs {
         return configs.mapIndexedNotNull { i, cfg -> serverFromConfig(cfg, i) }
     }
 
+    /**
+     * Xray 26.9 refuses configs with tlsSettings.allowInsecure (removed in favour of
+     * certificate pinning). Dropping it keeps such a server starting; certificates are then
+     * verified as usual.
+     */
+    private fun dropAllowInsecure(outbounds: JSONArray) {
+        for (i in 0 until outbounds.length()) {
+            outbounds.optJSONObject(i)?.optJSONObject("streamSettings")?.optJSONObject("tlsSettings")?.remove("allowInsecure")
+        }
+    }
+
     private fun serverFromConfig(src: JSONObject, index: Int): Server? {
         val cfg = JSONObject(src.toString())
         val outbounds = cfg.optJSONArray("outbounds") ?: return null
@@ -41,6 +52,7 @@ object XrayConfigs {
         }
         cfg.put(INBOUND_KEY, tags)
         cfg.remove("inbounds")
+        dropAllowInsecure(outbounds)
         return Server(id = "json-$index-${name.hashCode()}", name = name, xrayJson = cfg.toString(), proxyTag = proxy.getString("tag"))
     }
 

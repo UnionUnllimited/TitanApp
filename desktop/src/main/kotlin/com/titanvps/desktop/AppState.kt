@@ -210,14 +210,12 @@ class AppState {
                     val geo = GeoFiles.prepare(sub.servers.map { it.xrayJson })
                     val (socks, http) = freePorts(2)
                     val logDir = AppPaths.logDir.absolutePath.replace('\\', '/')
-                    // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound points at it.
+                    // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound
+                    // points at it; MASQUE: Xray's own client.
                     plugin?.close()
                     plugin = null
-                    val serverJson = Plugins.endpoint(server)?.let { ep ->
-                        val p = PluginProcess(ep).also { plugin = it }
-                        p.start()
-                        Plugins.withLocalSocks(server.xrayJson, server.proxyTag, p.port)
-                    } ?: server.xrayJson
+                    val (serverJson, p) = Plugins.prepare(server)
+                    plugin = p
                     core.start(XrayConfigs.buildProxyConfig(serverJson, socks, http, logDir, server.proxyTag), geo)
                     if (mode == "tun") {
                         // The whole PC through the tunnel; no system proxy then.

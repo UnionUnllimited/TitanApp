@@ -14,9 +14,13 @@ import java.security.MessageDigest
  * carry the node's address, port and the user's secret; we run the protocol's own client
  * (naive.exe / mieru.exe next to xray.exe) as a local SOCKS and point Xray's proxy
  * outbound at it. Credentials: sha256("titan:" + secret), as server/titan-node-sync.py.
+ *
+ * MASQUE ("… MASQUE" hosts) needs no separate client: Xray has it, so the proxy outbound
+ * is rewritten into a masque one (HTTP/3; "TCP" or "H2" in the name: HTTP/2 over TLS).
  */
 object Plugins {
-    enum class Kind(val exe: String) { NAIVE("naive.exe"), MIERU("mieru.exe") }
+    /** [exe]: the client we run as a local SOCKS; null when Xray speaks the protocol itself. */
+    enum class Kind(val exe: String?) { NAIVE("naive.exe"), MIERU("mieru.exe"), MASQUE(null) }
 
     data class Endpoint(val kind: Kind, val host: String, val port: Int, val secret: String) {
         val user: String get() = derived().substring(0, 16)
@@ -30,6 +34,7 @@ object Plugins {
         return when {
             "naive" in n -> Kind.NAIVE
             "mieru" in n -> Kind.MIERU
+            "masque" in n -> Kind.MASQUE
             else -> null
         }
     }
@@ -49,6 +54,48 @@ object Plugins {
             if (v.optString("address").isNotEmpty() && secret.isNotEmpty()) return Endpoint(kind, v.optString("address"), v.optInt("port"), secret)
         }
         return null
+    }
+
+    /** The server's config with its proxy outbound turned into Xray's own MASQUE client. */
+    fun withMasque(xrayJson: String, proxyTag: String, endpoint: Endpoint, name: String): String {
+        val n = name.lowercase()
+        val http2 = "tcp" in n || "h2" in n
+        val cfg = JSONObject(xrayJson)
+        val arr = cfg.optJSONArray("outbounds") ?: return xrayJson
+        for (i in 0 until arr.length()) {
+            if (arr.optJSONObject(i)?.optString("tag") != proxyTag) continue
+            val tls = JSONObject().put("serverName", endpoint.host).put("alpn", JSONArray().put(if (http2) "h2" else "h3"))
+            // Firefox: Russian DPI stalls the large Chrome ClientHello (seen with Samizdat).
+            if (http2) tls.put("fingerprint", "firefox")
+            arr.put(
+                i,
+                JSONObject().put("tag", proxyTag).put("protocol", "masque")
+                    .put("settings", JSONObject().put("address", endpoint.host).put("port", endpoint.port))
+                    .put(
+                        "streamSettings",
+                        JSONObject().put("network", "masque").put("security", "tls").put("tlsSettings", tls)
+                            .put("masqueSettings", JSONObject().put("user", endpoint.user).put("pass", endpoint.password)),
+                    ),
+            )
+        }
+        return cfg.toString()
+    }
+
+    /**
+     * The config to run for [server]: as is, MASQUE rewritten for Xray, or pointed at a
+     * started [PluginProcess] (returned, to be closed by the caller).
+     */
+    fun prepare(server: Server): Pair<String, PluginProcess?> {
+        val ep = endpoint(server) ?: return server.xrayJson to null
+        if (ep.kind.exe == null) return withMasque(server.xrayJson, server.proxyTag, ep, server.name) to null
+        val p = PluginProcess(ep)
+        try {
+            p.start()
+        } catch (e: Exception) {
+            p.close()
+            throw e
+        }
+        return withLocalSocks(server.xrayJson, server.proxyTag, p.port) to p
     }
 
     fun withLocalSocks(xrayJson: String, proxyTag: String, port: Int): String {
@@ -72,7 +119,7 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
     val port: Int = freePorts(1).first()
 
     fun start() {
-        val exe = File(AppPaths.coreDir, endpoint.kind.exe)
+        val exe = File(AppPaths.coreDir, endpoint.kind.exe ?: error("${endpoint.kind} needs no client"))
         if (!exe.exists()) throw IllegalStateException("Не найден ${exe.name}")
         val dir = File(AppPaths.dataDir, "plugins").apply { mkdirs() }
         val log = File(AppPaths.logDir, "${endpoint.kind.name.lowercase()}.log")
@@ -87,6 +134,7 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
                     environment()["MIERU_CONFIG_JSON_FILE"] = config.absolutePath
                 }
             }
+            Plugins.Kind.MASQUE -> error("MASQUE needs no client")
         }
         process = pb.directory(dir).redirectErrorStream(true).redirectOutput(log).start()
         repeat(60) {
