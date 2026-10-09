@@ -49,7 +49,8 @@ Needs CREDENTIAL=ss (the secret is that password).
     sing-box doesn't tell MASQUE users apart, so those can't be accounted).
   - MASQUE_GATEWAY_TEMPLATE: Xray 26.9.30+; its masque inbounds (Xray knows the user).
   - MIERU_GATEWAY_TEMPLATE: titan-mieru-gw settings (listen, portRange, xray, method,
-    ipsFile); the users are added here. The gateway re-reads the file by itself.
+    ipsFile, and optionally "ssh": {listen, xray, hostKey} for SSH tunnels with the same
+    users: login / password); the users are added here. The gateway re-reads the file.
     ONLY_SQUADS=                                 # optional: internal squad UUIDs, comma-separated
     CREDENTIAL=vless                             # vless (vlessUuid) or ss (ssPassword)
 

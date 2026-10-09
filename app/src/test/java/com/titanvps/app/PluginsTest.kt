@@ -34,6 +34,7 @@ class PluginsTest {
         assertEquals(Plugins.Kind.SHADOWTLS, stls.kind)
         assertEquals("QIkOC+7qEbZ9NjHwFOeGOg==:f/MV3BuEkMAGhNsqz2TzIQ==", stls.ss2022Password)
         assertEquals(Plugins.Kind.ANYTLS, Plugins.endpoint("Латвия AnyTLS", json, "proxy")!!.kind)
+        assertEquals(Plugins.Kind.SSH, Plugins.endpoint("Латвия SSH", json, "proxy")!!.kind)
         assertNull(Plugins.endpoint("Латвия WiFi LTE", json, "proxy"))
     }
 

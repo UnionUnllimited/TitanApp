@@ -49,13 +49,18 @@ type Config struct {
 	Users     []User `json:"users"`
 	// Where to write which IPs each user came from in the last hour (empty: off).
 	IPsFile string `json:"ipsFile"`
+	// Optional SSH tunnels for the same users (see ssh.go).
+	SSH *SSHConfig `json:"ssh"`
 }
 
 type gateway struct {
 	mu      sync.RWMutex
 	cfg     *Config
 	ciphers map[string]shadowsocks.Method // user name -> Shadowsocks cipher with their password
-	ips     *ipLog
+	// user name -> password (SSH checks it itself; Mieru does inside its server)
+	passwords map[string]string
+	sshUp     bool
+	ips       *ipLog
 }
 
 func main() {
@@ -76,9 +81,21 @@ func main() {
 				if err != nil {
 					log.Printf("start: %v", err)
 				} else {
+					passwords := make(map[string]string, len(cfg.Users))
+					for _, u := range cfg.Users {
+						passwords[u.Name] = u.Password
+					}
 					g.mu.Lock()
-					g.cfg, g.ciphers = cfg, ciphers
+					g.cfg, g.ciphers, g.passwords = cfg, ciphers, passwords
 					g.mu.Unlock()
+					// SSH starts once; later user lists only update the passwords above.
+					if cfg.SSH != nil && !g.sshUp {
+						if err := g.serveSSH(*cfg.SSH); err != nil {
+							log.Printf("ssh: %v", err)
+						} else {
+							g.sshUp = true
+						}
+					}
 					if server != nil {
 						server.Stop() // established connections are kept
 					}

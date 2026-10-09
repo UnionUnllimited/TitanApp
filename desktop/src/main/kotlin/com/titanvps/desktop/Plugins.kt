@@ -20,7 +20,7 @@ import java.security.MessageDigest
  */
 object Plugins {
     /** [exe]: the client we run as a local SOCKS; null when Xray speaks the protocol itself. */
-    enum class Kind(val exe: String?) { NAIVE("naive.exe"), MIERU("mieru.exe"), TUIC("sing-box.exe"), ANYTLS("sing-box.exe"), SHADOWTLS("sing-box.exe"), MASQUE(null) }
+    enum class Kind(val exe: String?) { NAIVE("naive.exe"), MIERU("mieru.exe"), TUIC("sing-box.exe"), ANYTLS("sing-box.exe"), SHADOWTLS("sing-box.exe"), SSH("sing-box.exe"), MASQUE(null) }
 
     data class Endpoint(val kind: Kind, val host: String, val port: Int, val secret: String) {
         val user: String get() = derived().substring(0, 16)
@@ -50,6 +50,7 @@ object Plugins {
             "tuic" in n -> Kind.TUIC
             "anytls" in n -> Kind.ANYTLS
             "shadowtls" in n -> Kind.SHADOWTLS
+            "ssh" in n -> Kind.SSH
             else -> null
         }
     }
@@ -149,7 +150,7 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
                     environment()["MIERU_CONFIG_JSON_FILE"] = config.absolutePath
                 }
             }
-            Plugins.Kind.TUIC, Plugins.Kind.ANYTLS, Plugins.Kind.SHADOWTLS -> {
+            Plugins.Kind.TUIC, Plugins.Kind.ANYTLS, Plugins.Kind.SHADOWTLS, Plugins.Kind.SSH -> {
                 val config = File(dir, "${endpoint.kind.name.lowercase()}-$port.json").apply { writeText(singBoxConfig(endpoint.host)) }
                 ProcessBuilder(exe.absolutePath, "run", "-c", config.absolutePath)
             }
@@ -182,7 +183,7 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
     }
 
     /**
-     * sing-box as the client for TUIC / AnyTLS / ShadowTLS behind a local SOCKS (mixed) port.
+     * sing-box as the client for TUIC / AnyTLS / ShadowTLS / SSH behind a local SOCKS (mixed) port.
      * [server] is what to dial (on Android: the resolved IP); TLS names stay the host's.
      */
     private fun singBoxConfig(server: String): String {
@@ -215,6 +216,13 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
                         .put("server", server).put("server_port", endpoint.port).put("version", 3).put("password", endpoint.password)
                         .put("tls", tls(Plugins.SHADOWTLS_SNI).put("utls", firefox)),
                 )
+            // SSH tunnel (like "ssh -D") to the node's gateway, looking like stock OpenSSH.
+            Plugins.Kind.SSH -> outbounds.put(
+                JSONObject().put("type", "ssh").put("tag", "proxy")
+                    .put("server", server).put("server_port", endpoint.port)
+                    .put("user", endpoint.user).put("password", endpoint.password)
+                    .put("client_version", "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.5"),
+            )
             else -> error("${endpoint.kind} is not a sing-box client")
         }
         return JSONObject()
