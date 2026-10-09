@@ -77,17 +77,22 @@ func main() {
 				log.Printf("config: %v", err)
 			} else {
 				stamp = st.ModTime()
+				// Only the users changed: hand them to the running server (patched mieru),
+				// sessions stay up. Otherwise (first start, other ports): a new server.
+				if server != nil && g.cfg != nil && sameListen(g.cfg, cfg) {
+					if err := updateUsers(server, cfg); err == nil {
+						g.setUsers(cfg, ciphers)
+						log.Printf("mieru users updated: %d", len(cfg.Users))
+						continue
+					} else {
+						log.Printf("update users: %v, restarting the server", err)
+					}
+				}
 				next, err := start(cfg)
 				if err != nil {
 					log.Printf("start: %v", err)
 				} else {
-					passwords := make(map[string]string, len(cfg.Users))
-					for _, u := range cfg.Users {
-						passwords[u.Name] = u.Password
-					}
-					g.mu.Lock()
-					g.cfg, g.ciphers, g.passwords = cfg, ciphers, passwords
-					g.mu.Unlock()
+					g.setUsers(cfg, ciphers)
 					// SSH starts once; later user lists only update the passwords above.
 					if cfg.SSH != nil && !g.sshUp {
 						if err := g.serveSSH(*cfg.SSH); err != nil {
@@ -114,6 +119,32 @@ func main() {
 		g.ips.dump(ipsFile)
 		time.Sleep(15 * time.Second)
 	}
+}
+
+func (g *gateway) setUsers(cfg *Config, ciphers map[string]shadowsocks.Method) {
+	passwords := make(map[string]string, len(cfg.Users))
+	for _, u := range cfg.Users {
+		passwords[u.Name] = u.Password
+	}
+	g.mu.Lock()
+	g.cfg, g.ciphers, g.passwords = cfg, ciphers, passwords
+	g.mu.Unlock()
+}
+
+func sameListen(a, b *Config) bool {
+	return a.Listen == b.Listen && a.PortRange == b.PortRange && a.Transport == b.Transport
+}
+
+func updateUsers(s mieruserver.Server, cfg *Config) error {
+	target, ok := s.(interface{ UpdateUsers([]*mierupb.User) error })
+	if !ok {
+		return errors.New("mieru without the titan patch")
+	}
+	users := make([]*mierupb.User, 0, len(cfg.Users))
+	for _, u := range cfg.Users {
+		users = append(users, &mierupb.User{Name: proto.String(u.Name), Password: proto.String(u.Password)})
+	}
+	return target.UpdateUsers(users)
 }
 
 func load(path string) (*Config, map[string]shadowsocks.Method, error) {

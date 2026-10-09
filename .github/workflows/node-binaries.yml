@@ -32,8 +32,11 @@ jobs:
         run: |
           mkdir -p out
           cd server/titan-mieru-gw
-          go vet .
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o ../../out/titan-mieru-gw-linux-amd64 .
+          # mieru with runtime user updates: vendor, patch (patches/hot-users.patch), build.
+          go mod vendor
+          patch -p1 < patches/hot-users.patch
+          go vet -mod=vendor .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -trimpath -ldflags "-s -w" -o ../../out/titan-mieru-gw-linux-amd64 .
           # sing-box with runtime user updates: vendor the official modules, patch, build.
           cd ../titan-sbgw
           go mod vendor

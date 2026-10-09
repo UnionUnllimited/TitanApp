@@ -1,0 +1,20 @@
+--- a/vendor/github.com/enfein/mieru/v3/apis/server/server.go
++++ b/vendor/github.com/enfein/mieru/v3/apis/server/server.go
+@@ -178,3 +178,17 @@
+ 	}
+ 	return nil
+ }
++
++// UpdateUsers replaces the users of the running server; sessions stay up (titan).
++func (ms *mieruServer) UpdateUsers(users []*appctlpb.User) error {
++	ms.mu.Lock()
++	defer ms.mu.Unlock()
++	if ms.mux == nil || !ms.running.Load() {
++		return ErrServerIsNotRunning
++	}
++	ms.mux.SetServerUsers(appctlcommon.UserListToMap(users))
++	if ms.config != nil && ms.config.Config != nil {
++		ms.config.Config.Users = users
++	}
++	return nil
++}
