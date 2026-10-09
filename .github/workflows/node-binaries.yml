@@ -1,7 +1,9 @@
 name: Node binaries
 
 # Server-side programs for our nodes, built here so a node doesn't need Go and 2 GB RAM:
-#   lantern-box (Samizdat server), linux amd64/arm64 → release "node-binaries".
+#   lantern-box (Samizdat server), linux amd64 → release "node-binaries".
+# With cgo (its Outline SDK part doesn't build without), so built on the nodes' Ubuntu
+# (24.04) to match their glibc.
 on:
   push:
     branches: [main, "claude/**"]
@@ -18,7 +20,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -34,10 +36,8 @@ jobs:
         working-directory: src/cmd
         run: |
           mkdir -p ../../out
-          for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" \
-              -tags "with_gvisor,with_quic,with_utls,with_acme" -o ../../out/lantern-box-linux-$arch .
-          done
+          go build -trimpath -ldflags "-s -w" \
+            -tags "with_gvisor,with_quic,with_utls,with_acme" -o ../../out/lantern-box-linux-amd64 .
           cd ../../out && sha256sum lantern-box-* | tee SHA256SUMS
 
       - name: Publish
