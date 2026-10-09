@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """
-Titan VPS: Naive + Mieru + Samizdat users from Remnawave.
+Titan VPS: Naive + Mieru users from Remnawave.
 
 Runs on a node with Caddy (forwardproxy@naive) and/or mita (Mieru). Every run it reads
-the active users from the Remnawave API and writes them as logins for these protocols:
+the active users from the Remnawave API and writes them as logins for both protocols:
 
     secret = the user's credential from Remnawave: the VLESS UUID, or the Shadowsocks
     password when the Naive/Mieru hosts sit on Shadowsocks placeholder inbounds
     (CREDENTIAL=ss) — whatever the app finds in that host's outbound;
     h = sha256("titan:" + secret) as hex; login = h[0:16], password = h[16:48]
     (URL-safe for naive links; the app derives the same, see app core/Plugins.kt)
-    Samizdat (lantern-box) short id = h[48:64]; its hosts sit on a VLESS + Reality
-    placeholder (the subscription carries the node's key and cover site), so its secret is
-    the VLESS UUID: SAMIZDAT_CREDENTIAL, default vless
 
 so only active subscriptions can connect; expired/disabled ones drop out on the next run.
 Files are rewritten and the services reloaded only when the user list changed.
@@ -24,9 +21,6 @@ Settings: /etc/titan-sync.env (never in this repo)
     MITA_CONFIG=/etc/mita-server.json            # empty to skip Mieru
     EXTRA_NAIVE_USERS=                           # "name:pass name2:pass2", e.g. for tests
     EXTRA_MIERU_USERS=
-    LANTERN_CONFIG=                              # e.g. /etc/lantern-box/config.json; empty to skip Samizdat
-    EXTRA_SAMIZDAT_IDS=                          # "hex16 hex16", e.g. for tests
-    SAMIZDAT_CREDENTIAL=vless                    # vless or ss
     ONLY_SQUADS=                                 # optional: internal squad UUIDs, comma-separated
     CREDENTIAL=vless                             # vless (vlessUuid) or ss (ssPassword)
 
@@ -99,12 +93,8 @@ def active_users(base, token, only_squads, credential):
     return sorted(set(out))
 
 
-def digest(secret):
-    return hashlib.sha256(("titan:" + secret).encode()).hexdigest()
-
-
 def derive(secret):
-    h = digest(secret)
+    h = hashlib.sha256(("titan:" + secret).encode()).hexdigest()
     return h[:16], h[16:48]
 
 
@@ -165,29 +155,6 @@ def sync_mieru(path, uuids, extras):
     return True
 
 
-def sync_samizdat(path, uuids, extras):
-    """short_ids of every samizdat inbound in the lantern-box config; restarts it on change."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            cfg = json.load(f)
-    except FileNotFoundError:
-        print(f"samizdat: no {path}, skipped")
-        return False
-    ids = sorted({digest(u)[48:64] for u in uuids}) + [e for e in extras if len(e) == 16]
-    if not ids:
-        ids = [os.urandom(8).hex()]
-    changed = False
-    for inbound in cfg.get("inbounds", []):
-        if inbound.get("type") == "samizdat" and inbound.get("short_ids") != ids:
-            inbound["short_ids"] = ids
-            changed = True
-    if not changed:
-        return False
-    write_if_changed(path, json.dumps(cfg, indent=2) + "\n")
-    subprocess.run(["systemctl", "restart", "lantern-box"], check=False)
-    return True
-
-
 def main():
     env = load_env(ENV_FILE)
     base, token = env.get("REMNAWAVE_URL", ""), env.get("REMNAWAVE_TOKEN", "")
@@ -211,18 +178,6 @@ def main():
     mita_cfg = env.get("MITA_CONFIG", "/etc/mita-server.json")
     if mita_cfg and sync_mieru(mita_cfg, uuids, extra(env.get("EXTRA_MIERU_USERS"))):
         changed.append("mieru")
-
-    lantern_cfg = env.get("LANTERN_CONFIG", "")
-    if lantern_cfg:
-        sz_credential = env.get("SAMIZDAT_CREDENTIAL", "vless").lower()
-        if sz_credential not in CREDENTIAL_FIELDS:
-            sys.exit("SAMIZDAT_CREDENTIAL must be vless or ss")
-        try:
-            sz_secrets = uuids if sz_credential == credential else active_users(base, token, only, sz_credential)
-        except Exception as e:
-            sys.exit(f"remnawave api: {e}")
-        if sync_samizdat(lantern_cfg, sz_secrets, env.get("EXTRA_SAMIZDAT_IDS", "").split()):
-            changed.append("samizdat")
 
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:
