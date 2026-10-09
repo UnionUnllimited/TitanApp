@@ -328,12 +328,24 @@ def sync_gateway(template_path, path, secrets, extras):
     except FileNotFoundError:
         print(f"gateway: no {template_path}, skipped")
         return False
-    content = json.dumps(build_gateway(template, secrets, extras), indent=1) + "\n"
-    if not write_if_changed(path, content):
+    cfg = build_gateway(template, secrets, extras)
+    try:
+        with open(path, encoding="utf-8") as f:
+            old_ports = listen_ports(json.load(f))
+    except (FileNotFoundError, ValueError):
+        old_ports = None
+    if not write_if_changed(path, json.dumps(cfg, indent=1) + "\n"):
         return False
-    if subprocess.run(["systemctl", "reload", "titan-gateway"], check=False).returncode != 0:
-        subprocess.run(["systemctl", "restart", "titan-gateway"], check=False)
+    # sing-box's reload (SIGHUP) swaps users but doesn't open new listeners: restart then.
+    if old_ports == listen_ports(cfg) and subprocess.run(["systemctl", "reload", "titan-gateway"], check=False).returncode == 0:
+        return True
+    subprocess.run(["systemctl", "restart", "titan-gateway"], check=False)
     return True
+
+
+def listen_ports(cfg):
+    entries = cfg.get("inbounds", []) + cfg.get("endpoints", [])
+    return sorted((e.get("type", ""), e.get("listen", ""), e.get("listen_port", 0)) for e in entries)
 
 
 def main():
