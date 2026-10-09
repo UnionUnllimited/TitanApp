@@ -10,7 +10,9 @@ the active users from the Remnawave API and writes them as logins for these prot
     (CREDENTIAL=ss) — whatever the app finds in that host's outbound;
     h = sha256("titan:" + secret) as hex; login = h[0:16], password = h[16:48]
     (URL-safe for naive links; the app derives the same, see app core/Plugins.kt)
-    Samizdat (lantern-box) short id = h[48:64]
+    Samizdat (lantern-box) short id = h[48:64]; its hosts sit on a VLESS + Reality
+    placeholder (the subscription carries the node's key and cover site), so its secret is
+    the VLESS UUID: SAMIZDAT_CREDENTIAL, default vless
 
 so only active subscriptions can connect; expired/disabled ones drop out on the next run.
 Files are rewritten and the services reloaded only when the user list changed.
@@ -24,6 +26,7 @@ Settings: /etc/titan-sync.env (never in this repo)
     EXTRA_MIERU_USERS=
     LANTERN_CONFIG=                              # e.g. /etc/lantern-box/config.json; empty to skip Samizdat
     EXTRA_SAMIZDAT_IDS=                          # "hex16 hex16", e.g. for tests
+    SAMIZDAT_CREDENTIAL=vless                    # vless or ss
     ONLY_SQUADS=                                 # optional: internal squad UUIDs, comma-separated
     CREDENTIAL=vless                             # vless (vlessUuid) or ss (ssPassword)
 
@@ -210,8 +213,16 @@ def main():
         changed.append("mieru")
 
     lantern_cfg = env.get("LANTERN_CONFIG", "")
-    if lantern_cfg and sync_samizdat(lantern_cfg, uuids, env.get("EXTRA_SAMIZDAT_IDS", "").split()):
-        changed.append("samizdat")
+    if lantern_cfg:
+        sz_credential = env.get("SAMIZDAT_CREDENTIAL", "vless").lower()
+        if sz_credential not in CREDENTIAL_FIELDS:
+            sys.exit("SAMIZDAT_CREDENTIAL must be vless or ss")
+        try:
+            sz_secrets = uuids if sz_credential == credential else active_users(base, token, only, sz_credential)
+        except Exception as e:
+            sys.exit(f"remnawave api: {e}")
+        if sync_samizdat(lantern_cfg, sz_secrets, env.get("EXTRA_SAMIZDAT_IDS", "").split()):
+            changed.append("samizdat")
 
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:
