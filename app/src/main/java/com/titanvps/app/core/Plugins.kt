@@ -20,9 +20,13 @@ import java.security.MessageDigest
  * "Naive" or "Mieru"; their outbound carries the server's address, port and the user's
  * secret (VLESS id or Shadowsocks password). Login and password on the node are derived
  * from that secret the same way as server/titan-node-sync.py does.
+ *
+ * MASQUE ("… MASQUE" hosts) needs no separate client: Xray has it, so the proxy outbound
+ * is rewritten into a masque one (HTTP/3; "TCP" or "H2" in the name: HTTP/2 over TLS).
  */
 object Plugins {
-    enum class Kind(val lib: String) { NAIVE("libnaive.so"), MIERU("libmieru.so") }
+    /** [lib]: the client we run as a local SOCKS; null when Xray speaks the protocol itself. */
+    enum class Kind(val lib: String?) { NAIVE("libnaive.so"), MIERU("libmieru.so"), MASQUE(null) }
 
     data class Endpoint(val kind: Kind, val host: String, val port: Int, val secret: String) {
         /** URL-safe credentials, same derivation as the node sync. */
@@ -37,6 +41,7 @@ object Plugins {
         return when {
             "naive" in n -> Kind.NAIVE
             "mieru" in n -> Kind.MIERU
+            "masque" in n -> Kind.MASQUE
             else -> null
         }
     }
@@ -61,6 +66,48 @@ object Plugins {
             }
         }
         return null
+    }
+
+    /** The server's config with its proxy outbound turned into Xray's own MASQUE client. */
+    fun withMasque(xrayJson: String, proxyTag: String, endpoint: Endpoint, name: String): String {
+        val n = name.lowercase()
+        val http2 = "tcp" in n || "h2" in n
+        val cfg = JSONObject(xrayJson)
+        val arr = cfg.optJSONArray("outbounds") ?: return xrayJson
+        for (i in 0 until arr.length()) {
+            if (arr.optJSONObject(i)?.optString("tag") != proxyTag) continue
+            val tls = JSONObject().put("serverName", endpoint.host).put("alpn", JSONArray().put(if (http2) "h2" else "h3"))
+            // Firefox: Russian DPI stalls the large Chrome ClientHello.
+            if (http2) tls.put("fingerprint", "firefox")
+            arr.put(
+                i,
+                JSONObject().put("tag", proxyTag).put("protocol", "masque")
+                    .put("settings", JSONObject().put("address", endpoint.host).put("port", endpoint.port))
+                    .put(
+                        "streamSettings",
+                        JSONObject().put("network", "masque").put("security", "tls").put("tlsSettings", tls)
+                            .put("masqueSettings", JSONObject().put("user", endpoint.user).put("pass", endpoint.password)),
+                    ),
+            )
+        }
+        return cfg.toString()
+    }
+
+    /**
+     * The config to run for a server: as is, MASQUE rewritten for Xray, or pointed at a
+     * started [PluginProcess] (returned, to be closed by the caller).
+     */
+    fun prepare(context: Context, name: String, xrayJson: String, proxyTag: String): Pair<String, PluginProcess?> {
+        val ep = endpoint(name, xrayJson, proxyTag) ?: return xrayJson to null
+        if (ep.kind.lib == null) return withMasque(xrayJson, proxyTag, ep, name) to null
+        val p = PluginProcess(context, ep)
+        try {
+            p.start()
+        } catch (e: Exception) {
+            p.close()
+            throw e
+        }
+        return withLocalSocks(xrayJson, proxyTag, p.port) to p
     }
 
     /** The same config with its proxy outbound sent to our local SOCKS on [port]. */
@@ -94,7 +141,7 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
 
     /** Starts the client and waits until its SOCKS port answers. */
     fun start() {
-        val exe = File(context.applicationInfo.nativeLibraryDir, endpoint.kind.lib)
+        val exe = File(context.applicationInfo.nativeLibraryDir, endpoint.kind.lib ?: error("${endpoint.kind} needs no client"))
         note("${endpoint.kind}: start ${endpoint.host}:${endpoint.port} → 127.0.0.1:$port, exe=${exe.exists()} ${exe.canExecute()}")
         if (!exe.exists()) {
             // Why: which ABI the phone runs us as and what the installer actually unpacked.
@@ -120,6 +167,7 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
                     environment()["HOME"] = dir.absolutePath
                 }
             }
+            Plugins.Kind.MASQUE -> error("MASQUE needs no client")
         }
         process = pb.directory(dir).redirectErrorStream(true).redirectOutput(log).start()
         // Ready when the local SOCKS port accepts connections (up to ~6 s).

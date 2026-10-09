@@ -85,17 +85,14 @@ class PingService : Service() {
         stopSession()
         XrayCore.ensurePingDns()
 
-        // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it.
+        // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it;
+        // MASQUE: rewritten for Xray itself.
         val plugins = mutableListOf<PluginProcess>()
         val jsonOf = servers.associate { item ->
             val json = item.getString("json")
-            val tag = item.getString("tag")
-            val ep = Plugins.endpoint(item.optString("name"), json, tag)
-            item.getString("id") to (ep?.let {
-                runCatching { PluginProcess(this, it).also { p -> p.start(); plugins += p } }
-                    .map { p -> Plugins.withLocalSocks(json, tag, p.port) }
-                    .getOrDefault(json) // client didn't start: the probe just times out
-            } ?: json)
+            item.getString("id") to runCatching { Plugins.prepare(this, item.optString("name"), json, item.getString("tag")) }
+                .map { (prepared, p) -> p?.let(plugins::add); prepared }
+                .getOrDefault(json) // client didn't start: the probe just times out
         }
 
         data class Probe(val json: String, val tag: String)

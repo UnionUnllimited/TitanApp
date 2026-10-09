@@ -785,7 +785,7 @@ private fun Modifier.marqueeName(): Modifier = this
             blendMode = BlendMode.DstIn,
         )
     }
-    .basicMarquee(initialDelayMillis = 2000, repeatDelayMillis = 2500)
+    .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 2000, repeatDelayMillis = 2500)
 
 /** Blocked account / maintenance, from the bot; tap → support. */
 @Composable

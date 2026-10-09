@@ -805,7 +805,7 @@ private fun MarqueeText(text: String, fontSize: androidx.compose.ui.unit.TextUni
                         blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
                     )
                 }
-                .basicMarquee(initialDelayMillis = 2000, repeatDelayMillis = 2500)
+                .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 2000, repeatDelayMillis = 2500)
             else Modifier
         ),
         fontSize = fontSize, fontWeight = fontWeight, maxLines = 1, softWrap = false,

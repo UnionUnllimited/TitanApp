@@ -109,12 +109,10 @@ class TitanVpnService : VpnService() {
                 user = java.util.UUID.randomUUID().toString(),
                 password = java.util.UUID.randomUUID().toString(),
             )
-            // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound points at it.
-            val serverJson = com.titanvps.app.core.Plugins.endpoint(server.name, server.xrayJson, server.proxyTag)?.let { ep ->
-                val p = com.titanvps.app.core.PluginProcess(this, ep).also { plugin = it }
-                p.start()
-                com.titanvps.app.core.Plugins.withLocalSocks(server.xrayJson, server.proxyTag, p.port)
-            } ?: server.xrayJson
+            // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound points
+            // at it; MASQUE: Xray's own client.
+            val (serverJson, p) = com.titanvps.app.core.Plugins.prepare(this, server.name, server.xrayJson, server.proxyTag)
+            plugin = p
             val config = XrayConfigs.buildRunConfig(serverJson, pfd.fd, TitanApp.get(this).assetDir, MTU, logDir, server.proxyTag, localProxy)
             XrayCore.start(config, underlyingDns) { fd -> protect(fd) }
             VpnStatus.localProxy = localProxy

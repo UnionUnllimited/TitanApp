@@ -8,7 +8,7 @@ on:
     inputs:
       libxray_ref:
         description: libXray git ref (tag or branch)
-        default: main
+        default: v26.9.30
 
 # One run at a time per branch: two runs publishing releases at once made one fail.
 concurrency:
@@ -40,12 +40,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/libs/libXray.aar
-          key: libxray-${{ github.event.inputs.libxray_ref || 'main' }}-${{ hashFiles('scripts/build-libxray.sh') }}
+          key: libxray-${{ github.event.inputs.libxray_ref || 'v26.9.30' }}-${{ hashFiles('scripts/build-libxray.sh') }}
 
+      # Pinned: MASQUE needs Xray 26.9.30+ (also busts the cache of the older core).
       - name: Build libXray
         if: steps.libxray-cache.outputs.cache-hit != 'true'
         env:
-          LIBXRAY_REF: ${{ github.event.inputs.libxray_ref || 'main' }}
+          LIBXRAY_REF: ${{ github.event.inputs.libxray_ref || 'v26.9.30' }}
         run: ./scripts/build-libxray.sh
 
       - name: Download geo files
