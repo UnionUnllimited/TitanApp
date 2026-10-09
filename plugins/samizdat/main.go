@@ -3,7 +3,7 @@
 // and point Xray's proxy outbound at it (see desktop Plugins.kt / app core/Plugins.kt).
 //
 //	samizdat-client -listen 127.0.0.1:1080 -server host:port -sni ok.ru -pubkey <hex> -sid <hex>
-//	  [-fp firefox|chrome|safari] [-frag=false] [-recfrag=false] [-jitter=false] [-v]
+//	  [-fp firefox|chrome|safari] [-frag] [-recfrag=false] [-jitter=false] [-v]
 //
 // Only TCP (SOCKS5 CONNECT); Samizdat itself carries no UDP.
 package main
@@ -32,7 +32,9 @@ func main() {
 	sid := flag.String("sid", "", "short id, 16 hex chars")
 	// firefox: Russian DPI (TSPU) drops or stalls the large Chrome ClientHello.
 	fp := flag.String("fp", "firefox", "TLS fingerprint: chrome, firefox, safari")
-	frag := flag.Bool("frag", true, "split the ClientHello across TCP segments")
+	// Off: TSPU reassembles a fragmented ClientHello and resets it when the SNI is the real
+	// cover site on our IP (0.4 s whole, reset in 2.4 s fragmented; tested from Russia).
+	frag := flag.Bool("frag", false, "split the ClientHello across TCP segments")
 	recfrag := flag.Bool("recfrag", true, "split inner TLS records across H2 frames")
 	jitter := flag.Bool("jitter", true, "timing jitter")
 	verbose := flag.Bool("v", false, "log every connection")
