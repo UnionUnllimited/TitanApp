@@ -77,12 +77,36 @@ echo "   ok"
 
 step "Packages"
 export DEBIAN_FRONTEND=noninteractive
+# Caddy's apt repository (cloudsmith) now answers 402: drop it if an earlier run added it.
+rm -f /etc/apt/sources.list.d/caddy-stable.list
 apt-get update -qq
-apt-get install -y -qq curl unzip python3 ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https >/dev/null
+apt-get install -y -qq curl unzip python3 ca-certificates >/dev/null
+# Caddy (only for the certificate) straight from its GitHub releases.
 if ! command -v caddy >/dev/null; then
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update -qq && apt-get install -y -qq caddy >/dev/null
+  tag=$(git ls-remote --tags --refs https://github.com/caddyserver/caddy.git 2>/dev/null | awk -F/ '{print $3}' |
+    grep -E '^v2\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+  [ -n "$tag" ] || { apt-get install -y -qq git >/dev/null; tag=$(git ls-remote --tags --refs https://github.com/caddyserver/caddy.git | awk -F/ '{print $3}' | grep -E '^v2\.[0-9]+\.[0-9]+$' | sort -V | tail -1); }
+  [ -n "$tag" ] || fail "can't find a Caddy release"
+  ctmp=$(mktemp -d)
+  curl -fsSL "https://github.com/caddyserver/caddy/releases/download/$tag/caddy_${tag#v}_linux_amd64.tar.gz" | tar -xz -C "$ctmp" caddy
+  install -m 755 "$ctmp/caddy" /usr/local/bin/caddy && rm -rf "$ctmp"
+  echo "   caddy $tag"
+fi
+mkdir -p /etc/caddy /var/lib/caddy
+if [ ! -f /lib/systemd/system/caddy.service ] && [ ! -f /etc/systemd/system/caddy.service ]; then
+  cat > /etc/systemd/system/caddy.service <<'UNIT'
+[Unit]
+Description=Caddy (certificate for the Titan gateways)
+After=network-online.target
+[Service]
+Environment=HOME=/var/lib/caddy XDG_DATA_HOME=/var/lib/caddy/.local/share XDG_CONFIG_HOME=/var/lib/caddy/.config
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+Restart=always
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
 fi
 
 step "Certificate for $DOMAIN (Caddy, port 80; it keeps renewing it)"

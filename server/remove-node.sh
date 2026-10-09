@@ -24,7 +24,9 @@ rm -rf /etc/titan-gateway /etc/titan-masque /etc/titan-mieru /etc/masque /etc/la
        /etc/titan-sync.env /etc/mita-server.json
 rm -f /usr/local/bin/{titan-sbgw,titan-mieru-gw,titan-node-sync,xray-masque,sing-box-masque,lantern-box}
 if [ "${REMOVE_CADDY:-}" = 1 ]; then
-  systemctl disable --now caddy >/dev/null 2>&1; apt-get remove -y -qq caddy >/dev/null 2>&1; echo "removed caddy"
+  systemctl disable --now caddy >/dev/null 2>&1; apt-get remove -y -qq caddy >/dev/null 2>&1
+  rm -f /usr/local/bin/caddy /etc/systemd/system/caddy.service /etc/apt/sources.list.d/caddy-stable.list; systemctl daemon-reload
+  echo "removed caddy"
 fi
 echo "done. Still listening on our old ports (should be nothing):"
 ss -lntup | grep -E ':(2052|2083|2087|2095|2096|2222|3012[0-9]|30130) ' || echo "  nothing"
