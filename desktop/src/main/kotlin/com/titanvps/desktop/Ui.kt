@@ -675,7 +675,10 @@ private fun Status(state: AppState) {
                     fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            VpnState.Connecting -> Text("Устанавливаем соединение", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            VpnState.Connecting -> Text(
+                state.connectStep.ifEmpty { "Устанавливаем соединение" },
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center,
+            )
             is VpnState.Error -> Text(vpn.message, fontSize = 13.sp, color = Red, textAlign = TextAlign.Center)
             else -> Text(name ?: "Выберите сервер", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
         }

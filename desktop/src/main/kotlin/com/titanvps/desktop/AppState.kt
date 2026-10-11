@@ -57,6 +57,8 @@ class AppState {
     /** Asks to restart as administrator (TUN). */
     var needAdmin by mutableStateOf(false)
     var vpn by mutableStateOf<VpnState>(VpnState.Off); private set
+    /** What connecting is doing right now (shown under the button). */
+    var connectStep by mutableStateOf(""); private set
     var busy by mutableStateOf(false); private set
     var pinging by mutableStateOf(false); private set
     var message by mutableStateOf<String?>(null)
@@ -220,10 +222,13 @@ class AppState {
         val server = selected ?: return
         if (mode == "tun" && !Admin.isAdmin) { needAdmin = true; return }
         vpn = VpnState.Connecting
+        connectStep = "Готовим настройки маршрутов…"
+        fun step(text: String) { scope.launch { connectStep = text } }
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     val geo = GeoFiles.prepare(sub.servers.map { it.xrayJson })
+                    step("Запускаем протокол сервера…")
                     val (socks, http) = freePorts(2)
                     val logDir = AppPaths.logDir.absolutePath.replace('\\', '/')
                     // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound
@@ -237,13 +242,16 @@ class AppState {
                         ?: if (pings[server.id] == -1L && Relay.canChain(server)) Relay.pick(sub.servers, pings.toMap(), server) else null
                     val serverJson = relay?.let { Relay.chain(prepared, server.proxyTag, it) } ?: prepared
                     if ("\"tcpFastOpen\":true" in serverJson) Admin.enableTcpFastOpen()
+                    step(if (relay != null) "Подключаемся через ${relay.name}…" else "Подключаемся к серверу…")
                     core.start(XrayConfigs.buildProxyConfig(serverJson, socks, http, logDir, server.proxyTag), geo)
                     if (mode == "tun") {
                         // The whole PC through the tunnel; no system proxy then.
                         runCatching { SystemProxy.restore() }
+                        step("Включаем VPN для всего компьютера…")
                         tun.start(TunConfig.build(socks, pickedApps, appsMode == "only", logDir))
                     } else {
                         tun.stop()
+                        step("Включаем системный прокси…")
                         SystemProxy.enable(http)
                     }
                     proxyPort = http

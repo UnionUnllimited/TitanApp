@@ -60,7 +60,9 @@ private fun logCrash(e: Throwable) {
 
 fun main() {
     Thread.setDefaultUncaughtExceptionHandler { _, e -> logCrash(e) }
+    Splash.step("Загружаем настройки и подписку…", 0.3f)
     val state = try { AppState() } catch (e: Throwable) { logCrash(e); throw e }
+    Splash.step("Открываем окно…", 0.75f)
     application {
         val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
         val quit = {

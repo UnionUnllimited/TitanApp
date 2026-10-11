@@ -28,7 +28,8 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "com.titanvps.desktop.MainKt"
-        jvmArgs += listOf("-Dfile.encoding=UTF-8")
+        // The start-up window (resources/common/splash.png), shown before the app has loaded.
+        jvmArgs += listOf("-Dfile.encoding=UTF-8", "-splash:\$APPDIR/resources/splash.png")
 
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi)
