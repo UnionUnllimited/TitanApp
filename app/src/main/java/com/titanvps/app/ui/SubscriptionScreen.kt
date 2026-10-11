@@ -154,13 +154,38 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onO
                 Spacer(Modifier.height(10.dp))
                 Feature(Icons.Outlined.Autorenew, "Продление подписки")
                 Feature(Icons.Outlined.DataUsage, "Докупка ГБ для обходов")
-                Feature(Icons.Outlined.Devices, "Управление устройствами")
-                Feature(Icons.Outlined.Loyalty, "Промокоды и история платежей")
-                Feature(Icons.Outlined.SupportAgent, "Поддержка")
+                Feature(Icons.Outlined.Loyalty, "Коды оплаты")
+            }
+
+            // What the in-app cabinet can't do: the bot or the full cabinet on the site.
+            val context = androidx.compose.ui.platform.LocalContext.current
+            SectionCard {
+                Text("Расширенные функции", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте " +
+                        "или в полном кабинете на сайте (вход по почте или через Telegram).",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { context.openUrl(com.titanvps.app.BuildConfig.TELEGRAM_URL) }, modifier = Modifier.weight(1f),
+                    ) { Text("Открыть бота") }
+                    fullCabinetUrl(info.webPageUrl)?.let { url ->
+                        androidx.compose.material3.OutlinedButton(onClick = { context.openUrl(url) }, modifier = Modifier.weight(1f)) {
+                            Text("Кабинет на сайте")
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+/** The site's full cabinet (login by email / Telegram): the host of the subscription's cabinet link. */
+private fun fullCabinetUrl(link: String?): String? =
+    link?.let { runCatching { java.net.URI(it) }.getOrNull() }?.takeIf { it.host != null }?.let { "${it.scheme}://${it.host}/auth" }
 
 @Composable
 private fun Feature(icon: ImageVector, text: String) {

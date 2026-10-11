@@ -980,12 +980,27 @@ private fun SubscriptionPage(state: AppState, sub: Subscription) {
                 listOf(
                     Icons.Outlined.Autorenew to "Продление подписки",
                     Icons.Outlined.DataUsage to "Докупка ГБ для обходов",
-                    Icons.Outlined.Devices to "Управление устройствами",
-                    Icons.Outlined.Loyalty to "Промокоды и история платежей",
-                    Icons.Outlined.SupportAgent to "Поддержка",
+                    Icons.Outlined.Loyalty to "Коды оплаты",
                 ).forEach { (icon, text) ->
                     Row(Modifier.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(icon, null, Modifier.size(18.dp), tint = Brand); Spacer(Modifier.width(10.dp)); Text(text, fontSize = 14.sp)
+                    }
+                }
+            }
+            // What the in-app cabinet can't do: the bot or the full cabinet on the site.
+            Card {
+                Text("Расширенные функции", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте " +
+                        "или в полном кабинете на сайте (вход по почте или через Telegram).",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton({ uri.openUri(Config.TELEGRAM_URL) }, Modifier.weight(1f)) { Text("Открыть бота") }
+                    cabinetLink?.let { runCatching { java.net.URI(it) }.getOrNull() }?.takeIf { it.host != null }?.let { site ->
+                        OutlinedButton({ uri.openUri("${site.scheme}://${site.host}/auth") }, Modifier.weight(1f)) { Text("Кабинет на сайте") }
                     }
                 }
             }
