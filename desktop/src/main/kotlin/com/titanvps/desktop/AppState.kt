@@ -377,10 +377,22 @@ class AppState {
         measuring = emptySet()
     }
 
-    /** One server; works any time, also while the whole list is being measured. */
+    /** Servers whose measuring was stopped by hand: a late result for them is dropped. */
+    private val stoppedIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * One server; works any time, also while the whole list is being measured. Pressed again
+     * while it is being measured: stops it (the old value stays).
+     */
     fun pingOne(id: String) {
         val servers = subscription?.servers ?: return
-        if (servers.none { it.id == id } || id in measuring) return
+        if (servers.none { it.id == id }) return
+        if (id in measuring) {
+            stoppedIds += id
+            measuring = measuring - id
+            return
+        }
+        stoppedIds -= id
         measuring = measuring + id
         ping(servers, listOf(id)) {}
     }
@@ -393,10 +405,14 @@ class AppState {
                     val direct = java.util.concurrent.ConcurrentHashMap<String, Long>()
                     Pinger.ping(
                         servers, targets,
-                        onStart = { ids -> if (!pingStopped) scope.launch { measuring = measuring + ids } },
+                        onStart = { ids -> if (!pingStopped) scope.launch { measuring = measuring + (ids - stoppedIds) } },
                         onResult = { id, ms ->
                             direct[id] = ms
-                            scope.launch { answered += id; pings[id] = ms; if (ms >= 0) relayed.remove(id); measuring = measuring - id }
+                            scope.launch {
+                                answered += id
+                                if (id !in stoppedIds) { pings[id] = ms; if (ms >= 0) relayed.remove(id) }
+                                measuring = measuring - id
+                            }
                         },
                     )
                     if (!pingStopped) tryRelays(servers, direct)
@@ -406,7 +422,7 @@ class AppState {
             } finally {
                 // Let queued results land first.
                 kotlinx.coroutines.yield()
-                if (!pingStopped) targets.filter { it !in answered && it !in pings }.forEach { pings[it] = -1 }
+                if (!pingStopped) targets.filter { it !in answered && it !in pings && it !in stoppedIds }.forEach { pings[it] = -1 }
                 measuring = measuring - targets.toSet()
                 onDone()
             }
@@ -419,7 +435,7 @@ class AppState {
      */
     private fun tryRelays(servers: List<Server>, direct: Map<String, Long>) {
         val known = HashMap<String, Long>(pings.toMap()).apply { putAll(direct) }
-        val probes = direct.filterValues { it < 0 }.keys
+        val probes = direct.filterValues { it < 0 }.keys.filter { it !in stoppedIds }
             .mapNotNull { id -> servers.firstOrNull { it.id == id } }
             .filter(Relay::canChain)
             .mapNotNull { s ->
@@ -433,10 +449,11 @@ class AppState {
         runCatching {
             RelayPinger.ping(
                 probes.map { it.first }, probes.map { it.first.id },
-                onStart = { ids -> if (!pingStopped) scope.launch { measuring = measuring + ids } },
+                onStart = { ids -> if (!pingStopped) scope.launch { measuring = measuring + (ids - stoppedIds) } },
                 onResult = { id, ms ->
                     if (!pingStopped) scope.launch {
-                        if (ms >= 0) { pings[id] = ms; relayed[id] = via.getValue(id) } else relayed.remove(id)
+                        if (id in stoppedIds) Unit
+                        else if (ms >= 0) { pings[id] = ms; relayed[id] = via.getValue(id) } else relayed.remove(id)
                         measuring = measuring - id
                     }
                 },

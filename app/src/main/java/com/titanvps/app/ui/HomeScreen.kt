@@ -673,7 +673,7 @@ private fun ServerRow(
                 .heightIn(min = 40.dp)
                 .widthIn(min = 40.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .clickable(enabled = !measuring, onClick = onPing)
+                .clickable(onClick = onPing)
                 .padding(horizontal = 6.dp),
             contentAlignment = Alignment.Center,
         ) {

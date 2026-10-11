@@ -763,7 +763,7 @@ private fun ServerRow(
         // Click the ping to re-measure just this server (like Happ).
         Box(
             Modifier.heightIn(min = 36.dp).widthIn(min = 36.dp).clip(RoundedCornerShape(10.dp))
-                .clickable(enabled = !measuring, onClick = onPing).padding(horizontal = 6.dp),
+                .clickable(onClick = onPing).padding(horizontal = 6.dp),
             contentAlignment = Alignment.Center,
         ) {
             when {

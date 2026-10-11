@@ -189,10 +189,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _measuring.value = emptySet()
     }
 
-    /** Pings one server; works any time, also while the whole list is being measured. */
+    /** Servers whose measuring was stopped by hand: a late result for them is dropped. */
+    private val stoppedIds = HashSet<String>()
+
+    /**
+     * Pings one server; works any time, also while the whole list is being measured. Pressed
+     * again while it is being measured: stops it (the old value stays).
+     */
     fun pingOne(serverId: String) {
         val servers = subscription.value?.servers ?: return
-        if (servers.none { it.id == serverId } || serverId in _measuring.value) return
+        if (servers.none { it.id == serverId }) return
+        if (serverId in _measuring.value) {
+            stoppedIds += serverId
+            _measuring.value = _measuring.value - serverId
+            return
+        }
+        stoppedIds -= serverId
         _measuring.value = _measuring.value + serverId
         ping(servers, listOf(serverId)) {}
     }
@@ -205,11 +217,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 withTimeoutOrNull(240_000) {
                     PingClient.ping(getApplication<Application>(), servers, targets).collect { event ->
                         when (event) {
-                            is PingClient.Event.Started -> if (!pingStopped) _measuring.value = _measuring.value + event.ids
+                            is PingClient.Event.Started -> if (!pingStopped) _measuring.value = _measuring.value + (event.ids - stoppedIds)
                             is PingClient.Event.Partial -> {
                                 answered += event.delays.keys
-                                _pings.value = _pings.value + event.delays
-                                event.delays.filterValues { it >= 0 }.keys.forEach { settings.setRelay(it, null) }
+                                val kept = event.delays.filterKeys { it !in stoppedIds }
+                                _pings.value = _pings.value + kept
+                                kept.filterValues { it >= 0 }.keys.forEach { settings.setRelay(it, null) }
                                 _measuring.value = _measuring.value - event.delays.keys
                             }
                             is PingClient.Event.Done -> error = event.error
@@ -218,7 +231,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } finally {
                 // Anything still unanswered counts as a timeout.
-                val missing = targets.filter { it !in answered }
+                val missing = targets.filter { it !in answered && it !in stoppedIds }
                 if (!pingStopped) _pings.value = _pings.value + missing.associateWith { -1L }
                 _measuring.value = _measuring.value - targets.toSet()
                 error?.let { android.util.Log.w("Titan", "ping failed: $it") }
@@ -234,7 +247,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun tryRelays(servers: List<com.titanvps.app.data.Server>, targets: List<String>) {
         val known = _pings.value
-        val probes = targets.filter { known[it] == -1L }
+        val probes = targets.filter { known[it] == -1L && it !in stoppedIds }
             .mapNotNull { id -> servers.firstOrNull { it.id == id } }
             .filter(Relay::canChain)
             .mapNotNull { s ->
@@ -250,6 +263,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 PingClient.ping(getApplication<Application>(), servers + probes.map { it.first }, probes.map { it.first.id }).collect { event ->
                     if (event is PingClient.Event.Partial) {
                         val ok = event.delays.filterValues { it >= 0 }.mapKeys { it.key.removePrefix(Relay.PROBE_PREFIX) }
+                            .filterKeys { it !in stoppedIds }
                         event.delays.keys.map { it.removePrefix(Relay.PROBE_PREFIX) }
                             .forEach { id -> settings.setRelay(id, if (id in ok) via.getValue(id) else null) }
                         _pings.value = _pings.value + ok
