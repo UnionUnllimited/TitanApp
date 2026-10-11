@@ -161,6 +161,7 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
     private val listPool = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL) { r -> Thread(r).apply { isDaemon = true } }
     private val singlePool = java.util.concurrent.Executors.newCachedThreadPool { r -> Thread(r).apply { isDaemon = true } }
     private val recheckPool = java.util.concurrent.Executors.newFixedThreadPool(3) { r -> Thread(r).apply { isDaemon = true } }
+    private val startPool = java.util.concurrent.Executors.newFixedThreadPool(8) { r -> Thread(r).apply { isDaemon = true } }
     private val timer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r).apply { isDaemon = true } }
     private val active = java.util.concurrent.atomic.AtomicInteger()
     private var idleStop: java.util.concurrent.ScheduledFuture<*>? = null
@@ -180,7 +181,7 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
         val gen = generation.get()
         active.incrementAndGet()
         try {
-            measure(ensureSession(all), targets, targets.size == 1, onStart, onResult) { generation.get() != gen }
+            measure(ensureSession(all, targets), targets, targets.size == 1, onStart, onResult) { generation.get() != gen }
         } finally {
             if (active.decrementAndGet() == 0) synchronized(this) {
                 idleStop = timer.schedule(Runnable { stopIfIdle() }, KEEP_WARM_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -199,19 +200,28 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
     }
 
     @Synchronized
-    private fun ensureSession(servers: List<Server>): Session {
-        val sigs = servers.associate { it.id to (it.xrayJson + it.proxyTag).hashCode() }
-        session?.takeIf { s -> core.isRunning && sigs.all { (id, sig) -> s.sigs[id] == sig } }?.let { return it }
+    private fun ensureSession(all: List<Server>, targets: List<String>): Session {
+        val sig = { s: Server -> (s.xrayJson + s.proxyTag).hashCode() }
+        // A warm core that already has the servers asked for (unchanged) is reused.
+        session?.takeIf { s -> core.isRunning && all.filter { it.id in targets }.all { s.sigs[it.id] == sig(it) } }?.let { return it }
+        // Cold: one server asked for → a core for it alone (starting every Naive / sing-box
+        // client of the subscription first would take a minute); a list → all of them.
+        val servers = if (targets.size == 1) all.filter { it.id in targets } else all
+        val sigs = servers.associate { it.id to sig(it) }
         session?.plugins?.forEach { runCatching { it.close() } }
         // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it;
         // MASQUE: rewritten for Xray itself.
-        val plugins = mutableListOf<PluginProcess>()
-        val jsonOf = servers.associate { s ->
-            if (!preparePlugins) return@associate s.id to s.xrayJson
-            s.id to runCatching { Plugins.prepare(s) }
-                .map { (json, p) -> p?.let(plugins::add); json }
-                .getOrDefault(s.xrayJson)
+        // The clients start side by side: each one takes a second or more (antivirus scan).
+        val plugins = java.util.Collections.synchronizedList(mutableListOf<PluginProcess>())
+        val starts = servers.associate { s ->
+            s.id to startPool.submit(java.util.concurrent.Callable {
+                if (!preparePlugins) return@Callable s.xrayJson
+                runCatching { Plugins.prepare(s) }
+                    .map { (json, p) -> p?.let(plugins::add); json }
+                    .getOrDefault(s.xrayJson)
+            })
         }
+        val jsonOf = starts.mapValues { (id, f) -> runCatching { f.get() }.getOrDefault(servers.first { it.id == id }.xrayJson) }
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
         val serverKeys = servers.associate { s ->

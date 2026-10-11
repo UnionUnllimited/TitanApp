@@ -44,6 +44,7 @@ class PingService : Service() {
     private val listPool: ExecutorService = Executors.newFixedThreadPool(PARALLEL)
     private val singlePool: ExecutorService = Executors.newCachedThreadPool()
     private val recheckPool: ExecutorService = Executors.newFixedThreadPool(RECHECK_PARALLEL)
+    private val startPool: ExecutorService = Executors.newFixedThreadPool(8)
     private val main = Handler(Looper.getMainLooper())
     private val coreLock = Any()
     private var session: Session? = null
@@ -86,22 +87,30 @@ class PingService : Service() {
     }
 
     /** Starts (or reuses) the core with every server of the subscription. */
-    private fun ensureSession(servers: List<JSONObject>): Session = synchronized(coreLock) {
-        val sigs = servers.associate { it.getString("id") to (it.getString("json") + it.getString("tag")).hashCode() }
-        // Reuse the warm core if it already has these servers unchanged (e.g. a subset).
-        session?.takeIf { s -> sigs.all { (id, sig) -> s.serverSigs[id] == sig } }?.let { return it }
+    private fun ensureSession(all: List<JSONObject>, targets: List<String>): Session = synchronized(coreLock) {
+        val sig = { it: JSONObject -> (it.getString("json") + it.getString("tag")).hashCode() }
+        // Reuse the warm core if it already has the servers asked for, unchanged.
+        session?.takeIf { s -> all.filter { it.getString("id") in targets }.all { s.serverSigs[it.getString("id")] == sig(it) } }?.let { return it }
+        // Cold: one server asked for → a core for it alone (starting every Naive / sing-box
+        // client of the subscription first takes long); a list → all of them.
+        val servers = if (targets.size == 1) all.filter { it.getString("id") in targets } else all
+        val sigs = servers.associate { it.getString("id") to sig(it) }
         stopSession()
         XrayCore.ensurePingDns()
 
         // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it;
         // MASQUE: rewritten for Xray itself.
-        val plugins = mutableListOf<PluginProcess>()
-        val jsonOf = servers.associate { item ->
+        // The clients start side by side, not one after another.
+        val plugins = java.util.Collections.synchronizedList(mutableListOf<PluginProcess>())
+        val starts = servers.associate { item ->
             val json = item.getString("json")
-            item.getString("id") to runCatching { Plugins.prepare(this, item.optString("name"), json, item.getString("tag")) }
-                .map { (prepared, p) -> p?.let(plugins::add); prepared }
-                .getOrDefault(json) // client didn't start: the probe just times out
+            item.getString("id") to startPool.submit(java.util.concurrent.Callable {
+                runCatching { Plugins.prepare(this, item.optString("name"), json, item.getString("tag")) }
+                    .map { (prepared, p) -> p?.let(plugins::add); prepared }
+                    .getOrDefault(json) // client didn't start: the probe just times out
+            })
         }
+        val jsonOf = starts.mapValues { (id, f) -> runCatching { f.get() }.getOrElse { servers.first { it.getString("id") == id }.getString("json") } }
 
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
@@ -131,7 +140,7 @@ class PingService : Service() {
     private fun measureTargets(servers: List<JSONObject>, targets: List<String>, single: Boolean, receiver: ResultReceiver?): Boolean {
         val gen = generation.get()
         val cancelled = { generation.get() != gen }
-        val s = ensureSession(servers)
+        val s = ensureSession(servers, targets)
         val pool = if (single) singlePool else listPool
         val keysOf = targets.associateWith { s.serverKeys[it].orEmpty() }
         val best = HashMap<String, Long>()
