@@ -137,10 +137,7 @@ object Repository {
  */
 val Pinger = PingEngine("ping")
 
-/** Servers already in their final form (chained through a relay): plugins not applied again. */
-val RelayPinger = PingEngine("ping-relay", preparePlugins = false)
-
-class PingEngine(name: String, private val preparePlugins: Boolean = true) {
+class PingEngine(name: String) {
     private companion object {
         const val URL = "https://www.gstatic.com/generate_204"
         const val PARALLEL = 6 // more at once crowd each other out on a weak network
@@ -155,6 +152,8 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
         val ports: Map<String, Int>,
         val serverKeys: Map<String, List<String>>,
         val plugins: List<PluginProcess> = emptyList(),
+        /** Probes over UDP (Hysteria, TUIC, MASQUE over H3): the only ones measured twice. */
+        val udp: Set<String> = emptySet(),
     )
 
     private val core = XrayProcess(name)
@@ -215,7 +214,6 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
         val plugins = java.util.Collections.synchronizedList(mutableListOf<PluginProcess>())
         val starts = servers.associate { s ->
             s.id to startPool.submit(java.util.concurrent.Callable {
-                if (!preparePlugins) return@Callable s.xrayJson
                 runCatching { Plugins.prepare(s) }
                     .map { (json, p) -> p?.let(plugins::add); json }
                     .getOrDefault(s.xrayJson)
@@ -224,18 +222,31 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
         val jsonOf = starts.mapValues { (id, f) -> runCatching { f.get() }.getOrDefault(servers.first { it.id == id }.xrayJson) }
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
+        val udp = HashSet<String>()
         val serverKeys = servers.associate { s ->
             val json = jsonOf.getValue(s.id)
+            // TUIC (sing-box client) and MASQUE over H3 run over UDP whatever the outbound says.
+            val serverUdp = Plugins.endpoint(s)?.let { it.kind == Plugins.Kind.TUIC || (it.kind == Plugins.Kind.MASQUE && !it.http2) } == true
             s.id to XrayConfigs.pingTags(json, s.proxyTag, MAX_MEMBERS).mapNotNull { tag ->
                 val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
                 if (key !in probes && probes.size < 200) probes[key] = Probe(json, tag)
+                if (key in probes && (serverUdp || isUdp(json, tag))) udp += key
                 key.takeIf { it in probes }
             }.distinct()
         }
         val keys = probes.keys.toList()
         val ports = if (keys.isEmpty()) emptyList() else freePorts(keys.size)
         if (keys.isNotEmpty()) core.start(XrayConfigs.buildPingConfig(keys.map { probes.getValue(it).let { p -> p.json to p.tag } }, ports))
-        return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins).also { session = it }
+        return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp).also { session = it }
+    }
+
+    /** Hysteria, QUIC, mKCP… outbounds: they go over UDP. */
+    private fun isUdp(json: String, tag: String): Boolean {
+        val arr = runCatching { org.json.JSONObject(json).optJSONArray("outbounds") }.getOrNull() ?: return false
+        val ob = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.firstOrNull { it.optString("tag") == tag } ?: return false
+        val protocol = ob.optString("protocol").lowercase()
+        val network = ob.optJSONObject("streamSettings")?.optString("network").orEmpty().lowercase()
+        return protocol in setOf("hysteria", "hysteria2", "tuic", "wireguard") || network in setOf("hysteria", "quic", "kcp", "mkcp")
     }
 
     private fun measure(
@@ -271,9 +282,9 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
                 // and the better of the two.
                 var ms = timed(port, 4)
                 if (ms >= 0) ms = bestOf(ms, timed(port, 3))
-                // In a full run a bad result is often just the crowd (Hysteria/QUIC suffers
-                // most): measure it again alone once the list is done.
-                if (!single && (ms < 0 || ms > RECHECK_ABOVE_MS)) recheck[key] = ms else report(key, ms)
+                // In a full run a bad result over UDP (Hysteria, TUIC) is often just the crowd:
+                // measured again alone once the list is done. TCP results stand as they are.
+                if (!single && key in s.udp && (ms < 0 || ms > RECHECK_ABOVE_MS)) recheck[key] = ms else report(key, ms)
             }
         }.forEach { runCatching { it.get() } }
         if (cancelled()) return

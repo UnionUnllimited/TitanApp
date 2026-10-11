@@ -134,7 +134,6 @@ internal fun HomeScreen(
     val measuring by viewModel.measuring.collectAsState()
     val account by viewModel.account.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
-    val relays by viewModel.relays.collectAsState()
     val onMobile by viewModel.onMobile.collectAsState()
     val theme by viewModel.theme.collectAsState()
     val dark = isDark(theme)
@@ -200,7 +199,6 @@ internal fun HomeScreen(
                 favorite = s.name in favorites,
                 locked = bypassLocked,
                 limited = page == Group.BYPASS,
-                relayed = s.id in relays,
                 onClick = { if (bypassLocked) viewModel.explainBypassOnWifi() else viewModel.select(s.id) },
                 onLongClick = { details = s },
                 onPing = { viewModel.pingOne(s.id) },
@@ -629,7 +627,6 @@ private fun ServerRow(
     favorite: Boolean,
     locked: Boolean,
     limited: Boolean,
-    relayed: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onPing: () -> Unit,
@@ -656,7 +653,7 @@ private fun ServerRow(
                 fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
             )
             Text(
-                (if (limited) "Лимитный · расходует ГБ" else "Безлимит") + (if (relayed) " · обход блокировки" else ""),
+                if (limited) "Лимитный · расходует ГБ" else "Безлимит",
                 fontSize = 11.sp,
                 color = if (limited) Color(0xFFF59E0B) else connectedGreen(),
                 maxLines = 1,

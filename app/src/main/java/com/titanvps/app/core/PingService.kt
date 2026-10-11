@@ -38,6 +38,8 @@ class PingService : Service() {
         val serverKeys: Map<String, List<String>>,
         /** Naive / Mieru clients for the servers that need one. */
         val plugins: List<PluginProcess> = emptyList(),
+        /** Probes over UDP (Hysteria, TUIC, MASQUE over H3): the only ones measured twice. */
+        val udp: Set<String> = emptySet(),
     )
 
     private val requests = Executors.newCachedThreadPool()
@@ -114,11 +116,16 @@ class PingService : Service() {
 
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
+        val udp = HashSet<String>()
         val serverKeys = servers.associate { item ->
             val json = jsonOf.getValue(item.getString("id"))
+            // TUIC (sing-box client) and MASQUE over H3 run over UDP whatever the outbound says.
+            val serverUdp = Plugins.endpoint(item.optString("name"), item.getString("json"), item.getString("tag"))
+                ?.let { it.kind == Plugins.Kind.TUIC || (it.kind == Plugins.Kind.MASQUE && !it.http2) } == true
             item.getString("id") to XrayConfigs.pingTags(json, item.getString("tag"), MAX_MEMBERS).mapNotNull { tag ->
                 val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
                 if (key !in probes && probes.size < MAX_PROBES) probes[key] = Probe(json, tag)
+                if (key in probes && (serverUdp || isUdp(json, tag))) udp += key
                 key.takeIf { it in probes }
             }.distinct()
         }
@@ -130,7 +137,7 @@ class PingService : Service() {
             plugins.forEach { runCatching { it.close() } }
             throw e
         }
-        Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins).also { session = it }
+        Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp).also { session = it }
     }
 
     /**
@@ -170,9 +177,9 @@ class PingService : Service() {
                     if (fresh.isNotEmpty()) sendStarted(receiver, fresh)
                 }
                 val r = measureKey(s.ports.getValue(key))
-                // In a full run a bad result is often just the crowd (Hysteria/QUIC suffers
-                // most on mobile): measure it again alone once the list is done.
-                if (!single && (r < 0 || r > RECHECK_ABOVE_MS)) recheck[key] = r else report(key, r)
+                // In a full run a bad result over UDP (Hysteria, TUIC) is often just the crowd:
+                // measured again alone once the list is done. TCP results stand as they are.
+                if (!single && key in s.udp && (r < 0 || r > RECHECK_ABOVE_MS)) recheck[key] = r else report(key, r)
             }
         }.forEach { runCatching { it.get() } }
         if (cancelled()) return best.isNotEmpty()
@@ -195,6 +202,15 @@ class PingService : Service() {
     private fun measureKey(port: Int): Long {
         val first = measure(port, TIMEOUT_SEC)
         return if (first < 0) first else bestOf(first, measure(port, SECOND_TIMEOUT_SEC))
+    }
+
+    /** Hysteria, QUIC, mKCP… outbounds: they go over UDP. */
+    private fun isUdp(json: String, tag: String): Boolean {
+        val arr = runCatching { JSONObject(json).optJSONArray("outbounds") }.getOrNull() ?: return false
+        val ob = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.firstOrNull { it.optString("tag") == tag } ?: return false
+        val protocol = ob.optString("protocol").lowercase()
+        val network = ob.optJSONObject("streamSettings")?.optString("network").orEmpty().lowercase()
+        return protocol in setOf("hysteria", "hysteria2", "tuic", "wireguard") || network in setOf("hysteria", "quic", "kcp", "mkcp")
     }
 
     private fun bestOf(a: Long, b: Long): Long = when {
