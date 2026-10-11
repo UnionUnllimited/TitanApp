@@ -95,11 +95,18 @@
             </intent-filter>
         </activity>
 
-        <!-- The site's personal cabinet (link from the subscription), inside the app. -->
+        <!-- Personal cabinet: the site's limited cabinet read natively (link from the subscription). -->
         <activity
             android:name=".ui.CabinetActivity"
             android:exported="false"
-            android:label="Личный кабинет"
+            android:theme="@style/Theme.TitanVPS"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- The payment page of a purchase, inside the app. -->
+        <activity
+            android:name=".ui.PaymentActivity"
+            android:exported="false"
+            android:label="Оплата"
             android:theme="@android:style/Theme.Material.Light.DarkActionBar"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
 
