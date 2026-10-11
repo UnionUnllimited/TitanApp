@@ -922,6 +922,10 @@ private fun AccountBanner(state: AppState) {
 private fun SubscriptionPage(state: AppState, sub: Subscription) {
     val uri = LocalUriHandler.current
     val info = sub.info
+    // The cabinet in the app, signed in by the subscription's link (no email / Telegram login).
+    var showCabinet by remember { mutableStateOf(false) }
+    val cabinetLink = info.webPageUrl
+    if (showCabinet && cabinetLink != null) { CabinetPage(cabinetLink) { showCabinet = false }; return }
     val now = System.currentTimeMillis() / 1000
     val active = info.expireAt <= 0 || info.expireAt > now
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -961,7 +965,10 @@ private fun SubscriptionPage(state: AppState, sub: Subscription) {
                 )
             }
             DevicesCard(state)
-            Button({ uri.openUri(state.openCabinetUrl()) }, Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp)) {
+            Button(
+                { if (cabinetLink != null) showCabinet = true else uri.openUri(state.openCabinetUrl()) },
+                Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp),
+            ) {
                 Icon(Icons.Outlined.AccountCircle, null); Spacer(Modifier.width(8.dp)); Text("Личный кабинет", fontWeight = FontWeight.SemiBold)
             }
             Card {
