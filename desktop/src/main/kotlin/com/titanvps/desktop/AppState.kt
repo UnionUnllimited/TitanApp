@@ -63,6 +63,11 @@ class AppState {
     var pinging by mutableStateOf(false); private set
     var message by mutableStateOf<String?>(null)
     val pings = mutableStateMapOf<String, Long>()
+    /** Whitelist mode right now: true / false (normal internet) / null (not known, offline). */
+    var whitelist by mutableStateOf<Boolean?>(null); private set
+    var whitelistChecking by mutableStateOf(false); private set
+    /** Bypass servers spend GB and are only needed in whitelist mode: locked on normal internet. */
+    val bypassLocked: Boolean get() = whitelist == false
     /** Servers unreachable directly that work through another one: server id → relay id. */
     val relayed = mutableStateMapOf<String, String>()
     var update by mutableStateOf<UpdateState>(UpdateState.Idle); private set
@@ -89,6 +94,12 @@ class AppState {
         autoConnect = st.autoConnect
         scope.launch { autostart = withContext(Dispatchers.IO) { Autostart.isEnabled } }
         Runtime.getRuntime().addShutdownHook(Thread { shutdown() })
+        scope.launch {
+            while (true) {
+                checkWhitelist()
+                kotlinx.coroutines.delay(WHITELIST_EVERY_MS)
+            }
+        }
         if (subscription != null) {
             refresh(silent = true)
             loadAccount()
@@ -126,8 +137,29 @@ class AppState {
         }
     }
 
+    /** Checks now whether the internet is in whitelist mode (bypass servers unlock then). */
+    fun checkWhitelist() {
+        if (whitelistChecking) return
+        whitelistChecking = true
+        scope.launch {
+            try {
+                whitelist = withContext(Dispatchers.IO) { Whitelist.detect() }
+            } finally {
+                whitelistChecking = false
+            }
+        }
+    }
+
+    private fun isBypass(id: String): Boolean =
+        subscription?.servers?.firstOrNull { it.id == id }?.let { ServerGroups.groupOf(it, subscription!!.servers) == ServerGroups.Group.BYPASS } == true
+
     fun select(id: String) {
         if (id == selectedId) return
+        if (bypassLocked && isBypass(id)) {
+            message = BYPASS_LOCKED_MESSAGE
+            checkWhitelist()
+            return
+        }
         selectedId = id
         scope.launch(Dispatchers.IO) { persist() }
         if (vpn is VpnState.Connected) connect()
@@ -219,7 +251,16 @@ class AppState {
 
     fun connect() {
         val sub = subscription ?: return
-        val server = selected ?: return
+        var server = selected ?: return
+        // A bypass server chosen earlier, while the internet is normal: a regular one instead.
+        if (bypassLocked && isBypass(server.id)) {
+            val regular = ServerGroups.split(sub.servers)[ServerGroups.Group.SERVERS].orEmpty()
+                .minByOrNull { s -> pings[s.id]?.takeIf { it >= 0 } ?: Long.MAX_VALUE } ?: return
+            server = regular
+            selectedId = regular.id
+            scope.launch(Dispatchers.IO) { persist() }
+            message = "Интернет работает без белых списков — подключаем к обычному серверу ${regular.name}"
+        }
         if (mode == "tun" && !Admin.isAdmin) { needAdmin = true; return }
         vpn = VpnState.Connecting
         connectStep = "Готовим настройки маршрутов…"
@@ -486,5 +527,12 @@ class AppState {
         plugin?.close()
         plugin = null
         runCatching { SystemProxy.restore() }
+    }
+
+    private companion object {
+        const val WHITELIST_EVERY_MS = 2 * 60_000L
+        const val BYPASS_LOCKED_MESSAGE =
+            "Обходы нужны только когда интернет работает по белым спискам (открываются ya.ru и vk.com, а google.com — нет). " +
+                "Сейчас интернет обычный — выберите сервер во вкладке «Серверы»"
     }
 }

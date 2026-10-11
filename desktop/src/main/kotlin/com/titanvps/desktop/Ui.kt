@@ -390,7 +390,18 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
                 SearchField(query, { query = it }, Modifier.weight(1f))
                 SortMenu(sort) { sort = it }
             }
-            Text(
+            if (page == Group.BYPASS && state.bypassLocked) {
+                Row(Modifier.padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Обходы откроются, когда интернет заработает по белым спискам (ya.ru и vk.com открываются, google.com — нет). " +
+                            "Сейчас интернет обычный — используйте «Серверы».",
+                        fontSize = 12.sp, color = Yellow, modifier = Modifier.weight(1f),
+                    )
+                    TextButton({ state.checkWhitelist() }, enabled = !state.whitelistChecking) {
+                        Text(if (state.whitelistChecking) "Проверяем…" else "Проверить", fontSize = 12.sp)
+                    }
+                }
+            } else Text(
                 if (page == Group.SERVERS) "Безлимит на обычных серверах"
                 else "Серверы для мобильного интернета с белыми списками. Расходуют ГБ" +
                     (if (sub.info.totalBytes > 0) " · осталось ${formatBytes(sub.info.remainingBytes)} из ${formatBytes(sub.info.totalBytes)}" else ""),
@@ -406,6 +417,7 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
             selected = s.id == state.selected?.id,
             connected = state.vpn is VpnState.Connected && s.id == state.selected?.id,
             limited = groups[Group.BYPASS]?.any { it.id == s.id } == true,
+            locked = state.bypassLocked && groups[Group.BYPASS]?.any { it.id == s.id } == true,
             relayed = s.id in state.relayed,
             onPing = { state.pingOne(s.id) },
         ) { state.select(s.id) }
@@ -739,7 +751,7 @@ private fun FlagCircle(server: Server, size: Dp) {
 @Composable
 private fun ServerRow(
     server: Server, ping: Long?, measuring: Boolean, selected: Boolean, connected: Boolean, limited: Boolean,
-    relayed: Boolean, onPing: () -> Unit, onClick: () -> Unit,
+    locked: Boolean, relayed: Boolean, onPing: () -> Unit, onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(18.dp)
     val accent = if (connected) Green else Brand
@@ -747,7 +759,8 @@ private fun ServerRow(
         Modifier.fillMaxWidth().clip(shape)
             .background(if (selected) accent.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
             .then(if (selected) Modifier.border(1.5.dp, accent, shape) else Modifier)
-            .clickable(onClick = onClick).heightIn(min = 60.dp).padding(horizontal = 14.dp, vertical = 8.dp),
+            .clickable(onClick = onClick).graphicsLayer { alpha = if (locked) 0.45f else 1f }
+            .heightIn(min = 60.dp).padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         FlagCircle(server, 34.dp)
