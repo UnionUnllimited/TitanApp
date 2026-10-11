@@ -30,6 +30,11 @@ object PingClient {
      * Measures [targets] in that order. [all] is every server of the subscription: the
      * service keeps one warm core for all of them, shared by concurrent requests.
      */
+    /** Stops the measurements in progress (what is still queued isn't measured). */
+    fun cancel(context: Context) {
+        runCatching { context.startService(Intent(context, PingService::class.java).putExtra(PingService.EXTRA_CANCEL, true)) }
+    }
+
     fun ping(context: Context, all: List<Server>, targets: List<String>): Flow<Event> = callbackFlow {
         val file = File(context.cacheDir, "ping-${System.nanoTime()}.json")
         val arr = JSONArray()

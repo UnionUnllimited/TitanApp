@@ -163,15 +163,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * appear one by one; old values stay until the new ones arrive.
      */
     fun pingAll(firstIds: List<String> = emptyList()) {
-        if (_pinging.value) return
+        if (_pinging.value) { stopPing(); return }
         val servers = subscription.value?.servers ?: return
         val ids = servers.map { it.id }
         val order = firstIds.filter { it in ids } + ids.filter { it !in firstIds }
         _pinging.value = true
+        pingStopped = false
+        val run = ++pingRun
         ping(servers, order) { error ->
+            // A stopped run finishing late mustn't end a newer one.
+            if (run != pingRun || pingStopped) return@ping
             _pinging.value = false
             if (error != null) _message.value = "Не удалось проверить пинг. Попробуйте позже"
         }
+    }
+
+    @Volatile private var pingStopped = false
+    private var pingRun = 0
+
+    /** Stops measuring (the ping button pressed again); unmeasured servers keep their old value. */
+    fun stopPing() {
+        pingStopped = true
+        PingClient.cancel(getApplication<Application>())
+        _pinging.value = false
+        _measuring.value = emptySet()
     }
 
     /** Pings one server; works any time, also while the whole list is being measured. */
@@ -190,7 +205,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 withTimeoutOrNull(240_000) {
                     PingClient.ping(getApplication<Application>(), servers, targets).collect { event ->
                         when (event) {
-                            is PingClient.Event.Started -> _measuring.value = _measuring.value + event.ids
+                            is PingClient.Event.Started -> if (!pingStopped) _measuring.value = _measuring.value + event.ids
                             is PingClient.Event.Partial -> {
                                 answered += event.delays.keys
                                 _pings.value = _pings.value + event.delays
@@ -204,11 +219,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 // Anything still unanswered counts as a timeout.
                 val missing = targets.filter { it !in answered }
-                _pings.value = _pings.value + missing.associateWith { -1L }
+                if (!pingStopped) _pings.value = _pings.value + missing.associateWith { -1L }
                 _measuring.value = _measuring.value - targets.toSet()
                 error?.let { android.util.Log.w("Titan", "ping failed: $it") }
             }
-            runCatching { tryRelays(servers, targets) }
+            if (!pingStopped) runCatching { tryRelays(servers, targets) }
             onDone(error)
         }
     }

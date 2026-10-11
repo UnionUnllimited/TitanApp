@@ -49,10 +49,18 @@ class PingService : Service() {
     private var session: Session? = null
     private val active = java.util.concurrent.atomic.AtomicInteger()
     private val idleStop = Runnable { shutdownIfIdle() }
+    /** Bumped by a cancel request: measurements started before it stop taking new probes. */
+    private val generation = java.util.concurrent.atomic.AtomicInteger()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.getBooleanExtra(EXTRA_CANCEL, false) == true) {
+            generation.incrementAndGet()
+            // Started just for this (nothing running): don't stay around.
+            if (active.get() == 0) { main.removeCallbacks(idleStop); main.postDelayed(idleStop, KEEP_WARM_MS) }
+            return START_NOT_STICKY
+        }
         val receiver = intent?.let { IntentCompat.getParcelableExtra(it, EXTRA_RECEIVER, ResultReceiver::class.java) }
         val path = intent?.getStringExtra(EXTRA_FILE)
         main.removeCallbacks(idleStop)
@@ -99,7 +107,7 @@ class PingService : Service() {
         val probes = LinkedHashMap<String, Probe>()
         val serverKeys = servers.associate { item ->
             val json = jsonOf.getValue(item.getString("id"))
-            item.getString("id") to XrayConfigs.pingTags(json, item.getString("tag")).mapNotNull { tag ->
+            item.getString("id") to XrayConfigs.pingTags(json, item.getString("tag"), MAX_MEMBERS).mapNotNull { tag ->
                 val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
                 if (key !in probes && probes.size < MAX_PROBES) probes[key] = Probe(json, tag)
                 key.takeIf { it in probes }
@@ -121,6 +129,8 @@ class PingService : Service() {
      * member — what the balancer itself would pick. Returns true if anything answered.
      */
     private fun measureTargets(servers: List<JSONObject>, targets: List<String>, single: Boolean, receiver: ResultReceiver?): Boolean {
+        val gen = generation.get()
+        val cancelled = { generation.get() != gen }
         val s = ensureSession(servers)
         val pool = if (single) singlePool else listPool
         val keysOf = targets.associateWith { s.serverKeys[it].orEmpty() }
@@ -145,6 +155,7 @@ class PingService : Service() {
         val recheck = java.util.Collections.synchronizedMap(LinkedHashMap<String, Long>())
         serversByKey.map { (key, ids) ->
             pool.submit {
+                if (cancelled()) return@submit
                 synchronized(lock) {
                     val fresh = ids.filter { started.add(it) }
                     if (fresh.isNotEmpty()) sendStarted(receiver, fresh)
@@ -155,10 +166,15 @@ class PingService : Service() {
                 if (!single && (r < 0 || r > RECHECK_ABOVE_MS)) recheck[key] = r else report(key, r)
             }
         }.forEach { runCatching { it.get() } }
-        // One attempt each, one at a time; keep the better of the two runs.
-        // A few at a time, one attempt each; keep the better of the two runs.
-        recheck.toList().map { (key, first) ->
-            recheckPool.submit { report(key, bestOf(first, measure(s.ports.getValue(key), RECHECK_TIMEOUT_SEC))) }
+        if (cancelled()) return best.isNotEmpty()
+        // A few at a time, one attempt each; keep the better of the two runs. Not needed when
+        // every server using it already has a good result (e.g. another balancer member).
+        val (needed, settled) = recheck.toList().partition { (key, _) ->
+            synchronized(lock) { serversByKey.getValue(key).any { (best[it] ?: -1L) < 0 } }
+        }
+        settled.forEach { (key, first) -> report(key, first) }
+        needed.map { (key, first) ->
+            recheckPool.submit { if (!cancelled()) report(key, bestOf(first, measure(s.ports.getValue(key), RECHECK_TIMEOUT_SEC))) }
         }.forEach { runCatching { it.get() } }
         return best.isNotEmpty()
     }
@@ -256,6 +272,7 @@ class PingService : Service() {
     companion object {
         const val EXTRA_FILE = "file"
         const val EXTRA_RECEIVER = "receiver"
+        const val EXTRA_CANCEL = "cancel"
         const val KEY_IDS = "ids"
         const val KEY_DELAYS = "delays"
         const val KEY_ERROR = "error"
@@ -270,6 +287,8 @@ class PingService : Service() {
         private const val RETRY_TIMEOUT_SEC = 10 // pingBatch fallback
         private const val PARALLEL = 6 // more at once crowd each other out on a weak mobile network
         private const val MAX_PROBES = 200
+        /** Balancer members measured per server: its ping is the best of them. */
+        private const val MAX_MEMBERS = 30
         private const val RECHECK_ABOVE_MS = 1500L
         private const val KEEP_WARM_MS = 60_000L
         private const val BATCH_LIMIT = 5 // libXray pingBatch accepts at most 5 configs per call

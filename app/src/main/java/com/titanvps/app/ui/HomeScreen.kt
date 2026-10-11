@@ -538,7 +538,7 @@ private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
         Modifier
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .clickable(enabled = !pinging, onClick = onClick)
+            .clickable(onClick = onClick)
             .heightIn(min = 52.dp)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -546,7 +546,7 @@ private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
         if (pinging) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         else Icon(Icons.Default.Speed, null, Modifier.size(20.dp))
         Spacer(Modifier.width(6.dp))
-        Text("Пинг", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(if (pinging) "Стоп" else "Пинг", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
