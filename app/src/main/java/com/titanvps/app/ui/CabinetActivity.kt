@@ -280,15 +280,16 @@ private fun SubscriptionPane(d: CabinetApi.Data, devices: Pair<Int, Int>?, onCop
         Text(
             when {
                 count != null && limit != null -> "$count из $limit"
-                limit != null -> "до $limit"
-                else -> "$count"
+                count != null -> "$count"
+                else -> "до $limit"
             },
             fontSize = 24.sp, fontWeight = FontWeight.Bold,
         )
         Text(
-            if (limit != null) "Лимит устройств: столько устройств могут быть подключены одновременно" else "Подключено устройств",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            "Лимит: " + (limit?.let { devicesWord(it) } ?: "без ограничения"),
+            fontSize = 14.sp, fontWeight = FontWeight.Medium,
         )
+        Text("Лимит устройств действует только на обходах", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     d.clientId?.let { id ->
         Card {
@@ -386,6 +387,13 @@ private fun PayPane(
             )
         }
     }
+}
+
+private fun devicesWord(n: Int): String = "$n " + when {
+    n % 100 in 11..14 -> "устройств"
+    n % 10 == 1 -> "устройство"
+    n % 10 in 2..4 -> "устройства"
+    else -> "устройств"
 }
 
 private fun price(p: Double): String = (if (p % 1.0 == 0.0) p.toLong().toString() else "%.2f".format(p)) + " ₽"
