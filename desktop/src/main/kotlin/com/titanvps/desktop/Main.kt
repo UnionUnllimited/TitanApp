@@ -46,8 +46,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.FrameWindowScope
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.window.Notification
+import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 
 /** Anything that kills the app lands in logs\crash.log: a window that never opens says nothing. */
@@ -58,20 +61,57 @@ private fun logCrash(e: Throwable) {
     }
 }
 
-fun main() {
+fun main(args: Array<String>) {
     Thread.setDefaultUncaughtExceptionHandler { _, e -> logCrash(e) }
+    // Already running (e.g. in the tray): that copy shows its window instead.
+    val instance = SingleInstance.claim(waitMs = if ("--elevated" in args) 10_000 else 0) ?: run { Splash.close(); return }
+    // Started with Windows: straight to the tray.
+    val startHidden = "--autostart" in args
     Splash.step("Загружаем настройки и подписку…", 0.3f)
     val state = try { AppState() } catch (e: Throwable) { logCrash(e); throw e }
     Splash.step("Открываем окно…", 0.75f)
+    if (startHidden) Splash.close()
     application {
         val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
+        var visible by remember { mutableStateOf(!startHidden) }
+        val trayState = rememberTrayState()
+        var trayHintShown by remember { mutableStateOf(false) }
+        androidx.compose.runtime.LaunchedEffect(Unit) { instance.onShow { visible = true } }
         val quit = {
             // Turn the system proxy off before quitting, or Windows loses internet.
             state.shutdown()
             exitApplication()
         }
+        // The close button keeps the app (and the VPN) running in the tray.
+        val hide = {
+            visible = false
+            if (!trayHintShown) {
+                trayHintShown = true
+                trayState.sendNotification(
+                    Notification("Titan VPS работает в фоне", "VPN не отключается. Открыть или выйти — значок Titan VPS в трее."),
+                )
+            }
+        }
+        val connected = state.vpn is VpnState.Connected
+        Tray(
+            icon = painterResource("logo.png"),
+            state = trayState,
+            tooltip = if (connected) "Titan VPS — подключено" else "Titan VPS — отключено",
+            onAction = { visible = true },
+            menu = {
+                Item("Открыть Titan VPS", onClick = { visible = true })
+                Item(
+                    if (connected) "Отключить VPN" else "Подключить VPN",
+                    enabled = state.vpn !is VpnState.Connecting && state.vpn !is VpnState.Disconnecting,
+                    onClick = { if (connected) state.disconnect() else state.connect() },
+                )
+                Separator()
+                Item("Выход", onClick = quit)
+            },
+        )
         Window(
-            onCloseRequest = quit,
+            onCloseRequest = hide,
+            visible = visible,
             title = "Titan VPS",
             icon = painterResource("logo.png"),
             state = windowState,
@@ -80,10 +120,14 @@ fun main() {
         ) {
             window.minimumSize = java.awt.Dimension(420, 600)
             androidx.compose.runtime.LaunchedEffect(Unit) { WindowCorners.round(window) }
+            // Shown again (tray, second start): restored and in front.
+            androidx.compose.runtime.LaunchedEffect(visible) {
+                if (visible) { window.isMinimized = false; window.toFront(); window.requestFocus() }
+            }
             TitanTheme(state.theme) {
                 CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
                     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                        TitleBar(windowState, onClose = quit)
+                        TitleBar(windowState, onClose = hide)
                         Box(Modifier.weight(1f)) { App(state) }
                     }
                 }

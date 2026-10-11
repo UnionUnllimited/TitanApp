@@ -16,6 +16,11 @@ object Splash {
     private val TRACK = Color(31, 38, 51)
     private val BRAND = Color(26, 102, 255)
 
+    /** Closes it now (when the app starts hidden in the tray, no window ever closes it). */
+    fun close() {
+        runCatching { SplashScreen.getSplashScreen()?.close() }
+    }
+
     fun step(text: String, progress: Float) {
         runCatching {
             val splash = SplashScreen.getSplashScreen() ?: return

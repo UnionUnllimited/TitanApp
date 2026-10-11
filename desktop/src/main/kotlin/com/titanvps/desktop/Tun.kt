@@ -43,7 +43,8 @@ object Admin {
         return runCatching {
             val p = ProcessBuilder(
                 "powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
-                "Start-Process -FilePath '${exe.replace("'", "''")}' -Verb RunAs",
+                // --elevated: the new copy waits for this one to quit (one copy at a time).
+                "Start-Process -FilePath '${exe.replace("'", "''")}' -ArgumentList '--elevated' -Verb RunAs",
             ).start()
             // Non-zero when the user declined the UAC prompt.
             p.waitFor() == 0
