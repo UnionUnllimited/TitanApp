@@ -66,6 +66,8 @@ class CabinetApi private constructor(private val base: HttpUrl, private val clie
         val trafficPercent: Float?,
         val trafficNote: String?,
         val clientId: String?,
+        /** Device limit of the subscription, when the page knows it (fixed after the first payment). */
+        val deviceLimit: Int?,
         /** Device limits to choose from (first purchase); empty: fixed already. */
         val limits: List<Int>,
         val tariffs: List<Tariff>,
@@ -175,6 +177,8 @@ class CabinetApi private constructor(private val base: HttpUrl, private val clie
                     ?.let { Regex("width:\\s*([0-9.]+)%").find(it)?.groupValues?.get(1)?.toFloatOrNull() },
                 trafficNote = doc.selectFirst(".cab-pass-traffic-note")?.text()?.trim(),
                 clientId = doc.selectFirst("#client-id-label")?.text()?.trim(),
+                deviceLimit = Regex("_cabLimitIp\\s*=\\s*(\\d+)").findAll(doc.select("script").joinToString("\n") { it.data() })
+                    .lastOrNull()?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 },
                 limits = limits,
                 tariffs = tariffs,
                 methods = methods,

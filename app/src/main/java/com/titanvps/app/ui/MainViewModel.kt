@@ -146,7 +146,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun openCabinet() = viewModelScope.launch {
         val page = subscription.value?.info?.webPageUrl
-        if (page != null) CabinetActivity.open(getApplication<Application>(), page)
+        if (page != null) {
+            val devices = _account.value?.let { it.devices.size to it.deviceLimit }
+            CabinetActivity.open(getApplication<Application>(), page, devices)
+        }
         else _openUrl.send(BuildConfig.TELEGRAM_URL)
     }
 

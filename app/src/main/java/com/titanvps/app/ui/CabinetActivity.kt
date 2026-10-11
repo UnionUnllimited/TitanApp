@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -45,6 +46,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -83,23 +85,32 @@ class CabinetActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val link = intent.getStringExtra(EXTRA_LINK) ?: run { finish(); return }
+        // Connected devices / limit from the subscription's account info (-1: not known).
+        val devices = intent.getIntExtra(EXTRA_DEVICES, -1).takeIf { it >= 0 }?.let { it to intent.getIntExtra(EXTRA_LIMIT, 0) }
         setContent {
             val mode by TitanApp.get(this).settings.theme.collectAsState()
-            TitanTheme(mode) { CabinetScreen(link, onBack = ::finish) }
+            TitanTheme(mode) { CabinetScreen(link, devices, onBack = ::finish) }
         }
     }
 
     companion object {
         private const val EXTRA_LINK = "link"
+        private const val EXTRA_DEVICES = "devices"
+        private const val EXTRA_LIMIT = "limit"
 
-        fun open(context: Context, link: String) {
-            context.startActivity(Intent(context, CabinetActivity::class.java).putExtra(EXTRA_LINK, link).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        /** [devices]: connected devices and the limit (0 = not known), if the app knows them. */
+        fun open(context: Context, link: String, devices: Pair<Int, Int>? = null) {
+            context.startActivity(
+                Intent(context, CabinetActivity::class.java).putExtra(EXTRA_LINK, link)
+                    .putExtra(EXTRA_DEVICES, devices?.first ?: -1).putExtra(EXTRA_LIMIT, devices?.second ?: 0)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
         }
     }
 }
 
 @Composable
-private fun CabinetScreen(link: String, onBack: () -> Unit) {
+private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var api by remember { mutableStateOf<CabinetApi?>(null) }
@@ -166,7 +177,7 @@ private fun CabinetScreen(link: String, onBack: () -> Unit) {
                 ) {
                     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                     error?.let { Text(it, color = Danger, fontSize = 13.sp) }
-                    if (tab == 0) SubscriptionPane(d) { id -> copy(context, id) }
+                    if (tab == 0) SubscriptionPane(d, devices) { id -> copy(context, id) }
                     else PayPane(
                         d,
                         onPay = { tariff, method, done ->
@@ -220,7 +231,7 @@ private fun Card(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun SubscriptionPane(d: CabinetApi.Data, onCopyId: (String) -> Unit) {
+private fun SubscriptionPane(d: CabinetApi.Data, devices: Pair<Int, Int>?, onCopyId: (String) -> Unit) {
     Card {
         val color = if (d.active) Connected else Danger
         Row(
@@ -262,6 +273,23 @@ private fun SubscriptionPane(d: CabinetApi.Data, onCopyId: (String) -> Unit) {
             d.trafficNote?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
+    val limit = d.deviceLimit ?: devices?.second?.takeIf { it > 0 }
+    if (limit != null || devices != null) Card {
+        Text("УСТРОЙСТВА", fontSize = 11.sp, letterSpacing = 1.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val count = devices?.first
+        Text(
+            when {
+                count != null && limit != null -> "$count из $limit"
+                limit != null -> "до $limit"
+                else -> "$count"
+            },
+            fontSize = 24.sp, fontWeight = FontWeight.Bold,
+        )
+        Text(
+            if (limit != null) "Лимит устройств: столько устройств могут быть подключены одновременно" else "Подключено устройств",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     d.clientId?.let { id ->
         Card {
             Row(Modifier.fillMaxWidth().clickable { onCopyId(id) }, verticalAlignment = Alignment.CenterVertically) {
@@ -282,19 +310,6 @@ private fun PayPane(
     onCode: (String, done: () -> Unit) -> Unit,
 ) {
     var busy by remember { mutableStateOf(false) }
-    if (d.promo) Card {
-        var code by remember { mutableStateOf("") }
-        Text("Код оплаты", fontWeight = FontWeight.SemiBold)
-        OutlinedTextField(
-            code, { code = it.take(64) }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Введите код") },
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-        )
-        Button(
-            onClick = { busy = true; onCode(code.trim()) { busy = false; code = "" } },
-            enabled = code.isNotBlank() && !busy, modifier = Modifier.fillMaxWidth(),
-        ) { Text("Применить код оплаты") }
-        Text("Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
     for (kind in listOf("sub", "traffic")) {
         val all = d.tariffs.filter { it.kind == kind }
         if (all.isEmpty()) continue
@@ -341,7 +356,36 @@ private fun PayPane(
             }
         }
     }
-    if (d.tariffs.isEmpty() && !d.promo) Text("Сейчас оплата недоступна", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (d.tariffs.isEmpty()) Text("Сейчас оплата недоступна", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    // A payment code is rare: a quiet link at the bottom, the field in a dialog.
+    if (d.promo) {
+        var codeOpen by remember { mutableStateOf(false) }
+        Text(
+            "Есть код оплаты?",
+            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().clickable { codeOpen = true }.padding(vertical = 10.dp),
+            textAlign = TextAlign.Center,
+        )
+        if (codeOpen) {
+            var code by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { if (!busy) codeOpen = false },
+                title = { Text("Код оплаты") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(code, { code = it.take(64) }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Введите код") })
+                        Text("Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { busy = true; onCode(code.trim()) { busy = false; codeOpen = false } }, enabled = code.isNotBlank() && !busy) {
+                        Text("Применить")
+                    }
+                },
+                dismissButton = { TextButton(onClick = { codeOpen = false }, enabled = !busy) { Text("Отмена") } },
+            )
+        }
+    }
 }
 
 private fun price(p: Double): String = (if (p % 1.0 == 0.0) p.toLong().toString() else "%.2f".format(p)) + " ₽"

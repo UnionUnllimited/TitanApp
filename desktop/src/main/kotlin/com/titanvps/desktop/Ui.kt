@@ -925,7 +925,10 @@ private fun SubscriptionPage(state: AppState, sub: Subscription) {
     // The cabinet in the app, signed in by the subscription's link (no email / Telegram login).
     var showCabinet by remember { mutableStateOf(false) }
     val cabinetLink = info.webPageUrl
-    if (showCabinet && cabinetLink != null) { CabinetPage(cabinetLink) { showCabinet = false }; return }
+    if (showCabinet && cabinetLink != null) {
+        CabinetPage(cabinetLink, state.account?.let { it.devices.size to it.deviceLimit }) { showCabinet = false }
+        return
+    }
     val now = System.currentTimeMillis() / 1000
     val active = info.expireAt <= 0 || info.expireAt > now
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {

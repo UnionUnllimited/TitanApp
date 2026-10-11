@@ -57,5 +57,8 @@ class CabinetApiTest {
         assertEquals("3 ГБ", t.trafficLabel); assertEquals(listOf("platega"), t.methods); assertTrue(t.shown)
         assertTrue(!d.tariffs[1].shown)
         assertEquals("СБП · МИР · Крипта", d.methods.getValue("sub").single().title)
+        // Not fixed yet (the page keeps its default 0): not known.
+        assertEquals(null, CabinetApi.parse(Jsoup.parse(html + "<script>var _cabLimitIp = 0;</script>")).deviceLimit)
+        assertEquals(3, CabinetApi.parse(Jsoup.parse(html + "<script>var _cabLimitIp = 0;\n_cabLimitIp = 3;</script>")).deviceLimit)
     }
 }

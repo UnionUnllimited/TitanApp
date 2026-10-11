@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -34,6 +35,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,7 +65,7 @@ import kotlinx.coroutines.withContext
  */
 
 @Composable
-fun CabinetPage(link: String, onBack: () -> Unit) {
+fun CabinetPage(link: String, devices: Pair<Int, Int>?, onBack: () -> Unit) {
     val uri = LocalUriHandler.current
     val clipboard = LocalClipboardManager.current
     var note by remember { mutableStateOf<String?>(null) }
@@ -132,7 +134,7 @@ fun CabinetPage(link: String, onBack: () -> Unit) {
                         LaunchedEffect(n) { kotlinx.coroutines.delay(4000); if (note == n) note = null }
                         Text(n, color = Brand, fontSize = 13.sp)
                     }
-                    if (tab == 0) SubscriptionPane(d) { id -> clipboard.setText(AnnotatedString(id)); toast("ID скопирован") }
+                    if (tab == 0) SubscriptionPane(d, devices) { id -> clipboard.setText(AnnotatedString(id)); toast("ID скопирован") }
                     else PayPane(
                         d,
                         onPay = { tariff, method, done ->
@@ -188,7 +190,7 @@ private fun CabCard(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun SubscriptionPane(d: CabinetApi.Data, onCopyId: (String) -> Unit) {
+private fun SubscriptionPane(d: CabinetApi.Data, devices: Pair<Int, Int>?, onCopyId: (String) -> Unit) {
     CabCard {
         val color = if (d.active) Green else Red
         Row(
@@ -230,6 +232,23 @@ private fun SubscriptionPane(d: CabinetApi.Data, onCopyId: (String) -> Unit) {
             d.trafficNote?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
+    val limit = d.deviceLimit ?: devices?.second?.takeIf { it > 0 }
+    if (limit != null || devices != null) CabCard {
+        Text("УСТРОЙСТВА", fontSize = 11.sp, letterSpacing = 1.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val count = devices?.first
+        Text(
+            when {
+                count != null && limit != null -> "$count из $limit"
+                limit != null -> "до $limit"
+                else -> "$count"
+            },
+            fontSize = 24.sp, fontWeight = FontWeight.Bold,
+        )
+        Text(
+            if (limit != null) "Лимит устройств: столько устройств могут быть подключены одновременно" else "Подключено устройств",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     d.clientId?.let { id ->
         CabCard {
             Row(Modifier.fillMaxWidth().clickable { onCopyId(id) }, verticalAlignment = Alignment.CenterVertically) {
@@ -250,18 +269,6 @@ private fun PayPane(
     onCode: (String, done: () -> Unit) -> Unit,
 ) {
     var busy by remember { mutableStateOf(false) }
-    if (d.promo) CabCard {
-        var code by remember { mutableStateOf("") }
-        Text("Код оплаты", fontWeight = FontWeight.SemiBold)
-        OutlinedTextField(
-            code, { code = it.take(64) }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Введите код") },
-        )
-        Button(
-            onClick = { busy = true; onCode(code.trim()) { busy = false; code = "" } },
-            enabled = code.isNotBlank() && !busy, modifier = Modifier.fillMaxWidth(),
-        ) { Text("Применить код оплаты") }
-        Text("Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
     for (kind in listOf("sub", "traffic")) {
         val all = d.tariffs.filter { it.kind == kind }
         if (all.isEmpty()) continue
@@ -308,7 +315,36 @@ private fun PayPane(
             }
         }
     }
-    if (d.tariffs.isEmpty() && !d.promo) Text("Сейчас оплата недоступна", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (d.tariffs.isEmpty()) Text("Сейчас оплата недоступна", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    // A payment code is rare: a quiet link at the bottom, the field in a dialog.
+    if (d.promo) {
+        var codeOpen by remember { mutableStateOf(false) }
+        Text(
+            "Есть код оплаты?",
+            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().clickable { codeOpen = true }.padding(vertical = 10.dp),
+            textAlign = TextAlign.Center,
+        )
+        if (codeOpen) {
+            var code by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { if (!busy) codeOpen = false },
+                title = { Text("Код оплаты") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(code, { code = it.take(64) }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Введите код") })
+                        Text("Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { busy = true; onCode(code.trim()) { busy = false; codeOpen = false } }, enabled = code.isNotBlank() && !busy) {
+                        Text("Применить")
+                    }
+                },
+                dismissButton = { TextButton(onClick = { codeOpen = false }, enabled = !busy) { Text("Отмена") } },
+            )
+        }
+    }
 }
 
 private fun price(p: Double): String = (if (p % 1.0 == 0.0) p.toLong().toString() else "%.2f".format(p)) + " ₽"
