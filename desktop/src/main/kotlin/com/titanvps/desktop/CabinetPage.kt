@@ -248,7 +248,6 @@ private fun SubscriptionPane(d: CabinetApi.Data, devices: Pair<Int, Int>?, onCop
             "Лимит: " + (limit?.let { devicesWord(it) } ?: "без ограничения"),
             fontSize = 14.sp, fontWeight = FontWeight.Medium,
         )
-        Text("Лимит устройств действует только на обходах", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     d.clientId?.let { id ->
         CabCard {
