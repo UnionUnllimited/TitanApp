@@ -187,7 +187,7 @@ internal fun HomeScreen(
             when {
                 page == Group.SERVERS -> Caption("Безлимит на обычных серверах")
                 bypassLocked -> WifiWarning()
-                else -> BypassCaption(sub) { context.openUrl(BuildConfig.TELEGRAM_URL) }
+                else -> BypassCaption(sub) { viewModel.openCabinet() }
             }
         }
         items(groups[page].orEmpty(), key = { it.id }) { s ->

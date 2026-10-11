@@ -502,8 +502,8 @@ class AppState {
         }
     }
 
-    /** Личный кабинет: the Telegram bot (renewal, extra GB). */
-    fun openCabinetUrl(): String = Config.TELEGRAM_URL
+    /** Signed in by the link the subscription brings (profile-web-page-url); else the bot. */
+    fun openCabinetUrl(): String = subscription?.info?.webPageUrl ?: Config.TELEGRAM_URL
 
     fun logout() {
         disconnect()

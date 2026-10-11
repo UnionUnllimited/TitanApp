@@ -140,9 +140,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (vpnState.value is VpnState.Connected) TitanVpnService.start(getApplication<Application>())
     }
 
-    /** Personal cabinet: the Telegram bot (payments, renewal, extra GB). */
+    /**
+     * Personal cabinet: the site's cabinet inside the app, signed in by the link the
+     * subscription brings (profile-web-page-url); without one, the Telegram bot.
+     */
     fun openCabinet() = viewModelScope.launch {
-        _openUrl.send(BuildConfig.TELEGRAM_URL)
+        val page = subscription.value?.info?.webPageUrl
+        if (page != null) CabinetActivity.open(getApplication<Application>(), page)
+        else _openUrl.send(BuildConfig.TELEGRAM_URL)
     }
 
     fun disconnect() = TitanVpnService.stop(getApplication<Application>())

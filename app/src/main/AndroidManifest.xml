@@ -95,6 +95,14 @@
             </intent-filter>
         </activity>
 
+        <!-- The site's personal cabinet (link from the subscription), inside the app. -->
+        <activity
+            android:name=".ui.CabinetActivity"
+            android:exported="false"
+            android:label="Личный кабинет"
+            android:theme="@android:style/Theme.Material.Light.DarkActionBar"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
+
         <service
             android:name=".vpn.TitanVpnService"
             android:exported="false"
