@@ -44,6 +44,11 @@ class AppState {
     /** "proxy" (system proxy) or "tun" (whole PC, needs administrator rights). */
     var mode by mutableStateOf("proxy"); private set
     var excludedApps by mutableStateOf<Set<String>>(emptySet()); private set
+    /** "exclude" (the picked programs bypass the VPN) or "only" (just they go through it). */
+    var appsMode by mutableStateOf("exclude"); private set
+    var vpnApps by mutableStateOf<Set<String>>(emptySet()); private set
+    /** The programs picked for the current [appsMode]. */
+    val pickedApps: Set<String> get() = if (appsMode == "only") vpnApps else excludedApps
     var autoConnect by mutableStateOf(false); private set
     var autostart by mutableStateOf(false); private set
     /** Account status and devices from the bot (null until loaded). */
@@ -77,6 +82,8 @@ class AppState {
         theme = st.theme
         mode = st.mode
         excludedApps = st.excludedApps
+        appsMode = st.appsMode
+        vpnApps = st.vpnApps
         autoConnect = st.autoConnect
         scope.launch { autostart = withContext(Dispatchers.IO) { Autostart.isEnabled } }
         Runtime.getRuntime().addShutdownHook(Thread { shutdown() })
@@ -87,7 +94,7 @@ class AppState {
         }
     }
 
-    private fun persist() = Repository.save(Repository.State(subscription, selectedId, theme, mode, excludedApps, autoConnect))
+    private fun persist() = Repository.save(Repository.State(subscription, selectedId, theme, mode, excludedApps, autoConnect, appsMode, vpnApps))
 
     fun activate(text: String) {
         val url = Links.find(text.trim()) ?: run { message = "Это не ключ Titan VPS"; return }
@@ -138,8 +145,15 @@ class AppState {
         if (vpn is VpnState.Connected) connect()
     }
 
-    fun setExcluded(exe: String, excluded: Boolean) {
-        excludedApps = if (excluded) excludedApps + exe else excludedApps.filterNot { it.equals(exe, true) }.toSet()
+    /** Picks or unpicks a program for the current [appsMode]. */
+    fun setAppPicked(exe: String, picked: Boolean) {
+        fun Set<String>.with() = if (picked) this + exe else filterNot { it.equals(exe, true) }.toSet()
+        if (appsMode == "only") vpnApps = vpnApps.with() else excludedApps = excludedApps.with()
+        scope.launch(Dispatchers.IO) { persist() }
+    }
+
+    fun changeAppsMode(value: String) {
+        appsMode = value
         scope.launch(Dispatchers.IO) { persist() }
     }
 
@@ -227,7 +241,7 @@ class AppState {
                     if (mode == "tun") {
                         // The whole PC through the tunnel; no system proxy then.
                         runCatching { SystemProxy.restore() }
-                        tun.start(TunConfig.build(socks, excludedApps, logDir))
+                        tun.start(TunConfig.build(socks, pickedApps, appsMode == "only", logDir))
                     } else {
                         tun.stop()
                         SystemProxy.enable(http)
@@ -328,13 +342,31 @@ class AppState {
     /** Servers being measured right now (spinner, or the old value dimmed). */
     var measuring by mutableStateOf<Set<String>>(emptySet()); private set
 
-    /** Every server, [firstIds] (the tab on screen) first; old values stay until new ones arrive. */
+    @Volatile private var pingStopped = false
+    private var pingRun = 0
+
+    /**
+     * Every server, [firstIds] (the tab on screen) first; old values stay until new ones arrive.
+     * Pressed again while measuring: stops.
+     */
     fun pingAll(firstIds: List<String> = emptyList()) {
         val servers = subscription?.servers ?: return
-        if (pinging) return
+        if (pinging) { stopPing(); return }
+        pingStopped = false
         val ids = servers.map { it.id }
         pinging = true
-        ping(servers, firstIds.filter { it in ids } + ids.filter { it !in firstIds }) { pinging = false }
+        val run = ++pingRun
+        // A stopped run finishing late mustn't end a newer one.
+        ping(servers, firstIds.filter { it in ids } + ids.filter { it !in firstIds }) { if (run == pingRun) pinging = false }
+    }
+
+    /** Stops measuring: servers not measured yet keep their old value (or none). */
+    fun stopPing() {
+        pingStopped = true
+        Pinger.cancel()
+        RelayPinger.cancel()
+        pinging = false
+        measuring = emptySet()
     }
 
     /** One server; works any time, also while the whole list is being measured. */
@@ -353,20 +385,20 @@ class AppState {
                     val direct = java.util.concurrent.ConcurrentHashMap<String, Long>()
                     Pinger.ping(
                         servers, targets,
-                        onStart = { ids -> scope.launch { measuring = measuring + ids } },
+                        onStart = { ids -> if (!pingStopped) scope.launch { measuring = measuring + ids } },
                         onResult = { id, ms ->
                             direct[id] = ms
                             scope.launch { answered += id; pings[id] = ms; if (ms >= 0) relayed.remove(id); measuring = measuring - id }
                         },
                     )
-                    tryRelays(servers, direct)
+                    if (!pingStopped) tryRelays(servers, direct)
                 }
             } catch (e: Exception) {
                 if (targets.size > 1) message = "Не удалось проверить пинг. Попробуйте ещё раз"
             } finally {
                 // Let queued results land first.
                 kotlinx.coroutines.yield()
-                targets.filter { it !in answered && it !in pings }.forEach { pings[it] = -1 }
+                if (!pingStopped) targets.filter { it !in answered && it !in pings }.forEach { pings[it] = -1 }
                 measuring = measuring - targets.toSet()
                 onDone()
             }
@@ -393,9 +425,9 @@ class AppState {
         runCatching {
             RelayPinger.ping(
                 probes.map { it.first }, probes.map { it.first.id },
-                onStart = { ids -> scope.launch { measuring = measuring + ids } },
+                onStart = { ids -> if (!pingStopped) scope.launch { measuring = measuring + ids } },
                 onResult = { id, ms ->
-                    scope.launch {
+                    if (!pingStopped) scope.launch {
                         if (ms >= 0) { pings[id] = ms; relayed[id] = via.getValue(id) } else relayed.remove(id)
                         measuring = measuring - id
                     }

@@ -168,14 +168,15 @@ private fun AdminDialog(state: AppState) {
     )
 }
 
-/** Programs that bypass the VPN in TUN mode: running ones + any .exe picked by hand. */
+/** TUN mode: programs that bypass the VPN, or the only ones that use it; running ones + any .exe picked by hand. */
 @Composable
 private fun AppsPage(state: AppState, onBack: () -> Unit) {
     var apps by remember { mutableStateOf<List<RunningApps.App>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { apps = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { RunningApps.list() } }
-    val excluded = state.excludedApps
-    // Excluded ones first (also those not running now), then the running ones.
+    val excluded = state.pickedApps
+    val only = state.appsMode == "only"
+    // Picked ones first (also those not running now), then the running ones.
     val rows = (excluded.sortedBy { it.lowercase() }.map { e -> apps.firstOrNull { it.exe.equals(e, true) } ?: RunningApps.App(e, "") } +
         apps.filter { a -> excluded.none { it.equals(a.exe, true) } })
         .filter { query.isBlank() || query.trim().lowercase() in it.exe.lowercase() }
@@ -185,9 +186,20 @@ private fun AppsPage(state: AppState, onBack: () -> Unit) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
                 Text("Раздельное туннелирование", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.FilterChip(
+                    selected = !only, onClick = { state.changeAppsMode("exclude") },
+                    label = { Text("Все через VPN, кроме выбранных") },
+                )
+                androidx.compose.material3.FilterChip(
+                    selected = only, onClick = { state.changeAppsMode("only") },
+                    label = { Text("Только выбранные через VPN") },
+                )
+            }
             Text(
-                "Отмеченные программы идут в интернет напрямую, мимо VPN. Остальные — через VPN. " +
-                    "Изменения применятся при выходе с этой страницы.",
+                (if (only) "Через VPN идут только отмеченные программы. Остальные — напрямую, мимо VPN."
+                else "Отмеченные программы идут в интернет напрямую, мимо VPN. Остальные — через VPN.") +
+                    " Изменения применятся при выходе с этой страницы.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -197,7 +209,7 @@ private fun AppsPage(state: AppState, onBack: () -> Unit) {
                     fd.setFilenameFilter { _, name -> name.endsWith(".exe", true) }
                     fd.file = "*.exe"
                     fd.isVisible = true
-                    fd.file?.let { state.setExcluded(it, true) }
+                    fd.file?.let { state.setAppPicked(it, true) }
                 }) { Text("Добавить .exe") }
             }
             LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -205,14 +217,14 @@ private fun AppsPage(state: AppState, onBack: () -> Unit) {
                     val on = excluded.any { it.equals(app.exe, true) }
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface)
-                            .clickable { state.setExcluded(app.exe, !on) }.padding(horizontal = 14.dp, vertical = 10.dp),
+                            .clickable { state.setAppPicked(app.exe, !on) }.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(app.exe, fontWeight = FontWeight.Medium)
                             if (app.path.isNotEmpty()) Text(app.path, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        androidx.compose.material3.Switch(checked = on, onCheckedChange = { state.setExcluded(app.exe, it) })
+                        androidx.compose.material3.Switch(checked = on, onCheckedChange = { state.setAppPicked(app.exe, it) })
                     }
                 }
             }
@@ -694,12 +706,12 @@ private fun GroupTab(group: Group, count: Int, selected: Boolean, modifier: Modi
 private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
     Row(
         Modifier.clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface)
-            .clickable(enabled = !pinging, onClick = onClick).heightIn(min = 48.dp).padding(horizontal = 12.dp),
+            .clickable(onClick = onClick).heightIn(min = 48.dp).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (pinging) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Speed, null, Modifier.size(18.dp))
         Spacer(Modifier.width(6.dp))
-        Text("Пинг", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(if (pinging) "Стоп" else "Пинг", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -1016,7 +1028,11 @@ private fun SettingsPage(state: AppState) {
                 if (state.mode == "tun") {
                     Spacer(Modifier.height(6.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    SettingsRow("Раздельное туннелирование" + if (state.excludedApps.isNotEmpty()) " · ${state.excludedApps.size}" else "") { showApps = true }
+                    SettingsRow(
+                        "Раздельное туннелирование" +
+                            (if (state.appsMode == "only") " · только выбранные" else "") +
+                            (if (state.pickedApps.isNotEmpty()) " · ${state.pickedApps.size}" else ""),
+                    ) { showApps = true }
                 }
             }
             Card {

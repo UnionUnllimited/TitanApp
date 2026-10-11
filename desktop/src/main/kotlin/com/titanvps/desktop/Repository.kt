@@ -75,6 +75,9 @@ object Repository {
         val excludedApps: Set<String> = emptySet(),
         /** Connect as soon as the app starts. */
         val autoConnect: Boolean = false,
+        /** "exclude": [excludedApps] bypass the VPN; "only": just [vpnApps] go through it. */
+        val appsMode: String = "exclude",
+        val vpnApps: Set<String> = emptySet(),
     )
 
     fun load(): State {
@@ -96,14 +99,18 @@ object Repository {
                 fetchedAt = s.optLong("fetchedAt"),
             )
         }
-        val excluded = o.optJSONArray("excludedApps")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
-        return State(sub, o.optString("selected").ifEmpty { null }, o.optString("theme", "system"), o.optString("mode", "proxy"), excluded, o.optBoolean("autoConnect", false))
+        fun names(key: String) = o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
+        return State(
+            sub, o.optString("selected").ifEmpty { null }, o.optString("theme", "system"), o.optString("mode", "proxy"),
+            names("excludedApps"), o.optBoolean("autoConnect", false), o.optString("appsMode", "exclude"), names("vpnApps"),
+        )
     }
 
     fun save(state: State) {
         val o = JSONObject().put("theme", state.theme).put("selected", state.selectedId ?: "")
             .put("mode", state.mode).put("excludedApps", JSONArray(state.excludedApps.sorted()))
             .put("autoConnect", state.autoConnect)
+            .put("appsMode", state.appsMode).put("vpnApps", JSONArray(state.vpnApps.sorted()))
         state.subscription?.let { s ->
             o.put("subscription", JSONObject()
                 .put("url", s.url).put("fetchedAt", s.fetchedAt)
@@ -139,6 +146,8 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
         const val PARALLEL = 6 // more at once crowd each other out on a weak network
         const val RECHECK_ABOVE_MS = 1500L
         const val KEEP_WARM_MS = 60_000L
+        /** Balancer members measured per server: its ping is the best of them. */
+        const val MAX_MEMBERS = 30
     }
 
     private class Session(
@@ -156,6 +165,11 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
     private val active = java.util.concurrent.atomic.AtomicInteger()
     private var idleStop: java.util.concurrent.ScheduledFuture<*>? = null
     private var session: Session? = null
+    /** Bumped by [cancel]: measurements started before it stop taking new probes. */
+    private val generation = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Stops the measurements in progress: what is still queued isn't measured. */
+    fun cancel() { generation.incrementAndGet() }
 
     /**
      * Measures [targets] in that order ([all] = every server, for the shared core).
@@ -163,9 +177,10 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
      */
     fun ping(all: List<Server>, targets: List<String>, onStart: (List<String>) -> Unit, onResult: (String, Long) -> Unit) {
         synchronized(this) { idleStop?.cancel(false); idleStop = null }
+        val gen = generation.get()
         active.incrementAndGet()
         try {
-            measure(ensureSession(all), targets, targets.size == 1, onStart, onResult)
+            measure(ensureSession(all), targets, targets.size == 1, onStart, onResult) { generation.get() != gen }
         } finally {
             if (active.decrementAndGet() == 0) synchronized(this) {
                 idleStop = timer.schedule(Runnable { stopIfIdle() }, KEEP_WARM_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -201,7 +216,7 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
         val probes = LinkedHashMap<String, Probe>()
         val serverKeys = servers.associate { s ->
             val json = jsonOf.getValue(s.id)
-            s.id to XrayConfigs.pingTags(json, s.proxyTag).mapNotNull { tag ->
+            s.id to XrayConfigs.pingTags(json, s.proxyTag, MAX_MEMBERS).mapNotNull { tag ->
                 val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
                 if (key !in probes && probes.size < 200) probes[key] = Probe(json, tag)
                 key.takeIf { it in probes }
@@ -213,7 +228,10 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
         return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins).also { session = it }
     }
 
-    private fun measure(s: Session, targets: List<String>, single: Boolean, onStart: (List<String>) -> Unit, onResult: (String, Long) -> Unit) {
+    private fun measure(
+        s: Session, targets: List<String>, single: Boolean,
+        onStart: (List<String>) -> Unit, onResult: (String, Long) -> Unit, cancelled: () -> Boolean,
+    ) {
         val best = HashMap<String, Long>()
         val remaining = HashMap<String, Int>()
         val started = HashSet<String>()
@@ -236,6 +254,7 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
         val pool = if (single) singlePool else listPool
         byKey.map { (key, ids) ->
             pool.submit {
+                if (cancelled()) return@submit
                 synchronized(lock) { ids.filter { started.add(it) }.takeIf { it.isNotEmpty() }?.let(onStart) }
                 val port = s.ports.getValue(key)
                 // One cold attempt (a dead server costs 4 s); if it answered, a second one
@@ -247,9 +266,15 @@ class PingEngine(name: String, private val preparePlugins: Boolean = true) {
                 if (!single && (ms < 0 || ms > RECHECK_ABOVE_MS)) recheck[key] = ms else report(key, ms)
             }
         }.forEach { runCatching { it.get() } }
-        // A few at a time, one attempt each; keep the better of the two runs.
-        recheck.toList().map { (key, first) ->
-            recheckPool.submit { report(key, bestOf(first, timed(s.ports.getValue(key), 6))) }
+        if (cancelled()) return
+        // A few at a time, one attempt each; keep the better of the two runs. Not needed when
+        // every server using it already has a good result (e.g. another balancer member).
+        val (needed, settled) = recheck.toList().partition { (key, _) ->
+            synchronized(lock) { byKey.getValue(key).any { (best[it] ?: -1L) < 0 } }
+        }
+        settled.forEach { (key, first) -> report(key, first) }
+        needed.map { (key, first) ->
+            recheckPool.submit { if (!cancelled()) report(key, bestOf(first, timed(s.ports.getValue(key), 6))) }
         }.forEach { runCatching { it.get() } }
     }
 

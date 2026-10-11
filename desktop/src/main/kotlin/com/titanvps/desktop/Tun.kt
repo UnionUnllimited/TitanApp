@@ -57,8 +57,13 @@ object TunConfig {
     /** Exe names that must never go into the tunnel (loops otherwise). */
     private val ALWAYS_DIRECT = listOf("xray.exe", "sing-box.exe", "naive.exe", "mieru.exe", "Titan VPS.exe")
 
-    fun build(socksPort: Int, excluded: Collection<String>, logDir: String): String {
-        val direct = (ALWAYS_DIRECT + excluded).distinctBy { it.lowercase() }
+    /**
+     * [apps] bypass the VPN, or with [only] are the only programs that go through it (with
+     * nothing picked then, nothing does).
+     */
+    fun build(socksPort: Int, apps: Collection<String>, only: Boolean, logDir: String): String {
+        val direct = (ALWAYS_DIRECT + if (only) emptyList() else apps).distinctBy { it.lowercase() }
+        val viaVpn = apps.filterNot { a -> ALWAYS_DIRECT.any { it.equals(a, true) } }.distinctBy { it.lowercase() }
         return JSONObject()
             .put("log", JSONObject().put("level", "warn").put("output", "$logDir/sing-box.log").put("timestamp", true))
             .put(
@@ -73,6 +78,9 @@ object TunConfig {
                         "rules", JSONArray()
                             .put(JSONObject().put("process_name", JSONArray(direct)).put("server", "local")),
                     )
+                    // Also with "only": Windows resolves for every program in its DNS service
+                    // (svchost), so a per-program DNS rule wouldn't match; through the VPN the
+                    // answers for blocked sites aren't spoofed.
                     .put("final", "remote")
                     .put("strategy", "ipv4_only"),
             )
@@ -97,13 +105,14 @@ object TunConfig {
                 "route", JSONObject()
                     .put("auto_detect_interface", true)
                     .put("default_domain_resolver", "local")
-                    .put("final", "proxy")
+                    .put("final", if (only) "direct" else "proxy")
                     .put(
                         "rules", JSONArray()
                             .put(JSONObject().put("action", "sniff"))
                             .put(JSONObject().put("protocol", "dns").put("action", "hijack-dns"))
                             .put(JSONObject().put("process_name", JSONArray(direct)).put("outbound", "direct"))
-                            .put(JSONObject().put("ip_is_private", true).put("outbound", "direct")),
+                            .put(JSONObject().put("ip_is_private", true).put("outbound", "direct"))
+                            .apply { if (only && viaVpn.isNotEmpty()) put(JSONObject().put("process_name", JSONArray(viaVpn)).put("outbound", "proxy")) },
                     ),
             )
             .toString(2)
