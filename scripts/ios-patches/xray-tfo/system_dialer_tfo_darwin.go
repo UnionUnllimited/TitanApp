@@ -6,11 +6,13 @@ package internet
 // enough there: the data has to go with connectx(). The connection is opened on the first
 // Write, carrying that data in the SYN (tfo-go), like sing-box does.
 //
-// connectx() returns before the handshake, and a network that drops TFO SYNs leaves such a
-// connection silent with no error. So until the server's first byte arrives, what was
-// written is kept; if nothing comes within tfoReplyTimeout, the host is redialed the usual
-// way and the kept data sent again. TFO to that host is retried after tfoRetryAfter: the
-// first TFO connection only fetches the cookie, and some hosts work only with TFO.
+// Without the host's TFO cookie the first connection carries no data in the SYN: it only
+// fetches the cookie, and its data goes after the handshake, where a DPI box (TSPU) may cut
+// it - the very case TFO is used for. connectx() returns before the handshake, so such a
+// connection just stays silent. Until the server's first byte arrives, what was written is
+// kept; with no answer within tfoReplyTimeout the host is dialed again with TFO (now with
+// the cookie: data in the SYN) and the kept data resent; if that is silent too, the usual
+// way. A host where both failed goes without TFO for tfoRetryAfter.
 
 import (
 	"context"
@@ -30,7 +32,7 @@ const (
 	// How long a TFO dial may take before the host is tried without TFO.
 	tfoDialTimeout = 3 * time.Second
 	// How long the first answer may take on a TFO connection.
-	tfoReplyTimeout = 2 * time.Second
+	tfoReplyTimeout = 1500 * time.Millisecond
 	// Data kept for a resend; past that the connection stays as it is.
 	tfoKeepLimit = 256 << 10
 	// How long a host where TFO failed is dialed without it.
@@ -90,6 +92,7 @@ type tfoConn struct {
 
 	// While waiting for the server's first byte on a TFO connection.
 	waiting bool
+	tries   int // TFO connections made
 	dialed  time.Time
 	kept    []byte
 }
@@ -106,7 +109,7 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 			_ = conn.SetReadDeadline(c.deadline[0])
 			_ = conn.SetWriteDeadline(c.deadline[1])
 			if viaTFO {
-				c.waiting, c.dialed = true, time.Now()
+				c.waiting, c.dialed, c.tries = true, time.Now(), 1
 				c.kept = append([]byte(nil), b...)
 			}
 		}
@@ -224,20 +227,34 @@ func (c *tfoConn) answered(conn stdnet.Conn) {
 	}
 }
 
-// redial replaces a silent TFO connection with a plain one carrying the kept data.
+// redial replaces a silent TFO connection carrying the kept data: once more with TFO (the
+// cookie is there now), then the usual way.
 func (c *tfoConn) redial(old stdnet.Conn, readErr error) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn != old || !c.waiting {
 		return c.conn != old // already replaced
 	}
-	c.waiting = false
 	why := "no answer"
 	if readErr != nil {
 		why = readErr.Error()
 	}
-	c.markBroken(fmt.Sprintf("%s in %d ms", why, time.Since(c.dialed).Milliseconds()))
 	old.Close()
+	if c.tries == 1 {
+		c.tries = 2
+		tfoNote("tfo silent %d ms, again", time.Since(c.dialed).Milliseconds())
+		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
+		conn, err := c.dialer.DialContext(ctx, c.network, c.address, c.kept)
+		cancel()
+		if err == nil {
+			_ = conn.SetWriteDeadline(c.deadline[1])
+			c.conn, c.dialed = conn, time.Now()
+			return true
+		}
+		why = err.Error()
+	}
+	c.waiting = false
+	c.markBroken(fmt.Sprintf("%s in %d ms", why, time.Since(c.dialed).Milliseconds()))
 	conn, err := c.dialPlain(c.kept)
 	c.kept = nil
 	if err != nil {
