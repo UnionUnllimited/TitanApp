@@ -1,13 +1,13 @@
 name: TitanVPS
 options:
   bundleIdPrefix: su.titanvps
+  deploymentTarget:
+    iOS: "16.0"
 packages:
   # HTML of the site's cabinet (like jsoup on Android).
   SwiftSoup:
     url: https://github.com/scinfu/SwiftSoup
     from: 2.7.0
-  deploymentTarget:
-    iOS: "16.0"
 targets:
   TitanVPS:
     type: application
