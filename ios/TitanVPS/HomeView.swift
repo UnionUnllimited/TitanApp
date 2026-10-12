@@ -333,9 +333,9 @@ struct MarqueeText: View {
     @State private var offset: CGFloat = 0
 
     var body: some View {
-        // The layout comes from an invisible truncated copy; the full line is an overlay,
-        // so a long name never widens the row (or the screen).
-        Text(text).font(font).lineLimit(1).opacity(0)
+        // The layout is one invisible short line (its height, any width); the text itself is
+        // an overlay, so a long name never widens the row (or the screen).
+        Text("Ag").font(font).lineLimit(1).opacity(0)
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .leading) {
                 Text(text).font(font).lineLimit(1).fixedSize()
