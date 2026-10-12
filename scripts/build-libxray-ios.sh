@@ -17,6 +17,9 @@ grep -q '"ios",' "$WORK/build/app/apple_gomobile.py" || { echo "failed to patch 
 # subscription goes in one call instead (one Xray instance, every probe in parallel).
 sed -i '' 's|maxPingBatchConfigs = 5$|maxPingBatchConfigs = 256|' "$WORK/xray/ping_batch.go"
 grep -q 'maxPingBatchConfigs = 256' "$WORK/xray/ping_batch.go" || { echo "failed to patch pingBatch" >&2; exit 1; }
+# Real TCP Fast Open on iOS: Xray-core is patched (scripts/ios-patches/xray-tfo) to dial
+# tcpFastOpen hosts through tfo-go, which sends the first data in the SYN via connectx().
+"$ROOT/scripts/ios-patches/xray-tfo/vendor.sh" "$WORK"
 (cd "$WORK" && python3 build/main.py apple gomobile)
 
 mkdir -p "$ROOT/ios/Frameworks"
