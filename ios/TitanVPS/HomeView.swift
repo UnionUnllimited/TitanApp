@@ -81,6 +81,13 @@ struct HomeView: View {
             VStack(spacing: 4) {
                 Text(statusTitle).font(.system(size: 24, weight: .bold))
                     .foregroundStyle(vpn.isOn ? Palette.green : .primary)
+                if case .connected(let since) = vpn.state {
+                    TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                        let s = max(Int(ctx.date.timeIntervalSince(since)), 0)
+                        Text(String(format: "%02d:%02d:%02d", s / 3600, s % 3600 / 60, s % 60))
+                            .font(.system(size: 14).monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
                 Text(store.selected.map { $0.name.splitFlag.1 } ?? "Выберите сервер")
                     .foregroundStyle(.secondary).lineLimit(1)
                 if case .error(let message) = vpn.state {
@@ -177,17 +184,16 @@ struct HomeView: View {
                 }
                 .padding(4)
                 .background(Palette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                Button { Task { await store.pingAll() } } label: {
+                Button { store.pingAll(first: (groups[page] ?? []).map(\.id)) } label: {
                     HStack(spacing: 6) {
                         if store.pinging { ProgressView() } else { Image(systemName: "speedometer") }
-                        Text("Пинг").fontWeight(.semibold)
+                        Text(store.pinging ? "Стоп" : "Пинг").fontWeight(.semibold)
                     }
                     .font(.system(size: 14))
                     .padding(.horizontal, 14).frame(height: 52)
                     .background(Palette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .disabled(store.pinging)
             }
             Group {
                 if page == .servers {
@@ -202,7 +208,9 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
 
             ForEach(groups[page] ?? groups[.servers] ?? []) { s in
-                ServerRow(server: s, ping: store.pings[s.id], pending: store.pinging && store.pings[s.id] == nil,
+                ServerRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
+                          unsupported: Plugins.endpoint(s).map { !$0.kind.supportedOnIOS } ?? false,
+                          onPing: { store.pingOne(s) }, limited: page == .bypass,
                           selected: s.id == store.selected?.id) {
                     let changed = s.id != store.selected?.id
                     store.select(s.id)
@@ -245,6 +253,10 @@ struct ServerRow: View {
     let server: Server
     let ping: Int?
     let pending: Bool
+    /// A protocol the iPhone app can't run yet (Naive, TUIC…).
+    var unsupported: Bool = false
+    var onPing: () -> Void = {}
+    var limited: Bool = false
     let selected: Bool
     let onTap: () -> Void
 
@@ -266,13 +278,28 @@ struct ServerRow: View {
                 }
                 .frame(width: 34, height: 34)
                 .clipShape(Circle())
-                Text(name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                Spacer()
-                if pending {
-                    ProgressView().scaleEffect(0.7)
-                } else if let ping {
-                    Text(ping >= 0 ? "\(ping) мс" : "—").foregroundStyle(.secondary).font(.system(size: 15))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                    Text(unsupported ? "Пока не работает на iPhone" : limited ? "Лимитный · расходует ГБ" : "Безлимит")
+                        .font(.system(size: 11))
+                        .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
                 }
+                Spacer()
+                // Tap the ping to measure just this server (again to stop).
+                Button(action: onPing) {
+                    HStack(spacing: 5) {
+                        if pending { ProgressView().scaleEffect(0.7) }
+                        if let ping {
+                            Text(ping >= 0 ? "\(ping) мс" : "таймаут").font(.system(size: 14))
+                                .foregroundStyle(Self.color(ping)).opacity(pending ? 0.5 : 1)
+                        } else if !pending {
+                            Image(systemName: "speedometer").foregroundStyle(.secondary.opacity(0.6))
+                        }
+                    }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
                 ZStack {
                     Circle().stroke(selected ? Palette.primary : Palette.outline, lineWidth: selected ? 2 : 1.5)
                     if selected { Circle().fill(Palette.primary).frame(width: 13, height: 13) }
@@ -280,11 +307,19 @@ struct ServerRow: View {
                 .frame(width: 26, height: 26)
             }
             .padding(.horizontal, 14)
-            .frame(minHeight: 58)
+            .frame(minHeight: 60)
             .background(selected ? Palette.primary.opacity(0.08) : Palette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(selected ? Palette.primary : .clear, lineWidth: 1.5))
+            .opacity(unsupported ? 0.55 : 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    static func color(_ ms: Int) -> Color {
+        if ms < 0 { return .red }
+        if ms < 500 { return Palette.green }
+        if ms < 1500 { return .orange }
+        return .red
     }
 }

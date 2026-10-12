@@ -11,6 +11,10 @@ targets:
     dependencies:
       - target: TitanTunnel
         embed: true
+      # The real ping (pingBatch) runs Xray in the app too.
+      - framework: Frameworks/LibXray.xcframework
+        embed: false
+      - sdk: libresolv.tbd
     entitlements:
       path: TitanVPS/TitanVPS.entitlements
       properties:
@@ -29,6 +33,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
+        OTHER_LDFLAGS: ["-lresolv"]
 
   # The packet tunnel: Xray (LibXray.xcframework, built in CI from XTLS/libXray) on the utun fd.
   TitanTunnel:

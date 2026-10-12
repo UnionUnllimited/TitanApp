@@ -53,16 +53,13 @@ final class VPNController: ObservableObject {
     }
 
     func connect(_ server: Server) async {
-        guard let json = server.xrayJson else {
-            state = .error("Обновите подписку: потяните список серверов вниз")
-            return
-        }
         guard let tunnelId = Self.tunnelBundleId else {
             state = .error("В этой сборке нет VPN-расширения")
             return
         }
         do {
-            let config = try XrayRunConfig.build(serverJson: json)
+            // MASQUE rewritten for Xray's own client; protocols iOS can't run yet say so.
+            let config = try XrayRunConfig.build(serverJson: try Plugins.prepare(server))
             let m = manager ?? NETunnelProviderManager()
             let proto = (m.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
             proto.providerBundleIdentifier = tunnelId

@@ -66,18 +66,56 @@ final class AppStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: subKey)
     }
 
-    /// TCP connect time to each server (no VPN core on iOS yet, so no real ping).
-    func pingAll() async {
-        guard let servers = subscription?.servers, !pinging else { return }
+    /// Servers being measured right now (spinners).
+    @Published var measuring: Set<String> = []
+    private var pingTask: Task<Void, Never>?
+
+    /// Every server through Xray, the tab on screen first, a few at a time; pressed again
+    /// while measuring: stops (old values stay).
+    func pingAll(first: [String] = []) {
+        if pinging { stopPing(); return }
+        guard let servers = subscription?.servers else { return }
+        let order = servers.filter { first.contains($0.id) } + servers.filter { !first.contains($0.id) }
         pinging = true
-        pings = [:]
-        await withTaskGroup(of: (String, Int).self) { group in
-            for s in servers {
-                group.addTask { (s.id, await Self.tcpPing(host: s.host, port: s.port)) }
+        measuring = Set(order.map(\.id))
+        pingTask = Task {
+            await withTaskGroup(of: (String, Int).self) { group in
+                var next = 0
+                while next < min(6, order.count) {
+                    let s = order[next]; next += 1
+                    group.addTask { (s.id, await XrayPing.ping(s)) }
+                }
+                while let result = await group.next() {
+                    if Task.isCancelled { break }
+                    let (id, ms) = result
+                    pings[id] = ms
+                    measuring.remove(id)
+                    if next < order.count {
+                        let s = order[next]; next += 1
+                        group.addTask { (s.id, await XrayPing.ping(s)) }
+                    }
+                }
+                group.cancelAll()
             }
-            for await (id, ms) in group { pings[id] = ms }
+            if !Task.isCancelled { measuring = []; pinging = false }
         }
+    }
+
+    func stopPing() {
+        pingTask?.cancel()
+        pingTask = nil
+        measuring = []
         pinging = false
+    }
+
+    /// One server; pressed again while it is measured: stops it.
+    func pingOne(_ server: Server) {
+        if measuring.contains(server.id) { measuring.remove(server.id); return }
+        measuring.insert(server.id)
+        Task {
+            let ms = await XrayPing.ping(server)
+            if measuring.contains(server.id) { pings[server.id] = ms; measuring.remove(server.id) }
+        }
     }
 
     nonisolated static func tcpPing(host: String?, port: Int?) async -> Int {

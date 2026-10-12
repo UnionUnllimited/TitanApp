@@ -4,8 +4,8 @@ import UIKit
 enum Config {
     static let hosts: Set<String> = ["api1.titanvps.su", "api2.titanvps.online"]
     static let telegram = URL(string: "https://t.me/TitanVPS_bot")!
-    // TODO: temporary, same as Android. Switch to our own UA later.
-    static let userAgent = "Xray"
+    /// Same as Android: our own UA first, "Xray" if the panel doesn't answer it with Xray JSON.
+    static let userAgents = ["Titan", "Xray"]
 }
 
 struct SubscriptionInfo: Codable, Equatable {
@@ -75,14 +75,21 @@ enum SubscriptionAPI {
     static func fetch(_ url: String) async throws -> Subscription {
         guard isAllowed(url) else { throw SubscriptionError(message: "Недопустимый адрес подписки") }
         var firstError: Error?
-        for candidate in [url] + alternates(url) {
-            do {
-                let (info, body) = try await download(candidate)
-                let servers = try parseServers(body).filter { !$0.name.lowercased().contains("безлимит") }
-                if servers.isEmpty { throw SubscriptionError(message: "В подписке нет серверов") }
-                return Subscription(url: url, info: info, servers: servers, fetchedAt: Date())
-            } catch {
-                if firstError == nil { firstError = error }
+        // "Titan" is our own UA; "Xray" if the server doesn't answer it with Xray JSON.
+        for ua in Config.userAgents {
+            for candidate in [url] + alternates(url) {
+                do {
+                    let (info, body) = try await download(candidate, userAgent: ua)
+                    let all = (try? parseServers(body)) ?? []
+                    if all.isEmpty && ua != Config.userAgents.last { continue }
+                    if all.isEmpty { throw SubscriptionError(message: SubscriptionErrors.unusable(info, body)) }
+                    if let stub = SubscriptionErrors.stub(all.map(\.name)) { throw SubscriptionError(message: stub) }
+                    let servers = all.filter { !ServerGroup.isHidden($0) }
+                    if servers.isEmpty { throw SubscriptionError(message: "В подписке нет серверов") }
+                    return Subscription(url: url, info: info, servers: servers, fetchedAt: Date())
+                } catch {
+                    if firstError == nil { firstError = error }
+                }
             }
         }
         throw firstError ?? SubscriptionError(message: "Сервер подписки недоступен")
@@ -93,9 +100,9 @@ enum SubscriptionAPI {
         return Config.hosts.filter { $0 != host }.sorted().compactMap { h in c.host = h; return c.string }
     }
 
-    private static func download(_ url: String) async throws -> (SubscriptionInfo, String) {
+    private static func download(_ url: String, userAgent: String) async throws -> (SubscriptionInfo, String) {
         var req = URLRequest(url: URL(string: url)!, timeoutInterval: 20)
-        req.setValue(Config.userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
         req.setValue(hwid(), forHTTPHeaderField: "x-hwid")
         req.setValue("iOS", forHTTPHeaderField: "x-device-os")
@@ -207,19 +214,51 @@ enum SubscriptionAPI {
     }
 }
 
-/// Серверы / Обходы, same rule as Android: everything from the "ЛИМИТНЫЕ" header or
-/// the first "обход" server on is a bypass server.
+/// Серверы / Обходы, same rules as Android (data/ServerGroups.kt): "Обходы" are the servers
+/// with "обход" in the name; section headers and the panel's info entries aren't servers.
 enum ServerGroup: String, CaseIterable, Identifiable {
     case servers = "Серверы", bypass = "Обходы"
     var id: String { rawValue }
 
     static func split(_ servers: [Server]) -> [ServerGroup: [Server]] {
-        let first = servers.firstIndex { s in
-            let n = s.name.lowercased()
-            return n.contains("обход") || (n.contains("лимитн") && !n.contains("безлимит"))
+        let bypass = servers.filter(isBypass)
+        let regular = servers.filter { !isBypass($0) }
+        var out: [ServerGroup: [Server]] = [:]
+        if !regular.isEmpty { out[.servers] = regular }
+        if !bypass.isEmpty { out[.bypass] = bypass }
+        return out
+    }
+
+    static func isBypass(_ s: Server) -> Bool { s.name.lowercased().contains("обход") }
+
+    /// Headers ("👇БЕЗЛИМИТНЫЕ👇", "ЛИМИТНЫЕ ОСТ: …") and notices with a dummy address.
+    static func isHidden(_ s: Server) -> Bool {
+        let n = s.name.lowercased()
+        if n.contains("лимитн") || ["сервер для", "обновления подписки"].contains(where: n.contains) { return true }
+        let host = (s.host ?? "").lowercased()
+        return ["127.0.0.1", "0.0.0.0", "localhost", "::1"].contains(host) || (s.port.map { $0 <= 1 } ?? false)
+    }
+}
+
+/// Why a subscription that answered can't be used, in words (same as Android).
+enum SubscriptionErrors {
+    private static let stubs = ["не поддерживается", "заблокирован", "лимит устройств", "превышен лимит", "истекл", "неактивн"]
+
+    static func unusable(_ info: SubscriptionInfo, _ body: String) -> String {
+        if let a = info.announce?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty { return a }
+        if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Сервер подписки не прислал ни одного сервера. Возможно, превышен лимит устройств или подписка неактивна — напишите в поддержку"
         }
-        guard let first else { return [.servers: servers] }
-        return [.servers: Array(servers[..<first]), .bypass: Array(servers[first...])]
+        return "Не удалось разобрать подписку. Напишите в поддержку"
+    }
+
+    /// The stub's text when every entry is one (no real server came).
+    static func stub(_ names: [String]) -> String? {
+        guard !names.isEmpty, names.allSatisfy({ n in stubs.contains { n.lowercased().contains($0) } }) else { return nil }
+        let text = names[0].trimmingCharacters(in: .whitespaces)
+        return text.lowercased().contains("не поддерживается")
+            ? "\(text). Чаще всего это значит, что превышен лимит устройств — удалите старое устройство или напишите в поддержку"
+            : text
     }
 }
 
