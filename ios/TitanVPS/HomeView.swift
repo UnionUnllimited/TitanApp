@@ -286,7 +286,7 @@ struct ServerRow: View {
                         .font(.system(size: 11))
                         .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
                     if let error, ping == -1, !pending {
-                        Text(error).font(.system(size: 10)).foregroundStyle(.red.opacity(0.8)).lineLimit(2)
+                        Text(error).font(.system(size: 10)).foregroundStyle(.red.opacity(0.8)).lineLimit(3)
                     }
                 }
                 Spacer()

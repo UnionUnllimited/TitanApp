@@ -55,7 +55,7 @@ enum XrayPing {
                 let ms = result.0
                 if best[item.server] == nil { order.append(item.server); best[item.server] = -1 }
                 if ms >= 0 && (best[item.server]! < 0 || ms < best[item.server]!) { best[item.server] = ms }
-                if ms < 0, reason[item.server] == nil, let e = result.1, !e.isEmpty { reason[item.server] = e }
+                if ms < 0, reason[item.server] == nil, let e = result.1, !e.isEmpty { reason[item.server] = shortReason(e) }
             }
             if Task.isCancelled { return }
             for id in order {
@@ -63,6 +63,12 @@ enum XrayPing {
                 await onResult(id, ms, ms < 0 ? reason[id] : nil)
             }
         }
+    }
+
+    /// Go's `Head "<url>": <reason>` without the URL part (the reason is what matters).
+    static func shortReason(_ error: String) -> String {
+        guard error.hasPrefix("Head \""), let r = error.range(of: "\": ") else { return error }
+        return String(error[r.upperBound...])
     }
 
     /// One pingBatch call: ms per (config, outbound tag), -1 for a failure (with Xray's reason).
