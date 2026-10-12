@@ -9,7 +9,8 @@ package internet
 // connectx() returns before the handshake, and a network that drops TFO SYNs leaves such a
 // connection silent with no error. So until the server's first byte arrives, what was
 // written is kept; if nothing comes within tfoReplyTimeout, the host is redialed the usual
-// way, the kept data is sent again, and the host goes without TFO from then on.
+// way and the kept data sent again. TFO to that host is retried after tfoRetryAfter: the
+// first TFO connection only fetches the cookie, and some hosts work only with TFO.
 
 import (
 	"context"
@@ -32,9 +33,11 @@ const (
 	tfoReplyTimeout = 2 * time.Second
 	// Data kept for a resend; past that the connection stays as it is.
 	tfoKeepLimit = 256 << 10
+	// How long a host where TFO failed is dialed without it.
+	tfoRetryAfter = 2 * time.Minute
 )
 
-// Hosts where TFO failed: dialed without it from then on.
+// Hosts where TFO failed, and when: dialed without it for tfoRetryAfter.
 var tfoBroken sync.Map
 
 // What the last TFO connections did, for the app to show next to a failed ping.
@@ -133,7 +136,7 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 
 // open dials with TFO (b in the SYN), or the usual way for hosts where TFO failed.
 func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
-	if _, broken := tfoBroken.Load(c.address); !broken {
+	if since, broken := tfoBroken.Load(c.address); !broken || time.Since(since.(time.Time)) > tfoRetryAfter {
 		start := time.Now()
 		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
 		conn, err := c.dialer.DialContext(ctx, c.network, c.address, b)
@@ -164,7 +167,7 @@ func (c *tfoConn) dialPlain(data []byte) (stdnet.Conn, error) {
 }
 
 func (c *tfoConn) markBroken(why string) {
-	tfoBroken.Store(c.address, struct{}{})
+	tfoBroken.Store(c.address, time.Now())
 	tfoNote("no tfo to this host (%s)", why)
 	errors.LogWarning(c.ctx, "TCP Fast Open to ", c.address, " failed (", why, "), dialing without it")
 }
