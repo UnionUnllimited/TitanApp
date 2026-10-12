@@ -29,6 +29,11 @@ struct Server: Codable, Identifiable, Equatable {
     let host: String?
     let port: Int?
     let proto: String
+    /// The server's whole Xray config from the subscription (routing, DNS… from the panel),
+    /// inbounds replaced by ours when connecting. Nil only in subscriptions saved by old builds.
+    var xrayJson: String? = nil
+    /// Tag of the outbound that carries user traffic.
+    var proxyTag: String? = nil
 }
 
 struct Subscription: Codable, Equatable {
@@ -151,13 +156,28 @@ enum SubscriptionAPI {
         }
         let configs: [[String: Any]] = (json as? [[String: Any]]) ?? ((json as? [String: Any]).map { [$0] } ?? [])
         let service: Set<String> = ["freedom", "blackhole", "dns", "loopback"]
-        return configs.enumerated().compactMap { i, cfg in
-            guard let outbounds = cfg["outbounds"] as? [[String: Any]],
-                  let proxy = outbounds.first(where: { !service.contains(($0["protocol"] as? String) ?? "") }) else { return nil }
+        return configs.enumerated().compactMap { i, source in
+            var cfg = source
+            guard var outbounds = cfg["outbounds"] as? [[String: Any]],
+                  let proxyIndex = outbounds.firstIndex(where: { !service.contains(($0["protocol"] as? String) ?? "") }) else { return nil }
+            // Remnawave may omit the tag; routing and ping need one.
+            if ((outbounds[proxyIndex]["tag"] as? String) ?? "").isEmpty { outbounds[proxyIndex]["tag"] = "proxy" }
+            cfg["outbounds"] = outbounds
+            let proxy = outbounds[proxyIndex]
+            let proxyTag = proxy["tag"] as? String ?? "proxy"
             let name = ((cfg["remarks"] as? String)?.nilIfEmpty) ?? "Сервер \(i + 1)"
+            cfg.removeValue(forKey: "remarks")
+            // Our TUN inbound replaces the config's inbounds (like on Android): rules bound to
+            // their tags follow it, and their sniffing settings are kept.
+            let inbounds = cfg["inbounds"] as? [[String: Any]] ?? []
+            let oldTags = Set(inbounds.compactMap { ($0["tag"] as? String)?.nilIfEmpty })
+            if let sniffing = inbounds.compactMap({ $0["sniffing"] as? [String: Any] }).first { cfg[XrayRunConfig.sniffingKey] = sniffing }
+            cfg.removeValue(forKey: "inbounds")
+            XrayRunConfig.retargetInboundRules(&cfg, oldTags: oldTags)
             let (host, port) = endpoint(proxy)
+            let json = (try? JSONSerialization.data(withJSONObject: cfg)).map { String(decoding: $0, as: UTF8.self) }
             return Server(id: "json-\(i)-\(name.hashValue)", name: name, host: host, port: port,
-                          proto: (proxy["protocol"] as? String) ?? "")
+                          proto: (proxy["protocol"] as? String) ?? "", xrayJson: json, proxyTag: proxyTag)
         }
     }
 

@@ -2,11 +2,11 @@ import SwiftUI
 
 struct HomeView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var vpn: VPNController
     @Environment(\.colorScheme) private var scheme
     @AppStorage("theme") private var theme = "system"
     @State private var page: ServerGroup = .servers
     @State private var expanded = false
-    @State private var vpnInfo = false
     var openSubscription: () -> Void
     var openSettings: () -> Void
 
@@ -37,10 +37,14 @@ struct HomeView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Palette.background.ignoresSafeArea())
-        .alert("VPN скоро", isPresented: $vpnInfo) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Это тестовая сборка для iPhone: подписка, серверы и пинг работают, а подключение VPN появится в версии из TestFlight.")
+    }
+
+    private var statusTitle: String {
+        switch vpn.state {
+        case .off, .error: return "Не подключено"
+        case .connecting: return "Подключаемся…"
+        case .connected: return "Подключено"
+        case .disconnecting: return "Отключаемся…"
         }
     }
 
@@ -75,9 +79,13 @@ struct HomeView: View {
             subscriptionCard(sub)
             powerSwitch
             VStack(spacing: 4) {
-                Text("Не подключено").font(.system(size: 24, weight: .bold))
+                Text(statusTitle).font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(vpn.isOn ? Palette.green : .primary)
                 Text(store.selected.map { $0.name.splitFlag.1 } ?? "Выберите сервер")
                     .foregroundStyle(.secondary).lineLimit(1)
+                if case .error(let message) = vpn.state {
+                    Text(message).font(.system(size: 13)).foregroundStyle(.red).multilineTextAlignment(.center)
+                }
             }
             .padding(.vertical, 4)
         }
@@ -135,14 +143,19 @@ struct HomeView: View {
 
     private var powerSwitch: some View {
         HStack(spacing: 0) {
-            Button {} label: {
+            Button { if vpn.isOn { vpn.disconnect() } } label: {
                 Label("Выкл", systemImage: "power").font(.system(size: 18, weight: .semibold))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Palette.outline, in: Capsule())
+                    .background(vpn.isOn ? Color.clear : Palette.outline, in: Capsule())
             }
-            Button { vpnInfo = true } label: {
+            Button {
+                guard !vpn.isOn, let server = store.selected else { return }
+                Task { await vpn.connect(server) }
+            } label: {
                 Label("Вкл", systemImage: "checkmark.shield").font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(vpn.isOn ? .white : .primary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(vpn.isOn ? Palette.green : Color.clear, in: Capsule())
             }
         }
         .foregroundStyle(.primary)
@@ -190,7 +203,11 @@ struct HomeView: View {
 
             ForEach(groups[page] ?? groups[.servers] ?? []) { s in
                 ServerRow(server: s, ping: store.pings[s.id], pending: store.pinging && store.pings[s.id] == nil,
-                          selected: s.id == store.selected?.id) { store.select(s.id) }
+                          selected: s.id == store.selected?.id) {
+                    let changed = s.id != store.selected?.id
+                    store.select(s.id)
+                    if changed { Task { await vpn.switchTo(s) } }
+                }
             }
         }
     }

@@ -3,8 +3,12 @@ name: iOS
 on:
   push:
     branches: [main, "claude/**"]
-    paths: ["ios/**", ".github/workflows/ios.yml"]
+    paths: ["ios/**", ".github/workflows/ios.yml", "scripts/build-libxray-ios.sh"]
   workflow_dispatch:
+    inputs:
+      libxray_ref:
+        description: libXray git ref (tag or branch)
+        default: v26.9.30
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -19,26 +23,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Cache LibXray.xcframework
+        id: libxray-cache
+        uses: actions/cache@v4
+        with:
+          path: ios/Frameworks/LibXray.xcframework
+          key: libxray-ios-${{ github.event.inputs.libxray_ref || 'v26.9.30' }}-${{ hashFiles('scripts/build-libxray-ios.sh') }}
+
+      - name: Build LibXray.xcframework
+        if: steps.libxray-cache.outputs.cache-hit != 'true'
+        env:
+          LIBXRAY_REF: ${{ github.event.inputs.libxray_ref || 'v26.9.30' }}
+        run: ./scripts/build-libxray-ios.sh
+
       - name: Generate Xcode project
         working-directory: ios
         run: |
           brew install xcodegen
           xcodegen generate
 
-      # Unsigned build: Sideloadly / AltStore re-sign it with the user's Apple ID.
+      # Built unsigned, then signed ad hoc with the entitlements (Network Extension) below:
+      # re-signing services (UDID certificates) and Sideloadly sign it again with theirs.
       - name: Build
         working-directory: ios
         run: |
           xcodebuild -project TitanVPS.xcodeproj -scheme TitanVPS -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
 
       - name: Package IPA
         working-directory: ios
         run: |
-          mkdir -p Payload
+          rm -rf Payload && mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/TitanVPS.app Payload/
+          ls Payload/TitanVPS.app/PlugIns
+          codesign -f -s - --entitlements TitanTunnel/TitanTunnel.entitlements Payload/TitanVPS.app/PlugIns/TitanTunnel.appex
+          codesign -f -s - --entitlements TitanVPS/TitanVPS.entitlements Payload/TitanVPS.app
+          codesign -d --entitlements - Payload/TitanVPS.app/PlugIns/TitanTunnel.appex
           zip -qr TitanVPS-unsigned.ipa Payload
+          ls -la TitanVPS-unsigned.ipa
 
       # A plain download link (artifacts need a GitHub login): for signing services
       # (UDID certificate) and Sideloadly. Not "latest": Android reads releases/latest.

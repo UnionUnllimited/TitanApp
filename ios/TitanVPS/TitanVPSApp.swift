@@ -3,12 +3,14 @@ import SwiftUI
 @main
 struct TitanVPSApp: App {
     @StateObject private var store = AppStore()
+    @StateObject private var vpn = VPNController()
     @AppStorage("theme") private var theme = "system"
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                .environmentObject(vpn)
                 .preferredColorScheme(theme == "dark" ? .dark : theme == "light" ? .light : nil)
                 .tint(Palette.primary)
         }

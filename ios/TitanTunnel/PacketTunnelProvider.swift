@@ -1,0 +1,88 @@
+import LibXray
+import NetworkExtension
+import os
+
+/// The VPN itself: iOS gives us a utun interface, Xray reads and writes its packets
+/// directly (Xray's TUN inbound in iOS mode, xray.tun.fd) — the same as on Android.
+/// The tunnel's own connections to the servers don't go through the tunnel (iOS keeps
+/// the provider's sockets outside it).
+final class PacketTunnelProvider: NEPacketTunnelProvider {
+    private let log = Logger(subsystem: "su.titanvps", category: "tunnel")
+
+    override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+        let config = (options?["config"] as? String)
+            ?? ((protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["config"] as? String)
+        guard let config else {
+            completionHandler(Self.error("Нет настроек сервера. Подключитесь из приложения"))
+            return
+        }
+        setTunnelNetworkSettings(Self.networkSettings()) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                completionHandler(error)
+                return
+            }
+            do {
+                try self.startXray(config)
+                completionHandler(nil)
+            } catch {
+                self.log.error("start failed: \(error.localizedDescription, privacy: .public)")
+                completionHandler(error)
+            }
+        }
+    }
+
+    override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        _ = Self.invoke("stopXray")
+        completionHandler()
+    }
+
+    private static func networkSettings() -> NEPacketTunnelNetworkSettings {
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
+        let ipv4 = NEIPv4Settings(addresses: ["172.19.0.1"], subnetMasks: ["255.255.255.252"])
+        ipv4.includedRoutes = [NEIPv4Route.default()]
+        settings.ipv4Settings = ipv4
+        let ipv6 = NEIPv6Settings(addresses: ["fdfe:dcba:9876::1"], networkPrefixLengths: [126])
+        ipv6.includedRoutes = [NEIPv6Route.default()]
+        settings.ipv6Settings = ipv6
+        // Port 53 of this address is hijacked into Xray's DNS (routing rule in the config).
+        let dns = NEDNSSettings(servers: ["172.19.0.2"])
+        dns.matchDomains = [""]
+        settings.dnsSettings = dns
+        settings.mtu = NSNumber(value: XrayTunnelMTU)
+        return settings
+    }
+
+    private func startXray(_ config: String) throws {
+        let fd = titan_tunnel_fd()
+        guard fd >= 0 else { throw Self.error("Не найден интерфейс туннеля") }
+        guard var cfg = (try? JSONSerialization.jsonObject(with: Data(config.utf8))) as? [String: Any] else {
+            throw Self.error("Не удалось прочитать настройки сервера")
+        }
+        var env = cfg["env"] as? [String: Any] ?? [:]
+        env["xray.tun.fd"] = String(fd)
+        // No geo files on iOS (the config has none); Xray still wants an asset dir.
+        env["xray.location.asset"] = FileManager.default.temporaryDirectory.path
+        cfg["env"] = env
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: cfg), as: UTF8.self)
+        if let err = Self.invoke("runXray", payload: ["xrayJson": json]) { throw Self.error(err) }
+    }
+
+    /// libXray's single entry point (API v3); returns the error text or nil.
+    @discardableResult
+    private static func invoke(_ method: String, payload: [String: Any] = [:]) -> String? {
+        let request: [String: Any] = ["apiVersion": 3, "method": method, "payload": payload]
+        guard let data = try? JSONSerialization.data(withJSONObject: request) else { return "bad request" }
+        let response = LibXrayInvoke(String(decoding: data, as: UTF8.self))
+        guard let obj = (try? JSONSerialization.jsonObject(with: Data(response.utf8))) as? [String: Any] else { return "bad response" }
+        if obj["success"] as? Bool == true { return nil }
+        return (obj["error"] as? String) ?? "\(method) failed"
+    }
+
+    private static func error(_ text: String) -> NSError {
+        NSError(domain: "su.titanvps.tunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+}
+
+/// Same as the app's XrayRunConfig.mtu.
+let XrayTunnelMTU = 1500
