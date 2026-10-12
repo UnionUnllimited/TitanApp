@@ -52,18 +52,36 @@ func tfoNote(format string, args ...any) {
 	tfoLogMu.Lock()
 	defer tfoLogMu.Unlock()
 	tfoLog = append(tfoLog, fmt.Sprintf(format, args...))
-	if len(tfoLog) > 4 {
-		tfoLog = tfoLog[len(tfoLog)-4:]
+	if len(tfoLog) > 6 {
+		tfoLog = tfoLog[len(tfoLog)-6:]
 	}
 }
 
-// TitanTFOLog returns (and clears) the notes about the last TFO connections.
+// TFO connections still open, for the notes.
+var tfoLive sync.Map // *tfoConn -> struct{}
+
+// TitanTFOLog returns (and clears) the notes about the last TFO connections, with the
+// state of those still open.
 func TitanTFOLog() string {
 	tfoLogMu.Lock()
-	defer tfoLogMu.Unlock()
-	s := strings.Join(tfoLog, "; ")
+	notes := tfoLog
 	tfoLog = nil
-	return s
+	tfoLogMu.Unlock()
+	tfoLive.Range(func(k, _ any) bool {
+		notes = append(notes, "open: "+k.(*tfoConn).traffic())
+		return true
+	})
+	return strings.Join(notes, "; ")
+}
+
+func (c *tfoConn) traffic() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	first := "never"
+	if c.got > 0 {
+		first = fmt.Sprintf("%d ms", c.firstByte.Milliseconds())
+	}
+	return fmt.Sprintf("%d ms, sent %d B, got %d B, first byte %s", time.Since(c.dialed).Milliseconds(), c.sent, c.got, first)
 }
 
 func dialTFO(ctx context.Context, d *stdnet.Dialer, network, address string) (stdnet.Conn, error) {
@@ -90,6 +108,11 @@ type tfoConn struct {
 	ready    chan struct{}
 	deadline [2]time.Time // read, write
 
+	// Traffic through this connection, for the notes.
+	sent, got int
+	viaTFO    bool
+	firstByte time.Duration
+
 	// While waiting for the server's first byte on a TFO connection.
 	waiting bool
 	tries   int // TFO connections made
@@ -105,10 +128,15 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 		conn, viaTFO, err := c.open(b)
 		c.mu.Lock()
 		c.conn, c.err = conn, err
+		c.viaTFO = viaTFO
+		if err == nil {
+			c.sent += len(b)
+		}
 		if conn != nil {
 			_ = conn.SetReadDeadline(c.deadline[0])
 			_ = conn.SetWriteDeadline(c.deadline[1])
 			if viaTFO {
+				tfoLive.Store(c, struct{}{})
 				c.waiting, c.dialed, c.tries = true, time.Now(), 1
 				c.kept = append([]byte(nil), b...)
 			}
@@ -129,12 +157,18 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 		// Kept and written under the lock, so a redial resends everything in order.
 		defer c.mu.Unlock()
 		c.kept = append(c.kept, b...)
-		return c.conn.Write(b)
+		n, err := c.conn.Write(b)
+		c.sent += n
+		return n, err
 	}
 	c.waiting, c.kept = false, nil
 	conn := c.conn
 	c.mu.Unlock()
-	return conn.Write(b)
+	n, err := conn.Write(b)
+	c.mu.Lock()
+	c.sent += n
+	c.mu.Unlock()
+	return n, err
 }
 
 // open dials with TFO (b in the SYN), or the usual way for hosts where TFO failed.
@@ -197,6 +231,14 @@ func (c *tfoConn) Read(b []byte) (int, error) {
 		c.mu.Unlock()
 
 		n, err := conn.Read(b)
+		if n > 0 {
+			c.mu.Lock()
+			if c.got == 0 && !c.dialed.IsZero() {
+				c.firstByte = time.Since(c.dialed)
+			}
+			c.got += n
+			c.mu.Unlock()
+		}
 		if !waiting {
 			return n, err
 		}
@@ -293,6 +335,9 @@ func (c *tfoConn) Close() error {
 	}
 	c.mu.Unlock()
 	<-c.ready
+	if _, live := tfoLive.LoadAndDelete(c); live {
+		tfoNote("closed: %s", c.traffic())
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn != nil {
