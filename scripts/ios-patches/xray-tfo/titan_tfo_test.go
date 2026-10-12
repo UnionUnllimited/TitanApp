@@ -69,6 +69,24 @@ func TestTitanTFO(t *testing.T) {
 	titanEcho(t, plain)
 	titanRoundTrip(t, plain.Addr().String())
 
+	// A server that never answers the first connection: the data goes again, plainly.
+	silent, _ := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	defer silent.Close()
+	go func() {
+		first, _ := silent.Accept()
+		defer first.Close()
+		c, _ := silent.Accept()
+		b := make([]byte, 5)
+		io.ReadFull(c, b)
+		c.Write(append([]byte("re:"), b...))
+		c.Close()
+	}()
+	titanRoundTrip(t, silent.Addr().String())
+	if _, broken := tfoBroken.Load(silent.Addr().String()); !broken {
+		t.Fatal("silent host not marked")
+	}
+	t.Log(TitanTFOLog())
+
 	c, _ := dialTFO(context.Background(), &stdnet.Dialer{}, "tcp", ln.Addr().String())
 	c.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 	if _, err := c.Read(make([]byte, 1)); err == nil {

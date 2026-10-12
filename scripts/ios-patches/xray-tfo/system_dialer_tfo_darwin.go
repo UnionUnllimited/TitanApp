@@ -4,9 +4,12 @@ package internet
 
 // Titan patch: real TCP Fast Open on iOS/macOS. Setting TCP_FASTOPEN on the socket is not
 // enough there: the data has to go with connectx(). The connection is opened on the first
-// Write, carrying that data in the SYN (tfo-go), like sing-box does. When TFO can't be
-// used (the system refuses the socket options, or the network drops such SYNs), the host is
-// dialed the usual way from then on.
+// Write, carrying that data in the SYN (tfo-go), like sing-box does.
+//
+// connectx() returns before the handshake, and a network that drops TFO SYNs leaves such a
+// connection silent with no error. So until the server's first byte arrives, what was
+// written is kept; if nothing comes within tfoReplyTimeout, the host is redialed the usual
+// way, the kept data is sent again, and the host goes without TFO from then on.
 
 import (
 	"context"
@@ -20,15 +23,16 @@ import (
 
 	"github.com/database64128/tfo-go/v2"
 	"github.com/xtls/xray-core/common/errors"
-	"golang.org/x/sys/unix"
 )
 
-// How long a TFO dial may take before the host is tried without TFO.
-const tfoDialTimeout = 3 * time.Second
-
-// connectx() with data returns before the handshake; if the server hasn't answered the
-// SYN by then, the network is taken to drop TFO SYNs and the host is dialed without TFO.
-const tfoHandshakeTimeout = 1500 * time.Millisecond
+const (
+	// How long a TFO dial may take before the host is tried without TFO.
+	tfoDialTimeout = 3 * time.Second
+	// How long the first answer may take on a TFO connection.
+	tfoReplyTimeout = 2 * time.Second
+	// Data kept for a resend; past that the connection stays as it is.
+	tfoKeepLimit = 256 << 10
+)
 
 // Hosts where TFO failed: dialed without it from then on.
 var tfoBroken sync.Map
@@ -57,22 +61,6 @@ func TitanTFOLog() string {
 	return s
 }
 
-func tcpInfo(conn stdnet.Conn) *unix.TCPConnectionInfo {
-	tc, ok := conn.(*stdnet.TCPConn)
-	if !ok {
-		return nil
-	}
-	raw, err := tc.SyscallConn()
-	if err != nil {
-		return nil
-	}
-	var info *unix.TCPConnectionInfo
-	_ = raw.Control(func(fd uintptr) {
-		info, _ = unix.GetsockoptTCPConnectionInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_CONNECTION_INFO)
-	})
-	return info
-}
-
 func dialTFO(ctx context.Context, d *stdnet.Dialer, network, address string) (stdnet.Conn, error) {
 	return &tfoConn{
 		// The caller's context may end once Dial returns; the dial timeout still applies.
@@ -96,6 +84,11 @@ type tfoConn struct {
 	err      error
 	ready    chan struct{}
 	deadline [2]time.Time // read, write
+
+	// While waiting for the server's first byte on a TFO connection.
+	waiting bool
+	dialed  time.Time
+	kept    []byte
 }
 
 func (c *tfoConn) Write(b []byte) (int, error) {
@@ -103,12 +96,16 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 	if !c.started {
 		c.started = true
 		c.mu.Unlock()
-		conn, err := c.open(b)
+		conn, viaTFO, err := c.open(b)
 		c.mu.Lock()
 		c.conn, c.err = conn, err
 		if conn != nil {
 			_ = conn.SetReadDeadline(c.deadline[0])
 			_ = conn.SetWriteDeadline(c.deadline[1])
+			if viaTFO {
+				c.waiting, c.dialed = true, time.Now()
+				c.kept = append([]byte(nil), b...)
+			}
 		}
 		c.mu.Unlock()
 		close(c.ready)
@@ -121,74 +118,55 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 	if err := c.wait(time.Time{}); err != nil {
 		return 0, err
 	}
-	return c.conn.Write(b)
+	c.mu.Lock()
+	if c.waiting && len(c.kept)+len(b) <= tfoKeepLimit {
+		// Kept and written under the lock, so a redial resends everything in order.
+		defer c.mu.Unlock()
+		c.kept = append(c.kept, b...)
+		return c.conn.Write(b)
+	}
+	c.waiting, c.kept = false, nil
+	conn := c.conn
+	c.mu.Unlock()
+	return conn.Write(b)
 }
 
-func (c *tfoConn) open(b []byte) (stdnet.Conn, error) {
+// open dials with TFO (b in the SYN), or the usual way for hosts where TFO failed.
+func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
 	if _, broken := tfoBroken.Load(c.address); !broken {
 		start := time.Now()
 		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
 		conn, err := c.dialer.DialContext(ctx, c.network, c.address, b)
 		cancel()
 		if err == nil {
-			if err = waitEstablished(conn, tfoHandshakeTimeout); err == nil {
-				tfoNote("tfo %d B, up in %d ms", len(b), time.Since(start).Milliseconds())
-				return conn, nil
-			}
-			if info := tcpInfo(conn); info != nil {
-				tfoNote("tfo no handshake: state %d tx %d rexmt %d", info.State, info.Txbytes, info.Txretransmitpackets)
-			}
-			conn.Close()
-		} else {
-			tfoNote("tfo dial: %v", err)
+			tfoNote("tfo %d B in %d ms", len(b), time.Since(start).Milliseconds())
+			return conn, true, nil
 		}
-		tfoBroken.Store(c.address, struct{}{})
-		errors.LogWarning(c.ctx, "TCP Fast Open to ", c.address, " failed, dialing without it: ", err)
+		c.markBroken(fmt.Sprintf("dial: %v", err))
 	}
+	conn, err := c.dialPlain(b)
+	return conn, false, err
+}
+
+func (c *tfoConn) dialPlain(data []byte) (stdnet.Conn, error) {
 	conn, err := c.dialer.Dialer.DialContext(c.ctx, c.network, c.address)
 	if err != nil {
 		tfoNote("plain dial: %v", err)
 		return nil, err
 	}
-	tfoNote("plain")
-	if _, err := conn.Write(b); err != nil {
-		conn.Close()
-		return nil, err
+	if len(data) > 0 {
+		if _, err := conn.Write(data); err != nil {
+			conn.Close()
+			return nil, err
+		}
 	}
 	return conn, nil
 }
 
-// waitEstablished waits for the TCP handshake of conn to complete.
-func waitEstablished(conn stdnet.Conn, timeout time.Duration) error {
-	tc, ok := conn.(*stdnet.TCPConn)
-	if !ok {
-		return nil
-	}
-	raw, err := tc.SyscallConn()
-	if err != nil {
-		return nil
-	}
-	const established = 4 // TCPS_ESTABLISHED
-	deadline := time.Now().Add(timeout)
-	for {
-		var state uint8
-		var gerr error
-		if err := raw.Control(func(fd uintptr) {
-			var info *unix.TCPConnectionInfo
-			if info, gerr = unix.GetsockoptTCPConnectionInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_CONNECTION_INFO); gerr == nil {
-				state = info.State
-			}
-		}); err != nil || gerr != nil {
-			return nil // can't tell: keep the connection
-		}
-		if state >= established {
-			return nil
-		}
-		if state == 0 || time.Now().After(deadline) {
-			return os.ErrDeadlineExceeded
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+func (c *tfoConn) markBroken(why string) {
+	tfoBroken.Store(c.address, struct{}{})
+	tfoNote("no tfo to this host (%s)", why)
+	errors.LogWarning(c.ctx, "TCP Fast Open to ", c.address, " failed (", why, "), dialing without it")
 }
 
 // Read waits for the first Write: the protocols this is used for speak first.
@@ -199,7 +177,74 @@ func (c *tfoConn) Read(b []byte) (int, error) {
 	if err := c.wait(deadline); err != nil {
 		return 0, err
 	}
-	return c.conn.Read(b)
+	for {
+		c.mu.Lock()
+		conn, waiting, userDeadline := c.conn, c.waiting, c.deadline[0]
+		replyBy := c.dialed.Add(tfoReplyTimeout)
+		if waiting {
+			d := replyBy
+			if !userDeadline.IsZero() && userDeadline.Before(d) {
+				d = userDeadline
+			}
+			_ = conn.SetReadDeadline(d)
+		}
+		c.mu.Unlock()
+
+		n, err := conn.Read(b)
+		if !waiting {
+			return n, err
+		}
+		if n > 0 {
+			c.answered(conn)
+			return n, err
+		}
+		// No answer on the TFO connection yet.
+		if !userDeadline.IsZero() && !time.Now().Before(userDeadline) {
+			return 0, err
+		}
+		if timeout, ok := err.(stdnet.Error); ok && timeout.Timeout() && time.Now().Before(replyBy) {
+			return 0, err
+		}
+		if !c.redial(conn, err) {
+			return 0, err
+		}
+	}
+}
+
+// answered: the server spoke on conn; nothing to keep any more.
+func (c *tfoConn) answered(conn stdnet.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == conn && c.waiting {
+		c.waiting, c.kept = false, nil
+		_ = conn.SetReadDeadline(c.deadline[0])
+	}
+}
+
+// redial replaces a silent TFO connection with a plain one carrying the kept data.
+func (c *tfoConn) redial(old stdnet.Conn, readErr error) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != old || !c.waiting {
+		return c.conn != old // already replaced
+	}
+	c.waiting = false
+	why := "no answer"
+	if readErr != nil {
+		why = readErr.Error()
+	}
+	c.markBroken(fmt.Sprintf("%s in %d ms", why, time.Since(c.dialed).Milliseconds()))
+	old.Close()
+	conn, err := c.dialPlain(c.kept)
+	c.kept = nil
+	if err != nil {
+		return false
+	}
+	tfoNote("plain redial ok")
+	_ = conn.SetReadDeadline(c.deadline[0])
+	_ = conn.SetWriteDeadline(c.deadline[1])
+	c.conn = conn
+	return true
 }
 
 func (c *tfoConn) wait(deadline time.Time) error {
@@ -228,18 +273,19 @@ func (c *tfoConn) Close() error {
 	}
 	c.mu.Unlock()
 	<-c.ready
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.conn != nil {
-		if info := tcpInfo(c.conn); info != nil {
-			tfoNote("closed: state %d tx %d rx %d rexmt %d", info.State, info.Txbytes, info.Rxbytes, info.Txretransmitpackets)
-		}
 		return c.conn.Close()
 	}
 	return nil
 }
 
-func (c *tfoConn) dialed() stdnet.Conn {
+func (c *tfoConn) current() stdnet.Conn {
 	select {
 	case <-c.ready:
+		c.mu.Lock()
+		defer c.mu.Unlock()
 		return c.conn
 	default:
 		return nil
@@ -247,14 +293,14 @@ func (c *tfoConn) dialed() stdnet.Conn {
 }
 
 func (c *tfoConn) LocalAddr() stdnet.Addr {
-	if conn := c.dialed(); conn != nil {
+	if conn := c.current(); conn != nil {
 		return conn.LocalAddr()
 	}
 	return &stdnet.TCPAddr{}
 }
 
 func (c *tfoConn) RemoteAddr() stdnet.Addr {
-	if conn := c.dialed(); conn != nil {
+	if conn := c.current(); conn != nil {
 		return conn.RemoteAddr()
 	}
 	if ap, err := netip.ParseAddrPort(c.address); err == nil {
@@ -271,17 +317,23 @@ func (c *tfoConn) setDeadline(i int, t time.Time) error {
 	} else {
 		c.deadline[i] = t
 	}
-	if c.conn != nil {
-		switch i {
-		case 0:
-			return c.conn.SetReadDeadline(t)
-		case 1:
-			return c.conn.SetWriteDeadline(t)
-		default:
-			return c.conn.SetDeadline(t)
-		}
+	if c.conn == nil {
+		return nil
 	}
-	return nil
+	switch {
+	case i == 1:
+		return c.conn.SetWriteDeadline(t)
+	case c.waiting:
+		// Read sets the read deadline itself while waiting for the first answer.
+		if i < 0 {
+			return c.conn.SetWriteDeadline(t)
+		}
+		return nil
+	case i == 0:
+		return c.conn.SetReadDeadline(t)
+	default:
+		return c.conn.SetDeadline(t)
+	}
 }
 
 func (c *tfoConn) SetDeadline(t time.Time) error      { return c.setDeadline(-1, t) }
