@@ -17,3 +17,8 @@ python3 "$HERE/apply.py" xray-core
 go mod edit -replace github.com/xtls/xray-core=./xray-core
 go get "$TFO"
 go mod tidy
+
+# Check the patch on this machine (Apple's TCP stack when run on macOS).
+cp "$HERE/titan_tfo_test.go" xray-core/transport/internet/
+(cd xray-core && go test -count=1 -v -run TestTitanTFO ./transport/internet/)
+rm xray-core/transport/internet/titan_tfo_test.go
