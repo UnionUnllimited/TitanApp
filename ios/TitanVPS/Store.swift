@@ -10,6 +10,8 @@ final class AppStore: ObservableObject {
     @Published var message: String?
     @Published var pings: [String: Int] = [:]
     @Published var pinging = false
+    /// Devices and their limit from the bot (nil until loaded).
+    @Published var account: AccountAPI.Info?
 
     private let subKey = "titan.subscription"
     private let selKey = "titan.selected"
@@ -39,6 +41,12 @@ final class AppStore: ObservableObject {
     func refresh() async {
         guard let url = subscription?.url else { return }
         await load(url)
+        await loadAccount()
+    }
+
+    func loadAccount() async {
+        guard let url = subscription?.url else { return }
+        if let info = await AccountAPI.fetch(url) { account = info }
     }
 
     private func load(_ url: String) async {

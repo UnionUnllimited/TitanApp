@@ -4,6 +4,7 @@ import SwiftUI
 struct SubscriptionView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.openURL) private var openURL
+    @State private var showCabinet = false
 
     var body: some View {
         ScrollView {
@@ -40,12 +41,30 @@ struct SubscriptionView: View {
                         }
                         .padding(16)
                     }
-                    Button {
-                        Task {
-                            await store.refresh()
-                            let page = store.subscription?.info.webPageUrl.flatMap(URL.init(string:))
-                            openURL(page ?? Config.telegram)
+                    if let acc = store.account, acc.devicesEnabled {
+                        Card {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Устройства").foregroundStyle(.secondary).font(.system(size: 14))
+                                Text("\(acc.devices.count)" + (acc.deviceLimit > 0 ? " из \(acc.deviceLimit)" : ""))
+                                    .font(.system(size: 26, weight: .bold))
+                                ForEach(acc.devices) { d in
+                                    HStack(spacing: 10) {
+                                        Image(systemName: d.os.lowercased().contains("ios") ? "iphone" : d.os.lowercased().contains("android") ? "smartphone" : "desktopcomputer")
+                                            .foregroundStyle(Palette.primary).frame(width: 22)
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text([d.model, d.os + (d.osVersion.isEmpty ? "" : " \(d.osVersion)")].filter { !$0.isEmpty }.joined(separator: " · "))
+                                                .font(.system(size: 14))
+                                            if !d.app.isEmpty { Text(d.app).font(.system(size: 12)).foregroundStyle(.secondary) }
+                                        }
+                                    }
+                                }
+                                Text("Чтобы отвязать лишнее устройство, напишите в поддержку.").font(.system(size: 12)).foregroundStyle(.secondary)
+                            }
+                            .padding(16)
                         }
+                    }
+                    Button {
+                        if info.webPageUrl != nil { showCabinet = true } else { openURL(Config.telegram) }
                     } label: {
                         Label("Личный кабинет", systemImage: "person.crop.circle")
                             .font(.system(size: 17, weight: .semibold))
@@ -57,9 +76,27 @@ struct SubscriptionView: View {
                             Text("В личном кабинете").fontWeight(.semibold)
                             feature("arrow.triangle.2.circlepath", "Продление подписки")
                             feature("chart.pie", "Докупка ГБ для обходов")
-                            feature("laptopcomputer.and.iphone", "Управление устройствами")
-                            feature("tag", "Промокоды и история платежей")
-                            feature("headphones", "Поддержка")
+                            feature("tag", "Коды оплаты")
+                        }
+                        .padding(16)
+                    }
+                    // What the in-app cabinet can't do: the bot or the full cabinet on the site.
+                    Card {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Расширенные функции").fontWeight(.semibold)
+                            Text("Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте или в полном кабинете на сайте (вход по почте или через Telegram).")
+                                .font(.system(size: 13)).foregroundStyle(.secondary)
+                            HStack(spacing: 10) {
+                                Button { openURL(Config.telegram) } label: { Text("Открыть бота").frame(maxWidth: .infinity) }
+                                    .buttonStyle(.bordered)
+                                if let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
+                                    guard let scheme = u.scheme, let host = u.host else { return nil }
+                                    return URL(string: "\(scheme)://\(host)/auth")
+                                }) {
+                                    Button { openURL(site) } label: { Text("Кабинет на сайте").frame(maxWidth: .infinity) }
+                                        .buttonStyle(.bordered)
+                                }
+                            }
                         }
                         .padding(16)
                     }
@@ -70,6 +107,12 @@ struct SubscriptionView: View {
             }
         }
         .background(Palette.background.ignoresSafeArea())
+        .task { await store.loadAccount() }
+        .sheet(isPresented: $showCabinet) {
+            if let link = store.subscription?.info.webPageUrl {
+                CabinetView(link: link, devices: store.account.map { ($0.devices.count, $0.deviceLimit) })
+            }
+        }
     }
 
     private func feature(_ icon: String, _ text: String) -> some View {

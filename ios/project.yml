@@ -1,6 +1,11 @@
 name: TitanVPS
 options:
   bundleIdPrefix: su.titanvps
+packages:
+  # HTML of the site's cabinet (like jsoup on Android).
+  SwiftSoup:
+    url: https://github.com/scinfu/SwiftSoup
+    from: 2.7.0
   deploymentTarget:
     iOS: "16.0"
 targets:
@@ -15,6 +20,7 @@ targets:
       - framework: Frameworks/LibXray.xcframework
         embed: false
       - sdk: libresolv.tbd
+      - package: SwiftSoup
     entitlements:
       path: TitanVPS/TitanVPS.entitlements
       properties:
