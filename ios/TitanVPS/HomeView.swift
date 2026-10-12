@@ -210,7 +210,7 @@ struct HomeView: View {
             ForEach(groups[page] ?? groups[.servers] ?? []) { s in
                 ServerRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
                           unsupported: Plugins.endpoint(s).map { !$0.kind.supportedOnIOS } ?? false,
-                          onPing: { store.pingOne(s) }, limited: page == .bypass,
+                          onPing: { store.pingOne(s) }, error: store.pingErrors[s.id], limited: page == .bypass,
                           selected: s.id == store.selected?.id) {
                     let changed = s.id != store.selected?.id
                     store.select(s.id)
@@ -256,6 +256,8 @@ struct ServerRow: View {
     /// A protocol the iPhone app can't run yet (Naive, TUIC…).
     var unsupported: Bool = false
     var onPing: () -> Void = {}
+    /// Why the last ping failed.
+    var error: String? = nil
     var limited: Bool = false
     let selected: Bool
     let onTap: () -> Void
@@ -283,6 +285,9 @@ struct ServerRow: View {
                     Text(unsupported ? "Пока не работает на iPhone" : limited ? "Лимитный · расходует ГБ" : "Безлимит")
                         .font(.system(size: 11))
                         .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
+                    if let error, ping == -1, !pending {
+                        Text(error).font(.system(size: 10)).foregroundStyle(.red.opacity(0.8)).lineLimit(2)
+                    }
                 }
                 Spacer()
                 // Tap the ping to measure just this server (again to stop).

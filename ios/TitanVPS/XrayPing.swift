@@ -32,13 +32,13 @@ enum XrayPing {
 
     /// Measures [servers], reporting each one's best ms (-1: nothing answered) as soon as
     /// its call is done. Every server's members go into the same call where they fit.
-    static func pingMany(_ servers: [Server], timeout: Int = 5, onResult: @escaping @MainActor (String, Int) -> Void) async {
+    static func pingMany(_ servers: [Server], timeout: Int = 5, onResult: @escaping @MainActor (String, Int, String?) -> Void) async {
         struct Item { let server: String; let json: String; let tag: String }
         var batches: [[Item]] = [[]]
         for server in servers {
             guard let tag = server.proxyTag, let json = try? Plugins.prepare(server),
                   let cfg = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else {
-                await onResult(server.id, -1)
+                await onResult(server.id, -1, "Не удалось разобрать конфиг сервера")
                 continue
             }
             let items = tags(cfg, proxyTag: tag).map { Item(server: server.id, json: json, tag: $0) }
@@ -49,33 +49,44 @@ enum XrayPing {
             if Task.isCancelled { return }
             let delays = await run(batch.map { ($0.json, $0.tag) }, timeout: timeout)
             var best: [String: Int] = [:]
+            var reason: [String: String] = [:]
             var order: [String] = []
-            for (item, ms) in zip(batch, delays) {
+            for (item, result) in zip(batch, delays) {
+                let ms = result.0
                 if best[item.server] == nil { order.append(item.server); best[item.server] = -1 }
                 if ms >= 0 && (best[item.server]! < 0 || ms < best[item.server]!) { best[item.server] = ms }
+                if ms < 0, reason[item.server] == nil, let e = result.1, !e.isEmpty { reason[item.server] = e }
             }
             if Task.isCancelled { return }
-            for id in order { await onResult(id, best[id] ?? -1) }
+            for id in order {
+                let ms = best[id] ?? -1
+                await onResult(id, ms, ms < 0 ? reason[id] : nil)
+            }
         }
     }
 
-    /// One pingBatch call: ms per (config, outbound tag), -1 for a failure.
-    private static func run(_ items: [(String, String)], timeout: Int) async -> [Int] {
+    /// One pingBatch call: ms per (config, outbound tag), -1 for a failure (with Xray's reason).
+    private static func run(_ items: [(String, String)], timeout: Int) async -> [(Int, String?)] {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
-                let failed = [Int](repeating: -1, count: items.count)
+                var failed = [(Int, String?)](repeating: (-1, nil), count: items.count)
                 let request: [String: Any] = [
                     "apiVersion": 3, "method": "pingBatch",
                     "payload": ["configs": items.map { ["xrayJson": $0.0, "outboundTag": $0.1] }, "timeout": timeout, "url": url],
                 ]
                 guard let data = try? JSONSerialization.data(withJSONObject: request) else { cont.resume(returning: failed); return }
                 let response = LibXrayInvoke(String(decoding: data, as: UTF8.self))
-                guard let obj = (try? JSONSerialization.jsonObject(with: Data(response.utf8))) as? [String: Any],
-                      obj["success"] as? Bool == true,
+                let parsed = (try? JSONSerialization.jsonObject(with: Data(response.utf8))) as? [String: Any]
+                guard let obj = parsed, obj["success"] as? Bool == true,
                       let results = (obj["data"] as? [String: Any])?["results"] as? [[String: Any]],
-                      results.count == items.count else { cont.resume(returning: failed); return }
+                      results.count == items.count else {
+                    let e = (parsed?["error"] as? String) ?? "libXray не ответил"
+                    failed = failed.map { _ in (-1, e) }
+                    cont.resume(returning: failed)
+                    return
+                }
                 cont.resume(returning: results.map { r in
-                    r["success"] as? Bool == true ? max((r["delay"] as? Int) ?? -1, -1) : -1
+                    r["success"] as? Bool == true ? (max((r["delay"] as? Int) ?? -1, -1), nil) : (-1, r["error"] as? String)
                 })
             }
         }

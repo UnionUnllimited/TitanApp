@@ -9,6 +9,8 @@ final class AppStore: ObservableObject {
     @Published var busy = false
     @Published var message: String?
     @Published var pings: [String: Int] = [:]
+    /// Why the last ping of a server failed (Xray's error), shown under it.
+    @Published var pingErrors: [String: String] = [:]
     @Published var pinging = false
     /// Devices and their limit from the bot (nil until loaded).
     @Published var account: AccountAPI.Info?
@@ -87,9 +89,10 @@ final class AppStore: ObservableObject {
         pinging = true
         measuring = Set(order.map(\.id))
         pingTask = Task {
-            await XrayPing.pingMany(order) { [weak self] id, ms in
+            await XrayPing.pingMany(order) { [weak self] id, ms, error in
                 guard let self, self.pinging else { return }
                 self.pings[id] = ms
+                self.pingErrors[id] = error
                 self.measuring.remove(id)
             }
             if !Task.isCancelled { measuring = []; pinging = false }
@@ -108,9 +111,10 @@ final class AppStore: ObservableObject {
         if measuring.contains(server.id) { measuring.remove(server.id); return }
         measuring.insert(server.id)
         Task {
-            await XrayPing.pingMany([server]) { [weak self] id, ms in
+            await XrayPing.pingMany([server]) { [weak self] id, ms, error in
                 guard let self, self.measuring.contains(id) else { return }
                 self.pings[id] = ms
+                self.pingErrors[id] = error
                 self.measuring.remove(id)
             }
         }

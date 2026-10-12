@@ -4,7 +4,9 @@ package internet
 
 // Titan patch: real TCP Fast Open on iOS/macOS. Setting TCP_FASTOPEN on the socket is not
 // enough there: the data has to go with connectx(). The connection is opened on the first
-// Write, carrying that data in the SYN (tfo-go), like sing-box does.
+// Write, carrying that data in the SYN (tfo-go), like sing-box does. When TFO can't be
+// used (the system refuses the socket options, or the network drops such SYNs), the host is
+// dialed the usual way from then on.
 
 import (
 	"context"
@@ -15,7 +17,14 @@ import (
 	"time"
 
 	"github.com/database64128/tfo-go/v2"
+	"github.com/xtls/xray-core/common/errors"
 )
+
+// How long a TFO dial may take before the host is tried without TFO.
+const tfoDialTimeout = 3 * time.Second
+
+// Hosts where TFO failed: dialed without it from then on.
+var tfoBroken sync.Map
 
 func dialTFO(ctx context.Context, d *stdnet.Dialer, network, address string) (stdnet.Conn, error) {
 	return &tfoConn{
@@ -47,7 +56,7 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 	if !c.started {
 		c.started = true
 		c.mu.Unlock()
-		conn, err := c.dialer.DialContext(c.ctx, c.network, c.address, b)
+		conn, err := c.open(b)
 		c.mu.Lock()
 		c.conn, c.err = conn, err
 		if conn != nil {
@@ -66,6 +75,28 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 		return 0, err
 	}
 	return c.conn.Write(b)
+}
+
+func (c *tfoConn) open(b []byte) (stdnet.Conn, error) {
+	if _, broken := tfoBroken.Load(c.address); !broken {
+		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
+		conn, err := c.dialer.DialContext(ctx, c.network, c.address, b)
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+		tfoBroken.Store(c.address, struct{}{})
+		errors.LogWarning(c.ctx, "TCP Fast Open to ", c.address, " failed, dialing without it: ", err)
+	}
+	conn, err := c.dialer.Dialer.DialContext(c.ctx, c.network, c.address)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.Write(b); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 // Read waits for the first Write: the protocols this is used for speak first.

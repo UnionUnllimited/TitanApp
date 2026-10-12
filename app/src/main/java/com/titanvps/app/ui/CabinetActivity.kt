@@ -45,6 +45,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -89,7 +90,10 @@ class CabinetActivity : ComponentActivity() {
         val devices = intent.getIntExtra(EXTRA_DEVICES, -1).takeIf { it >= 0 }?.let { it to intent.getIntExtra(EXTRA_LIMIT, 0) }
         setContent {
             val mode by TitanApp.get(this).settings.theme.collectAsState()
-            TitanTheme(mode) { CabinetScreen(link, devices, onBack = ::finish) }
+            TitanTheme(mode) {
+                // Surface gives the texts the theme's colour (light on the dark theme).
+                Surface(color = MaterialTheme.colorScheme.background) { CabinetScreen(link, devices, onBack = ::finish) }
+            }
         }
     }
 
