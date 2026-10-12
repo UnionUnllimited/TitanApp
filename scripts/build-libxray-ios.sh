@@ -20,7 +20,7 @@ grep -q 'maxPingBatchConfigs = 256' "$WORK/xray/ping_batch.go" || { echo "failed
 # Real TCP Fast Open on iOS: Xray-core is patched (scripts/ios-patches/xray-tfo) to dial
 # tcpFastOpen hosts through tfo-go, which sends the first data in the SYN via connectx().
 "$ROOT/scripts/ios-patches/xray-tfo/vendor.sh" "$WORK"
-(cd "$WORK" && python3 build/main.py apple gomobile)
+(cd "$WORK" && python3 build/main.py apple gomobile local)
 
 mkdir -p "$ROOT/ios/Frameworks"
 rm -rf "$ROOT/ios/Frameworks/LibXray.xcframework"
