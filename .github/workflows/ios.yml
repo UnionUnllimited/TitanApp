@@ -55,6 +55,7 @@ jobs:
           xcodebuild -project TitanVPS.xcodeproj -scheme TitanVPS -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            MARKETING_VERSION=0.2.${{ github.run_number }} \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
 
       - name: Package IPA
