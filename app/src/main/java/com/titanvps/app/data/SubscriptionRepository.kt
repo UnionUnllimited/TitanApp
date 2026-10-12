@@ -85,9 +85,12 @@ class SubscriptionRepository(private val context: Context) {
             if (XrayConfigs.isXrayJson(body)) XrayConfigs.serversFromXrayJson(body) else emptyList()
         }.getOrDefault(emptyList()).ifEmpty {
             runCatching { XrayConfigs.serversFromOutbounds(XrayCore.convertShareLinks(XrayConfigs.clean(body))) }
-                .getOrElse { throw SubscriptionException("Не удалось загрузить подписку. Попробуйте позже") }
+                .getOrElse { throw SubscriptionException(SubscriptionErrors.unusable(info, body)) }
         }
-        if (servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")
+        if (servers.isEmpty()) throw SubscriptionException(SubscriptionErrors.unusable(info, body))
+        // The panel answers with a stub entry instead of servers (device limit, blocked…):
+        // its text is the reason.
+        SubscriptionErrors.stub(servers.map { it.name })?.let { throw SubscriptionException(it) }
 
         val sub = withoutHidden(Subscription(url, info, servers, System.currentTimeMillis()))
         if (sub.servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")

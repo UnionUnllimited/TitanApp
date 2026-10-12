@@ -30,8 +30,10 @@ object Repository {
                     .filterNot(ServerGroups::isHidden)
                 if (servers.isEmpty()) {
                     if (ua != Config.USER_AGENTS.last()) continue
-                    throw SubscriptionException("В подписке нет серверов")
+                    throw SubscriptionException(SubscriptionErrors.unusable(info, body))
                 }
+                // The panel answers with a stub entry instead of servers (device limit, blocked…).
+                SubscriptionErrors.stub(servers.map { it.name })?.let { throw SubscriptionException(it) }
                 return Subscription(url, info, servers, System.currentTimeMillis())
             } catch (e: Exception) {
                 if (firstError == null) firstError = e
