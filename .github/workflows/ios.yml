@@ -3,7 +3,7 @@ name: iOS
 on:
   push:
     branches: [main, "claude/**"]
-    paths: ["ios/**", ".github/workflows/ios.yml", "scripts/build-libxray-ios.sh"]
+    paths: ["ios/**", ".github/workflows/ios.yml", "scripts/build-libxray-ios.sh", "scripts/ios-patches/**"]
   workflow_dispatch:
     inputs:
       libxray_ref:
