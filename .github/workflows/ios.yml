@@ -33,7 +33,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios/Frameworks/LibXray.xcframework
-          key: libxray-ios-${{ github.event.inputs.libxray_ref || 'v26.9.30' }}-${{ hashFiles('scripts/build-libxray-ios.sh') }}
+          key: libxray-ios-${{ github.event.inputs.libxray_ref || 'v26.9.30' }}-${{ hashFiles('scripts/build-libxray-ios.sh', 'scripts/ios-patches/**') }}
 
       - name: Build LibXray.xcframework
         if: steps.libxray-cache.outputs.cache-hit != 'true'
