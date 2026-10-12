@@ -18,10 +18,15 @@ import (
 
 	"github.com/database64128/tfo-go/v2"
 	"github.com/xtls/xray-core/common/errors"
+	"golang.org/x/sys/unix"
 )
 
 // How long a TFO dial may take before the host is tried without TFO.
 const tfoDialTimeout = 3 * time.Second
+
+// connectx() with data returns before the handshake; if the server hasn't answered the
+// SYN by then, the network is taken to drop TFO SYNs and the host is dialed without TFO.
+const tfoHandshakeTimeout = 1500 * time.Millisecond
 
 // Hosts where TFO failed: dialed without it from then on.
 var tfoBroken sync.Map
@@ -83,7 +88,10 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, error) {
 		conn, err := c.dialer.DialContext(ctx, c.network, c.address, b)
 		cancel()
 		if err == nil {
-			return conn, nil
+			if err = waitEstablished(conn, tfoHandshakeTimeout); err == nil {
+				return conn, nil
+			}
+			conn.Close()
 		}
 		tfoBroken.Store(c.address, struct{}{})
 		errors.LogWarning(c.ctx, "TCP Fast Open to ", c.address, " failed, dialing without it: ", err)
@@ -97,6 +105,39 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, error) {
 		return nil, err
 	}
 	return conn, nil
+}
+
+// waitEstablished waits for the TCP handshake of conn to complete.
+func waitEstablished(conn stdnet.Conn, timeout time.Duration) error {
+	tc, ok := conn.(*stdnet.TCPConn)
+	if !ok {
+		return nil
+	}
+	raw, err := tc.SyscallConn()
+	if err != nil {
+		return nil
+	}
+	const established = 4 // TCPS_ESTABLISHED
+	deadline := time.Now().Add(timeout)
+	for {
+		var state uint8
+		var gerr error
+		if err := raw.Control(func(fd uintptr) {
+			var info *unix.TCPConnectionInfo
+			if info, gerr = unix.GetsockoptTCPConnectionInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_CONNECTION_INFO); gerr == nil {
+				state = info.State
+			}
+		}); err != nil || gerr != nil {
+			return nil // can't tell: keep the connection
+		}
+		if state >= established {
+			return nil
+		}
+		if state == 0 || time.Now().After(deadline) {
+			return os.ErrDeadlineExceeded
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // Read waits for the first Write: the protocols this is used for speak first.
