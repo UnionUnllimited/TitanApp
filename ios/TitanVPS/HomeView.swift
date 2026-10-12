@@ -333,12 +333,17 @@ struct MarqueeText: View {
     @State private var offset: CGFloat = 0
 
     var body: some View {
-        Text(text).font(font).lineLimit(1).fixedSize()
-            .background(GeometryReader { g in
-                Color.clear.onAppear { textWidth = g.size.width }.onChange(of: g.size.width) { textWidth = $0 }
-            })
-            .offset(x: offset)
+        // The layout comes from an invisible truncated copy; the full line is an overlay,
+        // so a long name never widens the row (or the screen).
+        Text(text).font(font).lineLimit(1).opacity(0)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) {
+                Text(text).font(font).lineLimit(1).fixedSize()
+                    .background(GeometryReader { g in
+                        Color.clear.onAppear { textWidth = g.size.width }.onChange(of: g.size.width) { textWidth = $0 }
+                    })
+                    .offset(x: offset)
+            }
             .background(GeometryReader { g in
                 Color.clear.onAppear { boxWidth = g.size.width }.onChange(of: g.size.width) { boxWidth = $0 }
             })
