@@ -26,46 +26,57 @@ enum XrayPing {
         return members.isEmpty ? [proxyTag] : Array(members.prefix(maxMembers))
     }
 
-    /// ms, or -1 if nothing answered.
-    static func ping(_ server: Server, timeout: Int = 5) async -> Int {
-        guard let tag = server.proxyTag, let json = try? Plugins.prepare(server),
-              let cfg = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else { return -1 }
-        let members = tags(cfg, proxyTag: tag)
-        return await withTaskGroup(of: Int.self) { group in
-            // A few members at a time: many at once crowd each other out on a weak network.
-            var next = 0
-            var best = -1
-            while next < min(4, members.count) {
-                let member = members[next]
-                next += 1
-                group.addTask { await pingOne(json, tag: member, timeout: timeout) }
+    /// Probes per pingBatch call (libXray is patched to take that many; one Xray instance
+    /// runs them all in parallel). Calls themselves run one at a time inside libXray.
+    private static let batchSize = 80
+
+    /// Measures [servers], reporting each one's best ms (-1: nothing answered) as soon as
+    /// its call is done. Every server's members go into the same call where they fit.
+    static func pingMany(_ servers: [Server], timeout: Int = 5, onResult: @escaping @MainActor (String, Int) -> Void) async {
+        struct Item { let server: String; let json: String; let tag: String }
+        var batches: [[Item]] = [[]]
+        for server in servers {
+            guard let tag = server.proxyTag, let json = try? Plugins.prepare(server),
+                  let cfg = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else {
+                await onResult(server.id, -1)
+                continue
             }
-            while let ms = await group.next() {
-                if ms >= 0 && (best < 0 || ms < best) { best = ms }
-                if next < members.count {
-                    let member = members[next]
-                    next += 1
-                    group.addTask { await pingOne(json, tag: member, timeout: timeout) }
-                }
+            let items = tags(cfg, proxyTag: tag).map { Item(server: server.id, json: json, tag: $0) }
+            if !batches[batches.count - 1].isEmpty && batches[batches.count - 1].count + items.count > batchSize { batches.append([]) }
+            batches[batches.count - 1].append(contentsOf: items)
+        }
+        for batch in batches where !batch.isEmpty {
+            if Task.isCancelled { return }
+            let delays = await run(batch.map { ($0.json, $0.tag) }, timeout: timeout)
+            var best: [String: Int] = [:]
+            var order: [String] = []
+            for (item, ms) in zip(batch, delays) {
+                if best[item.server] == nil { order.append(item.server); best[item.server] = -1 }
+                if ms >= 0 && (best[item.server]! < 0 || ms < best[item.server]!) { best[item.server] = ms }
             }
-            return best
+            if Task.isCancelled { return }
+            for id in order { await onResult(id, best[id] ?? -1) }
         }
     }
 
-    private static func pingOne(_ json: String, tag: String, timeout: Int) async -> Int {
+    /// One pingBatch call: ms per (config, outbound tag), -1 for a failure.
+    private static func run(_ items: [(String, String)], timeout: Int) async -> [Int] {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
+                let failed = [Int](repeating: -1, count: items.count)
                 let request: [String: Any] = [
                     "apiVersion": 3, "method": "pingBatch",
-                    "payload": ["configs": [["xrayJson": json, "outboundTag": tag]], "timeout": timeout, "url": url],
+                    "payload": ["configs": items.map { ["xrayJson": $0.0, "outboundTag": $0.1] }, "timeout": timeout, "url": url],
                 ]
-                guard let data = try? JSONSerialization.data(withJSONObject: request) else { cont.resume(returning: -1); return }
+                guard let data = try? JSONSerialization.data(withJSONObject: request) else { cont.resume(returning: failed); return }
                 let response = LibXrayInvoke(String(decoding: data, as: UTF8.self))
                 guard let obj = (try? JSONSerialization.jsonObject(with: Data(response.utf8))) as? [String: Any],
                       obj["success"] as? Bool == true,
-                      let result = ((obj["data"] as? [String: Any])?["results"] as? [[String: Any]])?.first,
-                      result["success"] as? Bool == true else { cont.resume(returning: -1); return }
-                cont.resume(returning: max((result["delay"] as? Int) ?? -1, -1))
+                      let results = (obj["data"] as? [String: Any])?["results"] as? [[String: Any]],
+                      results.count == items.count else { cont.resume(returning: failed); return }
+                cont.resume(returning: results.map { r in
+                    r["success"] as? Bool == true ? max((r["delay"] as? Int) ?? -1, -1) : -1
+                })
             }
         }
     }

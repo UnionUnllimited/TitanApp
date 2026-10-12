@@ -49,6 +49,10 @@ final class CabinetAPI {
 
     private let base: URL
     private let session: URLSession
+    /// The cabinet's session cookie, kept by hand: URLSession's own cookie storage drops
+    /// the one set on the sign-in redirect, so redirects are followed here as well.
+    private var cookies: [String: String] = [:]
+    private let lock = NSLock()
 
     private init(base: URL, session: URLSession) {
         self.base = base
@@ -62,9 +66,10 @@ final class CabinetAPI {
         }
         c.path = "/"; c.query = nil
         let config = URLSessionConfiguration.ephemeral
-        config.httpCookieStorage = HTTPCookieStorage()
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
         config.timeoutIntervalForRequest = 20
-        let api = CabinetAPI(base: c.url!, session: URLSession(configuration: config))
+        let api = CabinetAPI(base: c.url!, session: URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil))
         return (api, try await api.page(url))
     }
 
@@ -86,10 +91,10 @@ final class CabinetAPI {
     private func page(_ url: URL) async throws -> Snapshot {
         var req = URLRequest(url: url)
         req.setValue("text/html", forHTTPHeaderField: "Accept")
-        let (body, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              http.url?.path.hasPrefix("/cabinet") == true else {
-            throw Failure(message: "Не удалось войти в кабинет. Обновите подписку и попробуйте ещё раз")
+        let (body, http) = try await send(req)
+        guard (200..<300).contains(http.statusCode), http.url?.path.hasPrefix("/cabinet") == true else {
+            let path = http.url?.path ?? ""
+            throw Failure(message: "Не удалось войти в кабинет (\(http.statusCode)\(path.isEmpty ? "" : ", \(path)")). Обновите подписку и попробуйте ещё раз")
         }
         return try Self.parse(String(decoding: body, as: UTF8.self))
     }
@@ -101,12 +106,46 @@ final class CabinetAPI {
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.httpBody = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(field)\"\r\n\r\n\(value)\r\n--\(boundary)--\r\n".utf8)
-        let (body, resp) = try await session.data(for: req)
+        let (body, resp) = try await send(req)
         guard let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.statusCode
             throw Failure(message: (200..<300).contains(code) ? "Неожиданный ответ сайта" : "Ошибка сайта (\(code))")
         }
         return json
+    }
+
+    /// Sends [request] with the session cookie, following redirects (a POST answered with
+    /// 301/302/303 goes on as a GET) and keeping every cookie set on the way.
+    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        var req = request
+        for _ in 0..<10 {
+            guard let url = req.url else { break }
+            let header = lock.withLock { cookies.map { "\($0.key)=\($0.value)" }.joined(separator: "; ") }
+            if !header.isEmpty { req.setValue(header, forHTTPHeaderField: "Cookie") }
+            let (body, resp) = try await session.data(for: req)
+            guard let http = resp as? HTTPURLResponse else { throw Failure(message: "Нет ответа от сайта") }
+            let fields = http.allHeaderFields.reduce(into: [String: String]()) { d, kv in
+                if let k = kv.key as? String, let v = kv.value as? String { d[k] = v }
+            }
+            let set = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
+            lock.withLock {
+                for c in set {
+                    if let exp = c.expiresDate, exp < Date() { cookies[c.name] = nil } else { cookies[c.name] = c.value }
+                }
+            }
+            guard (300..<400).contains(http.statusCode),
+                  let location = http.value(forHTTPHeaderField: "Location"),
+                  let next = URL(string: location, relativeTo: url)?.absoluteURL else { return (body, http) }
+            var follow = URLRequest(url: next)
+            follow.setValue(req.value(forHTTPHeaderField: "Accept"), forHTTPHeaderField: "Accept")
+            if http.statusCode == 307 || http.statusCode == 308 {
+                follow.httpMethod = req.httpMethod
+                follow.httpBody = req.httpBody
+                follow.setValue(req.value(forHTTPHeaderField: "Content-Type"), forHTTPHeaderField: "Content-Type")
+            }
+            req = follow
+        }
+        throw Failure(message: "Слишком много перенаправлений")
     }
 
     static func parse(_ html: String) throws -> Snapshot {
@@ -168,6 +207,14 @@ final class CabinetAPI {
         }
         d.promo = (try? doc.select("#promoCodeInput").first()) != nil
         return d
+    }
+}
+
+/// Hands every redirect back to CabinetAPI.send, which keeps the cookies set on it.
+private final class NoRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }
 

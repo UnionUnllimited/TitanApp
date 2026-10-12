@@ -78,8 +78,8 @@ final class AppStore: ObservableObject {
     @Published var measuring: Set<String> = []
     private var pingTask: Task<Void, Never>?
 
-    /// Every server through Xray, the tab on screen first, a few at a time; pressed again
-    /// while measuring: stops (old values stay).
+    /// Every server through Xray, the tab on screen first, all in one batch where they fit;
+    /// pressed again while measuring: stops (old values stay).
     func pingAll(first: [String] = []) {
         if pinging { stopPing(); return }
         guard let servers = subscription?.servers else { return }
@@ -87,23 +87,10 @@ final class AppStore: ObservableObject {
         pinging = true
         measuring = Set(order.map(\.id))
         pingTask = Task {
-            await withTaskGroup(of: (String, Int).self) { group in
-                var next = 0
-                while next < min(6, order.count) {
-                    let s = order[next]; next += 1
-                    group.addTask { (s.id, await XrayPing.ping(s)) }
-                }
-                while let result = await group.next() {
-                    if Task.isCancelled { break }
-                    let (id, ms) = result
-                    pings[id] = ms
-                    measuring.remove(id)
-                    if next < order.count {
-                        let s = order[next]; next += 1
-                        group.addTask { (s.id, await XrayPing.ping(s)) }
-                    }
-                }
-                group.cancelAll()
+            await XrayPing.pingMany(order) { [weak self] id, ms in
+                guard let self, self.pinging else { return }
+                self.pings[id] = ms
+                self.measuring.remove(id)
             }
             if !Task.isCancelled { measuring = []; pinging = false }
         }
@@ -121,8 +108,11 @@ final class AppStore: ObservableObject {
         if measuring.contains(server.id) { measuring.remove(server.id); return }
         measuring.insert(server.id)
         Task {
-            let ms = await XrayPing.ping(server)
-            if measuring.contains(server.id) { pings[server.id] = ms; measuring.remove(server.id) }
+            await XrayPing.pingMany([server]) { [weak self] id, ms in
+                guard let self, self.measuring.contains(id) else { return }
+                self.pings[id] = ms
+                self.measuring.remove(id)
+            }
         }
     }
 
