@@ -1,3 +1,5 @@
+//go:build darwin
+
 package internet
 
 // Titan patch check, run on the macOS build machine: a tcpFastOpen dial carries data both

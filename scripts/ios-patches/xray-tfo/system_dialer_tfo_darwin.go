@@ -10,9 +10,11 @@ package internet
 
 import (
 	"context"
+	"fmt"
 	stdnet "net"
 	"net/netip"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +32,46 @@ const tfoHandshakeTimeout = 1500 * time.Millisecond
 
 // Hosts where TFO failed: dialed without it from then on.
 var tfoBroken sync.Map
+
+// What the last TFO connections did, for the app to show next to a failed ping.
+var (
+	tfoLogMu sync.Mutex
+	tfoLog   []string
+)
+
+func tfoNote(format string, args ...any) {
+	tfoLogMu.Lock()
+	defer tfoLogMu.Unlock()
+	tfoLog = append(tfoLog, fmt.Sprintf(format, args...))
+	if len(tfoLog) > 4 {
+		tfoLog = tfoLog[len(tfoLog)-4:]
+	}
+}
+
+// TitanTFOLog returns (and clears) the notes about the last TFO connections.
+func TitanTFOLog() string {
+	tfoLogMu.Lock()
+	defer tfoLogMu.Unlock()
+	s := strings.Join(tfoLog, "; ")
+	tfoLog = nil
+	return s
+}
+
+func tcpInfo(conn stdnet.Conn) *unix.TCPConnectionInfo {
+	tc, ok := conn.(*stdnet.TCPConn)
+	if !ok {
+		return nil
+	}
+	raw, err := tc.SyscallConn()
+	if err != nil {
+		return nil
+	}
+	var info *unix.TCPConnectionInfo
+	_ = raw.Control(func(fd uintptr) {
+		info, _ = unix.GetsockoptTCPConnectionInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_CONNECTION_INFO)
+	})
+	return info
+}
 
 func dialTFO(ctx context.Context, d *stdnet.Dialer, network, address string) (stdnet.Conn, error) {
 	return &tfoConn{
@@ -84,22 +126,31 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 
 func (c *tfoConn) open(b []byte) (stdnet.Conn, error) {
 	if _, broken := tfoBroken.Load(c.address); !broken {
+		start := time.Now()
 		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
 		conn, err := c.dialer.DialContext(ctx, c.network, c.address, b)
 		cancel()
 		if err == nil {
 			if err = waitEstablished(conn, tfoHandshakeTimeout); err == nil {
+				tfoNote("tfo %d B, up in %d ms", len(b), time.Since(start).Milliseconds())
 				return conn, nil
 			}
+			if info := tcpInfo(conn); info != nil {
+				tfoNote("tfo no handshake: state %d tx %d rexmt %d", info.State, info.Txbytes, info.Txretransmitpackets)
+			}
 			conn.Close()
+		} else {
+			tfoNote("tfo dial: %v", err)
 		}
 		tfoBroken.Store(c.address, struct{}{})
 		errors.LogWarning(c.ctx, "TCP Fast Open to ", c.address, " failed, dialing without it: ", err)
 	}
 	conn, err := c.dialer.Dialer.DialContext(c.ctx, c.network, c.address)
 	if err != nil {
+		tfoNote("plain dial: %v", err)
 		return nil, err
 	}
+	tfoNote("plain")
 	if _, err := conn.Write(b); err != nil {
 		conn.Close()
 		return nil, err
@@ -178,6 +229,9 @@ func (c *tfoConn) Close() error {
 	c.mu.Unlock()
 	<-c.ready
 	if c.conn != nil {
+		if info := tcpInfo(c.conn); info != nil {
+			tfoNote("closed: state %d tx %d rx %d rexmt %d", info.State, info.Txbytes, info.Rxbytes, info.Txretransmitpackets)
+		}
 		return c.conn.Close()
 	}
 	return nil

@@ -11,3 +11,6 @@ import (
 func dialTFO(ctx context.Context, d *stdnet.Dialer, network, address string) (stdnet.Conn, error) {
 	return d.DialContext(ctx, network, address)
 }
+
+// TitanTFOLog: nothing to report here.
+func TitanTFOLog() string { return "" }

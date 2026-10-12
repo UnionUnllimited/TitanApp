@@ -13,6 +13,7 @@ rm -rf xray-core
 cp -R "$src" xray-core
 chmod -R u+w xray-core
 python3 "$HERE/apply.py" xray-core
+python3 "$HERE/apply_libxray.py" .
 (cd xray-core && go get "$TFO")
 go mod edit -replace github.com/xtls/xray-core=./xray-core
 go get "$TFO"
