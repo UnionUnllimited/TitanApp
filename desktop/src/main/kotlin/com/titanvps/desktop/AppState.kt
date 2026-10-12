@@ -398,6 +398,10 @@ class AppState {
         if (pinging) { stopPing(); return }
         pingStopped = false
         val ids = servers.map { it.id }
+        // A new run measures everything again, also servers stopped by hand before.
+        stoppedIds.clear()
+        // Spinners right away: getting the ping core ready can take a few seconds.
+        measuring = measuring + ids
         pinging = true
         val run = ++pingRun
         // A stopped run finishing late mustn't end a newer one.

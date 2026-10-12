@@ -175,6 +175,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val order = firstIds.filter { it in ids } + ids.filter { it !in firstIds }
         _pinging.value = true
         pingStopped = false
+        // A new run measures everything again, also servers stopped by hand before.
+        stoppedIds.clear()
+        // Spinners right away: getting the ping core ready can take a few seconds.
+        _measuring.value = _measuring.value + ids
         val run = ++pingRun
         ping(servers, order) { error ->
             // A stopped run finishing late mustn't end a newer one.
