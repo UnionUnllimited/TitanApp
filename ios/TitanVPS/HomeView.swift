@@ -279,7 +279,7 @@ struct ServerRow: View {
                 .frame(width: 34, height: 34)
                 .clipShape(Circle())
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                    MarqueeText(text: name, font: .system(size: 16, weight: .semibold))
                     Text(unsupported ? "Пока не работает на iPhone" : limited ? "Лимитный · расходует ГБ" : "Безлимит")
                         .font(.system(size: 11))
                         .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
@@ -321,5 +321,42 @@ struct ServerRow: View {
         if ms < 500 { return Palette.green }
         if ms < 1500 { return .orange }
         return .red
+    }
+}
+
+/// One line that scrolls to its end and back when it doesn't fit (Android's basicMarquee).
+struct MarqueeText: View {
+    let text: String
+    let font: Font
+    @State private var textWidth: CGFloat = 0
+    @State private var boxWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+
+    var body: some View {
+        Text(text).font(font).lineLimit(1).fixedSize()
+            .background(GeometryReader { g in
+                Color.clear.onAppear { textWidth = g.size.width }.onChange(of: g.size.width) { textWidth = $0 }
+            })
+            .offset(x: offset)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(GeometryReader { g in
+                Color.clear.onAppear { boxWidth = g.size.width }.onChange(of: g.size.width) { boxWidth = $0 }
+            })
+            .clipped()
+            .task(id: "\(text)|\(Int(textWidth))|\(Int(boxWidth))") {
+                offset = 0
+                let distance = textWidth - boxWidth
+                guard distance > 1 else { return }
+                let duration = Double(distance) / 30
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if Task.isCancelled { break }
+                    withAnimation(.linear(duration: duration)) { offset = -distance }
+                    try? await Task.sleep(nanoseconds: UInt64((duration + 2.5) * 1_000_000_000))
+                    if Task.isCancelled { break }
+                    withAnimation(.easeInOut(duration: 0.4)) { offset = 0 }
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                }
+            }
     }
 }

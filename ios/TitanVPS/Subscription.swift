@@ -154,6 +154,17 @@ enum SubscriptionAPI {
         return String(data: d, encoding: .utf8)?.nilIfEmpty
     }
 
+    /// TCP Fast Open, as on Android: hosts whose name (or Host Mapper "titan" field) says
+    /// "tfo" dial with TFO.
+    static func applyTfo(_ name: String, _ proxy: inout [String: Any]) {
+        guard name.lowercased().contains("tfo") || ((proxy["titan"] as? String) ?? "").lowercased().contains("tfo") else { return }
+        var stream = proxy["streamSettings"] as? [String: Any] ?? [:]
+        var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
+        sockopt["tcpFastOpen"] = true
+        stream["sockopt"] = sockopt
+        proxy["streamSettings"] = stream
+    }
+
     /// Xray JSON (array of configs or one config): name from `remarks`, endpoint of the
     /// first proxy outbound for the TCP ping.
     static func parseServers(_ body: String) throws -> [Server] {
@@ -169,10 +180,11 @@ enum SubscriptionAPI {
                   let proxyIndex = outbounds.firstIndex(where: { !service.contains(($0["protocol"] as? String) ?? "") }) else { return nil }
             // Remnawave may omit the tag; routing and ping need one.
             if ((outbounds[proxyIndex]["tag"] as? String) ?? "").isEmpty { outbounds[proxyIndex]["tag"] = "proxy" }
+            let name = ((cfg["remarks"] as? String)?.nilIfEmpty) ?? "Сервер \(i + 1)"
+            applyTfo(name, &outbounds[proxyIndex])
             cfg["outbounds"] = outbounds
             let proxy = outbounds[proxyIndex]
             let proxyTag = proxy["tag"] as? String ?? "proxy"
-            let name = ((cfg["remarks"] as? String)?.nilIfEmpty) ?? "Сервер \(i + 1)"
             cfg.removeValue(forKey: "remarks")
             // Our TUN inbound replaces the config's inbounds (like on Android): rules bound to
             // their tags follow it, and their sniffing settings are kept.
@@ -183,7 +195,8 @@ enum SubscriptionAPI {
             XrayRunConfig.retargetInboundRules(&cfg, oldTags: oldTags)
             let (host, port) = endpoint(proxy)
             let json = (try? JSONSerialization.data(withJSONObject: cfg)).map { String(decoding: $0, as: UTF8.self) }
-            return Server(id: "json-\(i)-\(name.hashValue)", name: name, host: host, port: port,
+            // Stable across launches (hashValue isn't): the picked server stays picked.
+            return Server(id: "json-\(i)-\(name)", name: name, host: host, port: port,
                           proto: (proxy["protocol"] as? String) ?? "", xrayJson: json, proxyTag: proxyTag)
         }
     }
