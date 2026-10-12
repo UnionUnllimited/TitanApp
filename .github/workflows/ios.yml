@@ -6,6 +6,13 @@ on:
     paths: ["ios/**", ".github/workflows/ios.yml"]
   workflow_dispatch:
 
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-15
@@ -32,6 +39,17 @@ jobs:
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/TitanVPS.app Payload/
           zip -qr TitanVPS-unsigned.ipa Payload
+
+      # A plain download link (artifacts need a GitHub login): for signing services
+      # (UDID certificate) and Sideloadly. Not "latest": Android reads releases/latest.
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Titan VPS для iOS (неподписанный IPA) ${{ github.run_number }}
+          make_latest: false
+          files: ios/TitanVPS-unsigned.ipa
 
       - uses: actions/upload-artifact@v4
         with:
