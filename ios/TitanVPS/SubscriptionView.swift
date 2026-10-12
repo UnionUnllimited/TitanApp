@@ -87,13 +87,13 @@ struct SubscriptionView: View {
                             Text("Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте или в полном кабинете на сайте (вход по почте или через Telegram).")
                                 .font(.system(size: 13)).foregroundStyle(.secondary)
                             HStack(spacing: 10) {
-                                Button { openURL(Config.telegram) } label: { Text("Открыть бота").frame(maxWidth: .infinity) }
+                                Button { openURL(Config.telegram) } label: { Text("Открыть бота").lineLimit(1).frame(maxWidth: .infinity) }
                                     .buttonStyle(.bordered)
                                 if let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
                                     guard let scheme = u.scheme, let host = u.host else { return nil }
                                     return URL(string: "\(scheme)://\(host)/auth")
                                 }) {
-                                    Button { openURL(site) } label: { Text("Кабинет на сайте").frame(maxWidth: .infinity) }
+                                    Button { openURL(site) } label: { Text("Открыть сайт").lineLimit(1).frame(maxWidth: .infinity) }
                                         .buttonStyle(.bordered)
                                 }
                             }

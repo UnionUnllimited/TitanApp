@@ -171,10 +171,10 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onO
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     androidx.compose.material3.OutlinedButton(
                         onClick = { context.openUrl(com.titanvps.app.BuildConfig.TELEGRAM_URL) }, modifier = Modifier.weight(1f),
-                    ) { Text("Открыть бота") }
+                    ) { Text("Открыть бота", maxLines = 1) }
                     fullCabinetUrl(info.webPageUrl)?.let { url ->
                         androidx.compose.material3.OutlinedButton(onClick = { context.openUrl(url) }, modifier = Modifier.weight(1f)) {
-                            Text("Кабинет на сайте")
+                            Text("Открыть сайт", maxLines = 1)
                         }
                     }
                 }

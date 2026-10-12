@@ -999,7 +999,7 @@ private fun SubscriptionPage(state: AppState, sub: Subscription) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton({ uri.openUri(Config.TELEGRAM_URL) }, Modifier.weight(1f)) { Text("Открыть бота") }
                     cabinetLink?.let { runCatching { java.net.URI(it) }.getOrNull() }?.takeIf { it.host != null }?.let { site ->
-                        OutlinedButton({ uri.openUri("${site.scheme}://${site.host}/auth") }, Modifier.weight(1f)) { Text("Кабинет на сайте") }
+                        OutlinedButton({ uri.openUri("${site.scheme}://${site.host}/auth") }, Modifier.weight(1f)) { Text("Открыть сайт") }
                     }
                 }
             }
