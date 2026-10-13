@@ -88,9 +88,14 @@ final class AppStore: ObservableObject {
         return true
     }
 
-    func refresh() async {
+    /// quiet: at launch / in the background with a saved subscription: no alert on failure
+    /// (the network may be busy with the VPN coming up), one more try a bit later.
+    func refresh(quiet: Bool = false) async {
         guard let url = subscription?.url else { return }
-        await load(url)
+        if !(await load(url, quiet: quiet)) && quiet {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            await load(url, quiet: true)
+        }
         await loadAccount()
     }
 
@@ -100,7 +105,7 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    private func load(_ url: String) async -> Bool {
+    private func load(_ url: String, quiet: Bool = false) async -> Bool {
         busy = true
         defer { busy = false }
         do {
@@ -110,7 +115,7 @@ final class AppStore: ObservableObject {
             if !sub.servers.contains(where: { $0.id == selectedId }) { select(sub.servers.first?.id) }
             return true
         } catch {
-            message = error.localizedDescription
+            if !quiet || subscription == nil { message = error.localizedDescription }
             return false
         }
     }

@@ -30,7 +30,7 @@ struct RootView: View {
         .task {
             try? await Task.sleep(nanoseconds: 900_000_000)
             withAnimation { splash = false }
-            await store.refresh()
+            await store.refresh(quiet: true)
             // Автоподключение: on at launch too (iOS brings it back after sleep itself).
             if autoconnect, !vpn.isOn, let s = store.selected, !store.blockedOnWifi(s) { await vpn.connect(s) }
         }
