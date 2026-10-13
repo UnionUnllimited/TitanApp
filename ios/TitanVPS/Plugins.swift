@@ -152,7 +152,8 @@ enum Plugins {
 
     /// The config to run for a server: as is, MASQUE rewritten for Xray's own client, or its
     /// proxy pointed at a local SOCKS port with the client to start there.
-    static func prepare(_ server: Server) throws -> PreparedServer {
+    /// forTunnel: for the VPN extension, which can't write into the app's folders (no log file).
+    static func prepare(_ server: Server, forTunnel: Bool = false) throws -> PreparedServer {
         guard let json = server.xrayJson, let tag = server.proxyTag else {
             throw SubscriptionError(message: "Обновите подписку: потяните список серверов вниз")
         }
@@ -165,7 +166,7 @@ enum Plugins {
         // resolved here by the system (TLS names stay the host's), as Mieru on Android.
         let address = resolve(ep.host)
         let port = try Titan.freePort()
-        let log = ep.kind == .mieru ? nil : (NSTemporaryDirectory() as NSString).appendingPathComponent("singbox-\(port).log")
+        let log = ep.kind == .mieru || forTunnel ? nil : (NSTemporaryDirectory() as NSString).appendingPathComponent("singbox-\(port).log")
         if let log { try? FileManager.default.removeItem(atPath: log) }
         let request: [String: Any] = ep.kind == .mieru
             ? ["method": "startMieru", "profile": mieruProfile(ep, address: address), "port": port]

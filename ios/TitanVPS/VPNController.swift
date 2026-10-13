@@ -44,11 +44,23 @@ final class VPNController: ObservableObject {
 
     private func update() {
         guard let connection = manager?.connection else { state = .off; return }
+        let wasConnecting = state == .connecting
         switch connection.status {
         case .connected: state = .connected(since: connection.connectedDate ?? Date())
         case .connecting, .reasserting: state = .connecting
         case .disconnecting: state = .disconnecting
-        default: if case .error = state {} else { state = .off }
+        default:
+            if case .error = state {} else { state = .off }
+            // It fell while starting: show the tunnel's reason instead of a plain "Не подключено".
+            if wasConnecting {
+                connection.fetchLastDisconnectError { [weak self] error in
+                    guard let error else { return }
+                    Task { @MainActor in
+                        guard let self, case .off = self.state else { return }
+                        self.state = .error(Self.describe(error))
+                    }
+                }
+            }
         }
     }
 
@@ -60,7 +72,7 @@ final class VPNController: ObservableObject {
         do {
             // MASQUE rewritten for Xray's own client; TUIC / AnyTLS / ShadowTLS / SSH / Mieru
             // pointed at their client, which the tunnel starts first; Naive says it can't.
-            let prepared = try Plugins.prepare(server)
+            let prepared = try Plugins.prepare(server, forTunnel: true)
             let config = try XrayRunConfig.build(serverJson: prepared.json)
             let m = manager ?? NETunnelProviderManager()
             let proto = (m.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
