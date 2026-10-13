@@ -30,12 +30,18 @@ s = open(p).read()
 old = '"15.0",\n'
 if s.count(old) != 1:
     sys.exit("apple_gomobile.py: gomobile command not found")
-s = s.replace(old, '"15.0", "-tags", "with_quic,with_utls", "-o", "LibXray.xcframework", ".", "./titan",\n')
+s = s.replace(old, '"15.0", "-tags", "with_quic,with_utls,with_naive_outbound", "-o", "LibXray.xcframework", ".", "./titan",\n')
 open(p, "w").write(s)
 PY
 (cd "$WORK" && python3 build/main.py apple gomobile local)
 
+# Naive runs on Chromium's network stack (Cronet, sing-box's naive outbound): its static
+# library isn't part of the Go archive, the app links it itself (project.yml).
+CRONET_DIR="$(cd "$WORK" && go list -m -f '{{.Dir}}' github.com/sagernet/cronet-go/lib/ios_arm64)"
+[ -f "$CRONET_DIR/libcronet.a" ] || { echo "libcronet.a not found" >&2; exit 1; }
+
 mkdir -p "$ROOT/ios/Frameworks"
 rm -rf "$ROOT/ios/Frameworks/LibXray.xcframework"
 cp -R "$WORK/LibXray.xcframework" "$ROOT/ios/Frameworks/"
+cp "$CRONET_DIR/libcronet.a" "$ROOT/ios/Frameworks/LibXray.xcframework/libcronet.a"
 echo "OK: ios/Frameworks/LibXray.xcframework"

@@ -46,7 +46,12 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
-        OTHER_LDFLAGS: ["-lresolv"]
+        # Cronet (Chromium's network stack, for Naive) is linked here, with what it needs.
+        OTHER_LDFLAGS: ["-lresolv", "-lc++", "$(PROJECT_DIR)/Frameworks/LibXray.xcframework/libcronet.a",
+          "-framework", "CoreTelephony", "-framework", "CryptoTokenKit", "-framework", "LocalAuthentication",
+          "-framework", "MobileCoreServices", "-framework", "UniformTypeIdentifiers", "-framework", "SystemConfiguration",
+          "-framework", "CoreText", "-framework", "CoreGraphics", "-framework", "CFNetwork", "-framework", "Network",
+          "-framework", "Security", "-framework", "UIKit"]
 
   # The packet tunnel: Xray (LibXray.xcframework, built in CI from XTLS/libXray) on the utun fd.
   TitanTunnel:
@@ -81,5 +86,10 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: TitanTunnel/TitanTunnel-Bridging-Header.h
         TARGETED_DEVICE_FAMILY: "1,2"
         # gomobile's static library: Go needs these when linked into Swift.
-        OTHER_LDFLAGS: ["-lresolv"]
+        # Cronet (Chromium's network stack, for Naive) is linked here, with what it needs.
+        OTHER_LDFLAGS: ["-lresolv", "-lc++", "$(PROJECT_DIR)/Frameworks/LibXray.xcframework/libcronet.a",
+          "-framework", "CoreTelephony", "-framework", "CryptoTokenKit", "-framework", "LocalAuthentication",
+          "-framework", "MobileCoreServices", "-framework", "UniformTypeIdentifiers", "-framework", "SystemConfiguration",
+          "-framework", "CoreText", "-framework", "CoreGraphics", "-framework", "CFNetwork", "-framework", "Network",
+          "-framework", "Security", "-framework", "UIKit"]
         ENABLE_BITCODE: NO
