@@ -22,7 +22,8 @@ enum PluginKind: String {
         }
     }
 
-    var supportedOnIOS: Bool { self != .naive }
+    /// Naive is sing-box's naive outbound on Cronet (Chromium's network stack, as NaiveProxy).
+    var supportedOnIOS: Bool { true }
 
     static func of(_ text: String) -> PluginKind? {
         let n = text.lowercased()
@@ -246,6 +247,12 @@ enum Plugins {
             outbounds.append([
                 "type": "shadowtls", "tag": "shadowtls", "server": server, "server_port": ep.port,
                 "version": 3, "password": ep.password, "tls": t,
+            ])
+        case .naive:
+            // NaiveProxy: HTTP/2 CONNECT through Chromium's stack to the node's naive inbound.
+            outbounds.append([
+                "type": "naive", "tag": "proxy", "server": server, "server_port": ep.port,
+                "username": ep.user, "password": ep.password, "tls": tls(ep.host),
             ])
         case .ssh:
             // SSH tunnel (like "ssh -D") to the node's gateway, looking like stock OpenSSH.
