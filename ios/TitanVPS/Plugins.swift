@@ -1,5 +1,7 @@
 import CryptoKit
 import Foundation
+import LibXray
+import Network
 
 /// Our protocols beyond Xray's own, as on Android (core/Plugins.kt): which one a host is
 /// (Remnawave Host Mapper's "titan" field, else its name) and its credentials, derived from
@@ -20,8 +22,7 @@ enum PluginKind: String {
         }
     }
 
-    /// Xray speaks it itself.
-    var supportedOnIOS: Bool { self == .masque }
+    var supportedOnIOS: Bool { self != .naive }
 
     static func of(_ text: String) -> PluginKind? {
         let n = text.lowercased()
@@ -49,6 +50,56 @@ struct PluginEndpoint {
     }
     var user: String { String(derived.prefix(16)) }
     var password: String { String(derived.dropFirst(16).prefix(32)) }
+    /// TUIC needs a UUID too: the second half of the hash.
+    var tuicUuid: String {
+        let h = Array(derived.dropFirst(32).prefix(32))
+        return [h[0..<8], h[8..<12], h[12..<16], h[16..<20], h[20..<32]].map { String($0) }.joined(separator: "-")
+    }
+    /// ShadowTLS: "server key:user key" of the Shadowsocks 2022 inside (as the node sync).
+    var ss2022Password: String { "\(Self.ss2022Key("titan-ss2022-server")):\(Self.ss2022Key("titan-ss2022:\(secret)"))" }
+
+    private static func ss2022Key(_ text: String) -> String {
+        Data(SHA256.hash(data: Data(text.utf8)).prefix(16)).base64EncodedString()
+    }
+}
+
+/// A server's config ready to run, and the client to start for it first (a titan request).
+struct PreparedServer {
+    let json: String
+    let plugin: String?
+}
+
+/// Our protocol clients in the framework (package titan): start / stop by JSON request.
+enum Titan {
+    struct Failure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    @discardableResult
+    static func invoke(_ request: [String: Any]) throws -> [String: Any] {
+        let data = try JSONSerialization.data(withJSONObject: request)
+        let response = TitanInvoke(String(decoding: data, as: UTF8.self))
+        let obj = (try? JSONSerialization.jsonObject(with: Data(response.utf8))) as? [String: Any] ?? [:]
+        if let error = obj["error"] as? String { throw Failure(message: error) }
+        return obj
+    }
+
+    static func freePort() throws -> Int {
+        guard let port = try invoke(["method": "freePort"])["port"] as? Int else { throw Failure(message: "нет свободного порта") }
+        return port
+    }
+
+    /// Starts a client from a prepared request; returns its handle.
+    static func start(_ request: String) throws -> Int {
+        guard let req = (try? JSONSerialization.jsonObject(with: Data(request.utf8))) as? [String: Any],
+              let handle = try invoke(req)["handle"] as? Int else { throw Failure(message: "клиент не запустился") }
+        return handle
+    }
+
+    static func stop(_ handle: Int) {
+        _ = try? invoke(["method": "stop", "handle": handle])
+    }
 }
 
 enum Plugins {
@@ -82,17 +133,105 @@ enum Plugins {
         (value as? Int) ?? Int((value as? String) ?? "") ?? 0
     }
 
-    /// The config to run for a server: as is, or MASQUE rewritten for Xray's own client.
-    /// Throws for protocols the iOS app can't run yet.
-    static func prepare(_ server: Server) throws -> String {
+    /// ShadowTLS handshakes with this real site (the node's "handshake" server).
+    static let shadowTlsSni = "www.amd.com"
+
+    /// The config to run for a server: as is, MASQUE rewritten for Xray's own client, or its
+    /// proxy pointed at a local SOCKS port with the client to start there.
+    static func prepare(_ server: Server) throws -> PreparedServer {
         guard let json = server.xrayJson, let tag = server.proxyTag else {
             throw SubscriptionError(message: "Обновите подписку: потяните список серверов вниз")
         }
-        guard let ep = endpoint(server) else { return json }
+        guard let ep = endpoint(server) else { return PreparedServer(json: json, plugin: nil) }
         guard ep.kind.supportedOnIOS else {
             throw SubscriptionError(message: "\(ep.kind.title) пока не работает на iPhone. Выберите другой сервер")
         }
-        return withMasque(json, tag: tag, ep)
+        if ep.kind == .masque { return PreparedServer(json: withMasque(json, tag: tag, ep), plugin: nil) }
+        let port = try Titan.freePort()
+        let request: [String: Any] = ep.kind == .mieru
+            ? ["method": "startMieru", "profile": mieruProfile(ep), "port": port]
+            : ["method": "startSingBox", "config": singBoxConfig(ep, port: port)]
+        let plugin = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
+        return PreparedServer(json: withLocalSocks(json, tag: tag, port: port), plugin: plugin)
+    }
+
+    /// The same config with its proxy outbound sent to our local SOCKS on port.
+    static func withLocalSocks(_ json: String, tag: String, port: Int) -> String {
+        guard var cfg = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              var outbounds = cfg["outbounds"] as? [[String: Any]] else { return json }
+        for i in outbounds.indices where outbounds[i]["tag"] as? String == tag {
+            outbounds[i] = [
+                "tag": tag,
+                "protocol": "socks",
+                "settings": ["servers": [["address": "127.0.0.1", "port": port]]],
+            ]
+        }
+        cfg["outbounds"] = outbounds
+        return (try? JSONSerialization.data(withJSONObject: cfg)).map { String(decoding: $0, as: UTF8.self) } ?? json
+    }
+
+    /// sing-box as the client for TUIC / AnyTLS / ShadowTLS / SSH (same as Android's).
+    static func singBoxConfig(_ ep: PluginEndpoint, port: Int) -> String {
+        func tls(_ sni: String) -> [String: Any] { ["enabled": true, "server_name": sni] }
+        // Firefox: Russian DPI stalls the large Chrome ClientHello.
+        let firefox: [String: Any] = ["enabled": true, "fingerprint": "firefox"]
+        var outbounds: [[String: Any]] = []
+        switch ep.kind {
+        case .tuic:
+            var t = tls(ep.host)
+            t["alpn"] = ["h3"]
+            outbounds.append([
+                "type": "tuic", "tag": "proxy", "server": ep.host, "server_port": ep.port,
+                "uuid": ep.tuicUuid, "password": ep.password,
+                "congestion_control": "bbr", "udp_relay_mode": "native", "tls": t,
+            ])
+        case .anytls:
+            var t = tls(ep.host)
+            t["utls"] = firefox
+            outbounds.append(["type": "anytls", "tag": "proxy", "server": ep.host, "server_port": ep.port, "password": ep.password, "tls": t])
+        case .shadowtls:
+            // ShadowTLS v3: a real TLS handshake with the cover site, then Shadowsocks 2022
+            // whose per-user key tells the node who it is.
+            var t = tls(shadowTlsSni)
+            t["utls"] = firefox
+            outbounds.append([
+                "type": "shadowsocks", "tag": "proxy", "method": "2022-blake3-aes-128-gcm",
+                "password": ep.ss2022Password, "detour": "shadowtls",
+            ])
+            outbounds.append([
+                "type": "shadowtls", "tag": "shadowtls", "server": ep.host, "server_port": ep.port,
+                "version": 3, "password": ep.password, "tls": t,
+            ])
+        case .ssh:
+            // SSH tunnel (like "ssh -D") to the node's gateway, looking like stock OpenSSH.
+            outbounds.append([
+                "type": "ssh", "tag": "proxy", "server": ep.host, "server_port": ep.port,
+                "user": ep.user, "password": ep.password,
+                "client_version": "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.5",
+            ])
+        default:
+            break
+        }
+        let cfg: [String: Any] = [
+            "log": ["level": "warn"],
+            "inbounds": [["type": "mixed", "listen": "127.0.0.1", "listen_port": port]],
+            "outbounds": outbounds,
+            "route": ["final": "proxy"],
+        ]
+        return (try? JSONSerialization.data(withJSONObject: cfg)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+    }
+
+    /// Mieru's client profile (same as Android's, without the app-level fields).
+    static func mieruProfile(_ ep: PluginEndpoint) -> String {
+        var server: [String: Any] = ["portBindings": [["port": ep.port, "protocol": "TCP"]]]
+        if IPv4Address(ep.host) != nil || IPv6Address(ep.host) != nil { server["ipAddress"] = ep.host } else { server["domainName"] = ep.host }
+        let profile: [String: Any] = [
+            "profileName": "titan",
+            "user": ["name": ep.user, "password": ep.password],
+            "servers": [server],
+            "mtu": 1400,
+        ]
+        return (try? JSONSerialization.data(withJSONObject: profile)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 
     /// The server's config with its proxy outbound turned into Xray's own MASQUE client.

@@ -20,6 +20,19 @@ grep -q 'maxPingBatchConfigs = 256' "$WORK/xray/ping_batch.go" || { echo "failed
 # Real TCP Fast Open on iOS: Xray-core is patched (scripts/ios-patches/xray-tfo) to dial
 # tcpFastOpen hosts through tfo-go, which sends the first data in the SYN via connectx().
 "$ROOT/scripts/ios-patches/xray-tfo/vendor.sh" "$WORK"
+# Our protocol clients (sing-box: TUIC / AnyTLS / ShadowTLS / SSH, and mieru) in the same
+# framework: one Go runtime per app. Package titan, bound next to libXray's.
+"$ROOT/scripts/ios-patches/titan/vendor.sh" "$WORK"
+python3 - "$WORK/build/app/apple_gomobile.py" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '"15.0",\n'
+if s.count(old) != 1:
+    sys.exit("apple_gomobile.py: gomobile command not found")
+s = s.replace(old, '"15.0", "-tags", "with_quic,with_utls", "-o", "LibXray.xcframework", ".", "./titan",\n')
+open(p, "w").write(s)
+PY
 (cd "$WORK" && python3 build/main.py apple gomobile local)
 
 mkdir -p "$ROOT/ios/Frameworks"

@@ -16,6 +16,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             completionHandler(Self.error("Нет настроек сервера. Подключитесь из приложения"))
             return
         }
+        // TUIC / AnyTLS / ShadowTLS / SSH / Mieru: their client (package titan) on the local
+        // SOCKS port the config's proxy outbound points at.
+        let plugin = (options?["plugin"] as? String)
+            ?? ((protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["plugin"] as? String)
         setTunnelNetworkSettings(Self.networkSettings()) { [weak self] error in
             guard let self else { return }
             if let error {
@@ -23,10 +27,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
             do {
+                if let plugin { try self.startPlugin(plugin) }
                 try self.startXray(config)
                 completionHandler(nil)
             } catch {
                 self.log.error("start failed: \(error.localizedDescription, privacy: .public)")
+                self.stopPlugin()
                 completionHandler(error)
             }
         }
@@ -34,7 +40,25 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         _ = Self.invoke("stopXray")
+        stopPlugin()
         completionHandler()
+    }
+
+    private var pluginHandle: Int?
+
+    private func startPlugin(_ request: String) throws {
+        stopPlugin()
+        let obj = (try? JSONSerialization.jsonObject(with: Data(TitanInvoke(request).utf8))) as? [String: Any] ?? [:]
+        guard let handle = obj["handle"] as? Int else {
+            throw Self.error("Клиент протокола не запустился: \((obj["error"] as? String) ?? "нет ответа")")
+        }
+        pluginHandle = handle
+    }
+
+    private func stopPlugin() {
+        guard let handle = pluginHandle else { return }
+        _ = TitanInvoke("{\"method\":\"stop\",\"handle\":\(handle)}")
+        pluginHandle = nil
     }
 
     private static func networkSettings() -> NEPacketTunnelNetworkSettings {

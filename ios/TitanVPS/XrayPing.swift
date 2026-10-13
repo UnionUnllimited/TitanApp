@@ -35,8 +35,20 @@ enum XrayPing {
     static func pingMany(_ servers: [Server], timeout: Int = 5, onResult: @escaping @MainActor (String, Int, String?) -> Void) async {
         struct Item { let server: String; let json: String; let tag: String }
         var batches: [[Item]] = [[]]
+        // Our protocol clients (sing-box, mieru) run here for the time of the ping.
+        var clients: [Int] = []
+        defer { clients.forEach(Titan.stop) }
         for server in servers {
-            guard let tag = server.proxyTag, let json = try? Plugins.prepare(server),
+            let prepared: PreparedServer
+            do {
+                prepared = try Plugins.prepare(server)
+                if let plugin = prepared.plugin { clients.append(try Titan.start(plugin)) }
+            } catch {
+                await onResult(server.id, -1, error.localizedDescription)
+                continue
+            }
+            let json = prepared.json
+            guard let tag = server.proxyTag,
                   let cfg = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else {
                 await onResult(server.id, -1, "Не удалось разобрать конфиг сервера")
                 continue

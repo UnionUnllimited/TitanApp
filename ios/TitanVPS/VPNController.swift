@@ -58,13 +58,17 @@ final class VPNController: ObservableObject {
             return
         }
         do {
-            // MASQUE rewritten for Xray's own client; protocols iOS can't run yet say so.
-            let config = try XrayRunConfig.build(serverJson: try Plugins.prepare(server))
+            // MASQUE rewritten for Xray's own client; TUIC / AnyTLS / ShadowTLS / SSH / Mieru
+            // pointed at their client, which the tunnel starts first; Naive says it can't.
+            let prepared = try Plugins.prepare(server)
+            let config = try XrayRunConfig.build(serverJson: prepared.json)
             let m = manager ?? NETunnelProviderManager()
             let proto = (m.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
             proto.providerBundleIdentifier = tunnelId
             proto.serverAddress = server.name
-            proto.providerConfiguration = ["config": config]
+            var provider: [String: Any] = ["config": config]
+            if let plugin = prepared.plugin { provider["plugin"] = plugin }
+            proto.providerConfiguration = provider
             proto.disconnectOnSleep = false
             m.protocolConfiguration = proto
             m.localizedDescription = "Titan VPS"
@@ -75,7 +79,9 @@ final class VPNController: ObservableObject {
             try await m.loadFromPreferences()
             manager = m
             observe()
-            try m.connection.startVPNTunnel(options: ["config": config as NSString])
+            var options: [String: NSObject] = ["config": config as NSString]
+            if let plugin = prepared.plugin { options["plugin"] = plugin as NSString }
+            try m.connection.startVPNTunnel(options: options)
         } catch {
             state = .error(Self.describe(error))
         }
