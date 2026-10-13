@@ -29,6 +29,13 @@ import (
 )
 
 const (
+	// Data Apple's TCP puts in a SYN. Before the handshake it assumes the default MSS (512
+	// for IPv4, 1024 for IPv6) and sends no data at all in the SYN when more than that
+	// minus 40 bytes of options is queued (tcp_tfo_check), dialing plainly instead. Linux
+	// sends up to the cached MSS. So the SYN gets the first part, the rest follows.
+	tfoSynData4 = 512 - 40
+	tfoSynData6 = 1024 - 40
+
 	// How long a TFO dial may take before the host is tried without TFO.
 	tfoDialTimeout = 3 * time.Second
 	// How long the first answer may take on a TFO connection.
@@ -81,7 +88,7 @@ func (c *tfoConn) traffic() string {
 	if c.got > 0 {
 		first = fmt.Sprintf("%d ms", c.firstByte.Milliseconds())
 	}
-	return fmt.Sprintf("%d ms, sent %d B, got %d B, first byte %s", time.Since(c.dialed).Milliseconds(), c.sent, c.got, first)
+	return fmt.Sprintf("%d ms, sent %d B, got %d B, first byte %s after dial start", time.Since(c.started2).Milliseconds(), c.sent, c.got, first)
 }
 
 func dialTFO(ctx context.Context, d *stdnet.Dialer, network, address string) (stdnet.Conn, error) {
@@ -112,6 +119,7 @@ type tfoConn struct {
 	sent, got int
 	viaTFO    bool
 	firstByte time.Duration
+	started2  time.Time // when the first dial began
 
 	// While waiting for the server's first byte on a TFO connection.
 	waiting bool
@@ -125,8 +133,10 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 	if !c.started {
 		c.started = true
 		c.mu.Unlock()
+		start := time.Now()
 		conn, viaTFO, err := c.open(b)
 		c.mu.Lock()
+		c.started2 = start
 		c.conn, c.err = conn, err
 		c.viaTFO = viaTFO
 		if err == nil {
@@ -175,9 +185,7 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
 	if since, broken := tfoBroken.Load(c.address); !broken || time.Since(since.(time.Time)) > tfoRetryAfter {
 		start := time.Now()
-		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
-		conn, err := c.dialer.DialContext(ctx, c.network, c.address, b)
-		cancel()
+		conn, err := c.dialSYN(b)
 		if err == nil {
 			tfoNote("tfo %d B in %d ms", len(b), time.Since(start).Milliseconds())
 			return conn, true, nil
@@ -186,6 +194,31 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
 	}
 	conn, err := c.dialPlain(b)
 	return conn, false, err
+}
+
+// dialSYN dials with TFO, as much of data in the SYN as Apple's TCP takes, the rest after.
+func (c *tfoConn) dialSYN(data []byte) (stdnet.Conn, error) {
+	limit := tfoSynData4
+	if ap, err := netip.ParseAddrPort(c.address); err == nil && ap.Addr().Is6() && !ap.Addr().Is4In6() {
+		limit = tfoSynData6
+	}
+	first := data
+	if len(first) > limit {
+		first = first[:limit]
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
+	conn, err := c.dialer.DialContext(ctx, c.network, c.address, first)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	if rest := data[len(first):]; len(rest) > 0 {
+		if _, err := conn.Write(rest); err != nil {
+			conn.Close()
+			return nil, err
+		}
+	}
+	return conn, nil
 }
 
 func (c *tfoConn) dialPlain(data []byte) (stdnet.Conn, error) {
@@ -233,8 +266,8 @@ func (c *tfoConn) Read(b []byte) (int, error) {
 		n, err := conn.Read(b)
 		if n > 0 {
 			c.mu.Lock()
-			if c.got == 0 && !c.dialed.IsZero() {
-				c.firstByte = time.Since(c.dialed)
+			if c.got == 0 && !c.started2.IsZero() {
+				c.firstByte = time.Since(c.started2)
 			}
 			c.got += n
 			c.mu.Unlock()
@@ -285,9 +318,7 @@ func (c *tfoConn) redial(old stdnet.Conn, readErr error) bool {
 	if c.tries == 1 {
 		c.tries = 2
 		tfoNote("tfo silent %d ms, again", time.Since(c.dialed).Milliseconds())
-		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
-		conn, err := c.dialer.DialContext(ctx, c.network, c.address, c.kept)
-		cancel()
+		conn, err := c.dialSYN(c.kept)
 		if err == nil {
 			_ = conn.SetWriteDeadline(c.deadline[1])
 			c.conn, c.dialed = conn, time.Now()

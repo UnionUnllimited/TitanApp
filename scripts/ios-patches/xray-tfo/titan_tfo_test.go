@@ -64,6 +64,32 @@ func TestTitanTFO(t *testing.T) {
 	_, broken := tfoBroken.Load(ln.Addr().String())
 	t.Logf("TFO listener: %v, host marked broken: %v", lc.TFO(), broken)
 
+	// A first write larger than a SYN takes: split, all of it arrives in order.
+	big, _ := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	defer big.Close()
+	payload := make([]byte, 1500)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	go func() {
+		c, _ := big.Accept()
+		b := make([]byte, len(payload))
+		io.ReadFull(c, b)
+		c.Write(b)
+		c.Close()
+	}()
+	bc, err := dialTFO(context.Background(), &stdnet.Dialer{Timeout: 5 * time.Second}, "tcp", big.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc.Write(payload)
+	bc.SetReadDeadline(time.Now().Add(5 * time.Second))
+	echo, _ := io.ReadAll(bc)
+	bc.Close()
+	if string(echo) != string(payload) {
+		t.Fatalf("big write: got %d B back", len(echo))
+	}
+
 	plain, _ := stdnet.Listen("tcp", "127.0.0.1:0")
 	defer plain.Close()
 	titanEcho(t, plain)
