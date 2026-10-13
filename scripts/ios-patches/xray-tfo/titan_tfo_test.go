@@ -95,43 +95,18 @@ func TestTitanTFO(t *testing.T) {
 	titanEcho(t, plain)
 	titanRoundTrip(t, plain.Addr().String())
 
-	// A server that never answers the first two connections: the data goes again with TFO,
-	// then plainly.
-	silent, _ := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	defer silent.Close()
+	// A server that stays silent for a while (an XHTTP upload): the connection is kept.
+	slow, _ := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	defer slow.Close()
 	go func() {
-		first, _ := silent.Accept()
-		defer first.Close()
-		second, _ := silent.Accept()
-		defer second.Close()
-		c, _ := silent.Accept()
+		c, _ := slow.Accept()
 		b := make([]byte, 5)
 		io.ReadFull(c, b)
+		time.Sleep(2500 * time.Millisecond)
 		c.Write(append([]byte("re:"), b...))
 		c.Close()
 	}()
-	titanRoundTrip(t, silent.Addr().String())
-	if _, broken := tfoBroken.Load(silent.Addr().String()); !broken {
-		t.Fatal("silent host not marked")
-	}
-	t.Log(TitanTFOLog())
-
-	// Answering the second (TFO) connection: no plain dial, host not marked.
-	cookie, _ := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	defer cookie.Close()
-	go func() {
-		first, _ := cookie.Accept()
-		defer first.Close()
-		c, _ := cookie.Accept()
-		b := make([]byte, 5)
-		io.ReadFull(c, b)
-		c.Write(append([]byte("re:"), b...))
-		c.Close()
-	}()
-	titanRoundTrip(t, cookie.Addr().String())
-	if _, broken := tfoBroken.Load(cookie.Addr().String()); broken {
-		t.Fatal("host answering the second TFO connection marked")
-	}
+	titanRoundTrip(t, slow.Addr().String())
 	t.Log(TitanTFOLog())
 
 	c, _ := dialTFO(context.Background(), &stdnet.Dialer{}, "tcp", ln.Addr().String())
