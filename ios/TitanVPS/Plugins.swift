@@ -67,6 +67,20 @@ struct PluginEndpoint {
 struct PreparedServer {
     let json: String
     let plugin: String?
+    /// sing-box's log (warnings and errors), shown under a server whose ping failed.
+    var log: String? = nil
+
+    /// The end of the client's log, if it wrote anything.
+    func logTail(_ limit: Int = 300) -> String? {
+        guard let log, let text = try? String(contentsOfFile: log, encoding: .utf8) else { return nil }
+        let lines = text.split(separator: "\n").map { line in
+            // "+0300 2026-10-13 17:24:01 ERROR [123 1ms] outbound/tuic[proxy]: …" → "ERROR outbound/tuic[proxy]: …"
+            line.replacingOccurrences(of: #"^[+-]\d{4} \S+ \S+ "#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"\[\d+ [^\]]*\] "#, with: "", options: .regularExpression)
+        }
+        let tail = lines.suffix(3).joined(separator: "; ")
+        return tail.isEmpty ? nil : String(tail.suffix(limit))
+    }
 }
 
 /// Our protocol clients in the framework (package titan): start / stop by JSON request.
@@ -148,11 +162,13 @@ enum Plugins {
         }
         if ep.kind == .masque { return PreparedServer(json: withMasque(json, tag: tag, ep), plugin: nil) }
         let port = try Titan.freePort()
+        let log = ep.kind == .mieru ? nil : (NSTemporaryDirectory() as NSString).appendingPathComponent("singbox-\(port).log")
+        if let log { try? FileManager.default.removeItem(atPath: log) }
         let request: [String: Any] = ep.kind == .mieru
             ? ["method": "startMieru", "profile": mieruProfile(ep), "port": port]
-            : ["method": "startSingBox", "config": singBoxConfig(ep, port: port)]
+            : ["method": "startSingBox", "config": singBoxConfig(ep, port: port, log: log)]
         let plugin = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
-        return PreparedServer(json: withLocalSocks(json, tag: tag, port: port), plugin: plugin)
+        return PreparedServer(json: withLocalSocks(json, tag: tag, port: port), plugin: plugin, log: log)
     }
 
     /// The same config with its proxy outbound sent to our local SOCKS on port.
@@ -171,7 +187,7 @@ enum Plugins {
     }
 
     /// sing-box as the client for TUIC / AnyTLS / ShadowTLS / SSH (same as Android's).
-    static func singBoxConfig(_ ep: PluginEndpoint, port: Int) -> String {
+    static func singBoxConfig(_ ep: PluginEndpoint, port: Int, log: String? = nil) -> String {
         func tls(_ sni: String) -> [String: Any] { ["enabled": true, "server_name": sni] }
         // Firefox: Russian DPI stalls the large Chrome ClientHello.
         let firefox: [String: Any] = ["enabled": true, "fingerprint": "firefox"]
@@ -212,8 +228,10 @@ enum Plugins {
         default:
             break
         }
+        var logOptions: [String: Any] = ["level": "warn", "timestamp": false]
+        if let log { logOptions["output"] = log }
         let cfg: [String: Any] = [
-            "log": ["level": "warn"],
+            "log": logOptions,
             "inbounds": [["type": "mixed", "listen": "127.0.0.1", "listen_port": port]],
             "outbounds": outbounds,
             "route": ["final": "proxy"],

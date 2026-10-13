@@ -38,11 +38,15 @@ enum XrayPing {
         // Our protocol clients (sing-box, mieru) run here for the time of the ping.
         var clients: [Int] = []
         defer { clients.forEach(Titan.stop) }
+        var logs: [String: PreparedServer] = [:]
         for server in servers {
             let prepared: PreparedServer
             do {
                 prepared = try Plugins.prepare(server)
-                if let plugin = prepared.plugin { clients.append(try Titan.start(plugin)) }
+                if let plugin = prepared.plugin {
+                    clients.append(try Titan.start(plugin))
+                    if prepared.log != nil { logs[server.id] = prepared }
+                }
             } catch {
                 await onResult(server.id, -1, error.localizedDescription)
                 continue
@@ -72,7 +76,10 @@ enum XrayPing {
             if Task.isCancelled { return }
             for id in order {
                 let ms = best[id] ?? -1
-                await onResult(id, ms, ms < 0 ? reason[id] : nil)
+                // A failed protocol client says why in its own log.
+                let clientLog = ms < 0 ? logs[id]?.logTail() : nil
+                let why = [reason[id], clientLog.map { "[\($0)]" }].compactMap { $0 }.joined(separator: " ")
+                await onResult(id, ms, ms < 0 && !why.isEmpty ? why : nil)
             }
         }
     }
