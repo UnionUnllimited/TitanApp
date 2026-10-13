@@ -21,6 +21,13 @@ targets:
         embed: false
       - sdk: libresolv.tbd
       - package: SwiftSoup
+    # titanvps://import/<key> and titanvps://add?url=<key> links (same as Android).
+    info:
+      path: TitanVPS/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: su.titanvps.app
+            CFBundleURLSchemes: [titanvps]
     entitlements:
       path: TitanVPS/TitanVPS.entitlements
       properties:

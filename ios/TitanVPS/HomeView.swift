@@ -7,6 +7,8 @@ struct HomeView: View {
     @AppStorage("theme") private var theme = "system"
     @State private var page: ServerGroup = .servers
     @State private var expanded = false
+    @State private var wifiInfo = false
+    @Environment(\.openURL) private var openURL
     var openSubscription: () -> Void
     var openSettings: () -> Void
 
@@ -37,6 +39,19 @@ struct HomeView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Palette.background.ignoresSafeArea())
+        .alert("Недоступно на Wi-Fi", isPresented: $wifiInfo) {
+            Button("Понятно", role: .cancel) {}
+        } message: {
+            Text("Обходы работают только через мобильный интернет и нужны при его ограничениях. На Wi-Fi подключиться к ним нельзя — выберите сервер во вкладке «Серверы».")
+        }
+        // Wi-Fi came while on a bypass server: move to a regular one (same as Android).
+        .onChange(of: store.onWifi) { wifi in
+            guard wifi, vpn.isOn, store.blockedOnWifi(store.selected), let to = store.firstRegular else { return }
+            store.select(to.id)
+            page = .servers
+            Task { await vpn.switchTo(to) }
+            store.message = "Обходы работают только через мобильный интернет. Переключили на «\(to.name.splitFlag.1)»."
+        }
     }
 
     private var statusTitle: String {
@@ -50,7 +65,7 @@ struct HomeView: View {
 
     private var header: some View {
         HStack {
-            squareButton("gearshape", action: openSettings)
+            squareButton("headphones") { openURL(store.supportURL) }
             Spacer()
             HStack(spacing: 8) {
                 Image("Logo").resizable().scaledToFit().frame(width: 40, height: 40)
@@ -76,6 +91,21 @@ struct HomeView: View {
 
     @ViewBuilder private var controls: some View {
         if let sub = store.subscription {
+            if let status = store.account?.status, let text = ["BLOCKED": "Аккаунт заблокирован. Напишите в поддержку",
+                                                               "MAINTENANCE": "Идут технические работы. Подключение может не работать"][status] {
+                Button { openURL(store.supportURL) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(text).multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(14)
+                    .background(status == "BLOCKED" ? Color.red : Color.orange, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
             subscriptionCard(sub)
             powerSwitch
             VStack(spacing: 4) {
@@ -88,7 +118,9 @@ struct HomeView: View {
                             .font(.system(size: 14).monospacedDigit()).foregroundStyle(.secondary)
                     }
                 }
-                Text(store.selected.map { $0.name.splitFlag.1 } ?? "Выберите сервер")
+                Text(store.selected.map { s in
+                    s.name.splitFlag.1 + (store.pings[s.id].flatMap { $0 >= 0 ? " · \($0) мс" : nil } ?? "")
+                } ?? "Выберите сервер")
                     .foregroundStyle(.secondary).lineLimit(1)
                 if case .error(let message) = vpn.state {
                     Text(message).font(.system(size: 13)).foregroundStyle(.red).multilineTextAlignment(.center)
@@ -157,6 +189,10 @@ struct HomeView: View {
             }
             Button {
                 guard !vpn.isOn, let server = store.selected else { return }
+                if store.blockedOnWifi(server) {
+                    store.message = "Обходы недоступны на Wi-Fi — выберите сервер"
+                    return
+                }
                 Task { await vpn.connect(server) }
             } label: {
                 Label("Вкл", systemImage: "checkmark.shield").font(.system(size: 18, weight: .semibold))
@@ -199,7 +235,10 @@ struct HomeView: View {
                 if page == .servers {
                     Text("Безлимит на обычных серверах")
                 } else if sub.info.total > 0 {
-                    Text("Трафик: \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
+                    HStack(spacing: 6) {
+                        Text("Трафик: \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
+                        Button("Докупить ГБ", action: openSubscription).font(.system(size: 13, weight: .semibold))
+                    }
                 } else {
                     Text("Для ограничений мобильного интернета")
                 }
@@ -207,17 +246,39 @@ struct HomeView: View {
             .font(.system(size: 13)).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
 
-            ForEach(groups[page] ?? groups[.servers] ?? []) { s in
+            if page == .bypass && store.onWifi {
+                Text("Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Серверы».")
+                    .font(.system(size: 13)).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
+            }
+            // Favourites first, in the subscription's order otherwise.
+            let items = groups[page] ?? groups[.servers] ?? []
+            ForEach(items.filter(store.isFavorite) + items.filter { !store.isFavorite($0) }) { s in
+                let locked = store.blockedOnWifi(s)
                 ServerRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
                           unsupported: Plugins.endpoint(s).map { !$0.kind.supportedOnIOS } ?? false,
                           onPing: { store.pingOne(s) }, error: store.pingErrors[s.id], limited: page == .bypass,
+                          favorite: store.isFavorite(s), locked: locked,
                           selected: s.id == store.selected?.id) {
-                    let changed = s.id != store.selected?.id
-                    store.select(s.id)
-                    if changed { Task { await vpn.switchTo(s) } }
+                    if locked { wifiInfo = true; return }
+                    pick(s)
+                }
+                .contextMenu {
+                    Button { pick(s) } label: { Label("Выбрать", systemImage: "checkmark.circle") }
+                        .disabled(locked)
+                    Button { store.pingOne(s) } label: { Label("Пинг", systemImage: "speedometer") }
+                    Button { store.toggleFavorite(s) } label: {
+                        store.isFavorite(s) ? Label("Убрать из избранного", systemImage: "star.slash") : Label("В избранное", systemImage: "star")
+                    }
                 }
             }
         }
+    }
+
+    private func pick(_ s: Server) {
+        let changed = s.id != store.selected?.id
+        store.select(s.id)
+        if changed { Task { await vpn.switchTo(s) } }
     }
 
     private func tabChip(_ g: ServerGroup, _ count: Int) -> some View {
@@ -259,6 +320,9 @@ struct ServerRow: View {
     /// Why the last ping failed.
     var error: String? = nil
     var limited: Bool = false
+    var favorite: Bool = false
+    /// A bypass server while on Wi-Fi: dimmed, a tap explains why.
+    var locked: Bool = false
     let selected: Bool
     let onTap: () -> Void
 
@@ -281,7 +345,10 @@ struct ServerRow: View {
                 .frame(width: 34, height: 34)
                 .clipShape(Circle())
                 VStack(alignment: .leading, spacing: 2) {
-                    MarqueeText(text: name, font: .system(size: 16, weight: .semibold))
+                    HStack(spacing: 4) {
+                        if favorite { Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.yellow) }
+                        MarqueeText(text: name, font: .system(size: 16, weight: .semibold))
+                    }
                     Text(unsupported ? "Пока не работает на iPhone" : limited ? "Лимитный · расходует ГБ" : "Безлимит")
                         .font(.system(size: 11))
                         .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
@@ -315,7 +382,7 @@ struct ServerRow: View {
             .frame(minHeight: 60)
             .background(selected ? Palette.primary.opacity(0.08) : Palette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(selected ? Palette.primary : .clear, lineWidth: 1.5))
-            .opacity(unsupported ? 0.55 : 1)
+            .opacity(unsupported || locked ? 0.45 : 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

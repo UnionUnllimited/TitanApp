@@ -39,6 +39,8 @@ struct SubscriptionView: View {
                                 Text("Безлимит").font(.system(size: 26, weight: .bold))
                             }
                             Text("На обычных серверах — безлимит").font(.system(size: 13)).foregroundStyle(.secondary)
+                            Text("Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные серверы не работают. Гигабайты списываются только пока вы подключены к обходу. На Wi-Fi обходы не нужны и недоступны. Закончились ГБ — докупите в личном кабинете.")
+                                .font(.system(size: 12)).foregroundStyle(.secondary).padding(.top, 4)
                         }
                         .padding(16)
                     }
@@ -152,10 +154,13 @@ struct DevicesView: View {
                         HStack(spacing: 12) {
                             Image(systemName: icon(d.os)).foregroundStyle(Palette.primary).frame(width: 26)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text([d.model, d.os + (d.osVersion.isEmpty ? "" : " \(d.osVersion)")].filter { !$0.isEmpty }.joined(separator: " · "))
+                                Text((d.model.isEmpty ? "Устройство" : d.model) + (isThis(d) ? " · это устройство" : ""))
                                     .font(.system(size: 15))
-                                if !d.app.isEmpty {
-                                    Text(AccountAPI.appName(d.app)).font(.system(size: 12)).foregroundStyle(.secondary)
+                                Text([d.os + (d.osVersion.isEmpty ? "" : " \(d.osVersion)"), d.app.isEmpty ? "" : AccountAPI.appName(d.app)]
+                                    .filter { !$0.isEmpty }.joined(separator: " · "))
+                                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                                if let seen = Self.lastSeen(d.lastSeen) {
+                                    Text(seen).font(.system(size: 12)).foregroundStyle(.secondary)
                                 }
                             }
                         }
@@ -176,6 +181,35 @@ struct DevicesView: View {
         }
     }
 
+    /// Ours, from this phone (same rule as Android: our app and the same model).
+    private func isThis(_ d: AccountAPI.Device) -> Bool {
+        let model = SubscriptionAPI.deviceModel()
+        return AccountAPI.appName(d.app).hasPrefix("Titan VPS") && !d.model.isEmpty && !model.isEmpty
+            && (d.model.localizedCaseInsensitiveContains(model) || model.localizedCaseInsensitiveContains(d.model))
+    }
+
+    /// "Активность: 5 мин назад" from the bot's time (ISO 8601, or "yyyy-MM-dd HH:mm:ss" in UTC).
+    static func lastSeen(_ text: String) -> String? {
+        guard !text.isEmpty else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var date = iso.date(from: text)
+        if date == nil { iso.formatOptions = [.withInternetDateTime]; date = iso.date(from: text) }
+        if date == nil {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = TimeZone(identifier: "UTC")
+            for format in ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS"] where date == nil {
+                f.dateFormat = format
+                date = f.date(from: text)
+            }
+        }
+        guard let date else { return nil }
+        let min = max(Int(Date().timeIntervalSince(date) / 60), 0)
+        let ago = min < 2 ? "только что" : min < 60 ? "\(min) мин назад" : min < 60 * 24 ? "\(min / 60) ч назад" : "\(min / 60 / 24) дн. назад"
+        return "Активность: " + ago
+    }
+
     private func icon(_ os: String) -> String {
         let o = os.lowercased()
         if o.contains("ios") || o.contains("iphone") { return "iphone" }
@@ -186,8 +220,17 @@ struct DevicesView: View {
 
 struct ProfileView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var vpn: VPNController
     @AppStorage("theme") private var theme = "system"
+    @AppStorage("autoconnect") private var autoconnect = false
     @State private var confirmLogout = false
+    @State private var confirmReset = false
+    @State private var about = false
+
+    private var version: String {
+        let info = Bundle.main.infoDictionary
+        return "\(info?["CFBundleShortVersionString"] as? String ?? "") (\(info?["CFBundleVersion"] as? String ?? ""))"
+    }
 
     var body: some View {
         NavigationStack {
@@ -200,23 +243,58 @@ struct ProfileView: View {
                     }
                     .pickerStyle(.segmented)
                 }
-                Section("Приложение") {
-                    Link(destination: Config.telegram) { Label("Поддержка", systemImage: "headphones") }
-                    Button { Task { await store.refresh() } } label: { Label("Обновить подписку", systemImage: "arrow.clockwise") }
+                Section {
                     HStack {
-                        Text("Версия")
+                        Text("Выбор сервера")
                         Spacer()
-                        Text((Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "") + " (тест iOS)")
-                            .foregroundStyle(.secondary)
+                        Text(store.selected.map { $0.name.splitFlag.1 } ?? "Автоматически")
+                            .foregroundStyle(.secondary).lineLimit(1)
                     }
+                    Toggle(isOn: $autoconnect) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Автоподключение")
+                            Text("VPN включится сам при запуске приложения, включении и после сна устройства")
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .onChange(of: autoconnect) { vpn.setAutoconnect($0) }
+                } header: {
+                    Text("Подключение")
+                }
+                Section("Приложение") {
+                    Link(destination: store.supportURL) { Label("Поддержка", systemImage: "headphones") }
+                    Button { Task { await store.refresh() } } label: { Label("Обновить подписку", systemImage: "arrow.clockwise") }
+                    Button { about = true } label: { Label("О приложении", systemImage: "info.circle") }
                 }
                 Section {
-                    Button("Выйти", role: .destructive) { confirmLogout = true }
+                    Button("Сброс настроек") { confirmReset = true }
+                    Button("Выйти из аккаунта", role: .destructive) { confirmLogout = true }
                 }
             }
             .navigationTitle("Настройки")
-            .confirmationDialog("Выйти из аккаунта?", isPresented: $confirmLogout, titleVisibility: .visible) {
-                Button("Выйти", role: .destructive) { store.logout() }
+            .alert("Titan VPS", isPresented: $about) {
+                Button("Закрыть", role: .cancel) {}
+            } message: {
+                Text("Версия \(version) · ядро Xray")
+            }
+            .alert("Сбросить настройки?", isPresented: $confirmReset) {
+                Button("Сбросить", role: .destructive) {
+                    store.resetSettings()
+                    theme = "system"
+                    autoconnect = false
+                }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Тема, избранное, автоподключение и выбранный сервер вернутся к исходным. Ключ останется.")
+            }
+            .alert("Выйти из аккаунта?", isPresented: $confirmLogout) {
+                Button("Выйти", role: .destructive) {
+                    if vpn.isOn { vpn.disconnect() }
+                    store.logout()
+                }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("VPN отключится, ключ нужно будет вставить заново.")
             }
         }
     }

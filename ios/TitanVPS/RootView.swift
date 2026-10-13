@@ -4,6 +4,8 @@ enum Tab: Hashable { case home, subscription, profile }
 
 struct RootView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var vpn: VPNController
+    @AppStorage("autoconnect") private var autoconnect = false
     @State private var tab: Tab = .home
     @State private var splash = true
 
@@ -29,6 +31,18 @@ struct RootView: View {
             try? await Task.sleep(nanoseconds: 900_000_000)
             withAnimation { splash = false }
             await store.refresh()
+            // Автоподключение: on at launch too (iOS brings it back after sleep itself).
+            if autoconnect, !vpn.isOn, let s = store.selected, !store.blockedOnWifi(s) { await vpn.connect(s) }
+        }
+        // titanvps://import/<key>, titanvps://add?url=<key> (same as Android): add and connect.
+        .onOpenURL { url in
+            Task {
+                guard await store.activate(url.absoluteString) else { return }
+                tab = .home
+                if let s = store.selected, !store.blockedOnWifi(s) {
+                    if vpn.isOn { await vpn.switchTo(s) } else { await vpn.connect(s) }
+                }
+            }
         }
         .alert(store.message ?? "", isPresented: Binding(get: { store.message != nil }, set: { if !$0 { store.message = nil } })) {
             Button("OK", role: .cancel) {}
@@ -49,6 +63,7 @@ struct SplashView: View {
 
 struct WelcomeView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var vpn: VPNController
     @State private var key = ""
 
     var body: some View {
@@ -69,7 +84,10 @@ struct WelcomeView: View {
                 }
                 .buttonStyle(.bordered)
                 Button {
-                    Task { await store.activate(key) }
+                    // Key added: connect right away (same as Android).
+                    Task {
+                        if await store.activate(key), let s = store.selected, !store.blockedOnWifi(s) { await vpn.connect(s) }
+                    }
                 } label: {
                     Group {
                         if store.busy { ProgressView().tint(.white) } else { Text("Подключить").fontWeight(.semibold) }

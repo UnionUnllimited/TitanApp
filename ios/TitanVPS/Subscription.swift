@@ -259,7 +259,7 @@ enum SubscriptionAPI {
         return v
     }
 
-    private static func deviceModel() -> String {
+    static func deviceModel() -> String {
         var info = utsname()
         uname(&info)
         let machine = withUnsafeBytes(of: &info.machine) { raw in

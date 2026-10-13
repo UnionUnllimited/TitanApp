@@ -15,8 +15,15 @@ final class AppStore: ObservableObject {
     /// Devices and their limit from the bot (nil until loaded).
     @Published var account: AccountAPI.Info?
 
+    /// Favourite servers, by name (ids change with the subscription).
+    @Published private(set) var favorites: Set<String> = []
+    /// On Wi-Fi: bypass servers (Обходы) work only over mobile internet.
+    @Published private(set) var onWifi = false
+
     private let subKey = "titan.subscription"
     private let selKey = "titan.selected"
+    private let favKey = "titan.favorites"
+    private let pathMonitor = NWPathMonitor()
 
     init() {
         if let data = UserDefaults.standard.data(forKey: subKey),
@@ -24,6 +31,44 @@ final class AppStore: ObservableObject {
             subscription = sub
         }
         selectedId = UserDefaults.standard.string(forKey: selKey)
+        favorites = Set(UserDefaults.standard.stringArray(forKey: favKey) ?? [])
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            // With the VPN on the path is the tunnel; the Wi-Fi interface is still listed.
+            let wifi = path.status == .satisfied && path.availableInterfaces.contains { $0.type == .wifi }
+            Task { @MainActor in if self?.onWifi != wifi { self?.onWifi = wifi } }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "titan.path"))
+    }
+
+    /// Support: the subscription's support-url, else the bot.
+    var supportURL: URL {
+        subscription?.info.supportUrl.flatMap { URL(string: $0) }.flatMap { $0.scheme == nil ? nil : $0 } ?? Config.telegram
+    }
+
+    func isFavorite(_ s: Server) -> Bool { favorites.contains(s.name) }
+
+    func toggleFavorite(_ s: Server) {
+        if favorites.contains(s.name) { favorites.remove(s.name) } else { favorites.insert(s.name) }
+        UserDefaults.standard.set(Array(favorites), forKey: favKey)
+    }
+
+    /// A bypass server picked while on Wi-Fi: not allowed (same as Android).
+    func blockedOnWifi(_ s: Server?) -> Bool { onWifi && s.map(ServerGroup.isBypass) == true }
+
+    /// Where to go from a bypass server on Wi-Fi: a favourite regular server, else the first.
+    var firstRegular: Server? {
+        let regular = (subscription?.servers ?? []).filter { !ServerGroup.isBypass($0) && !ServerGroup.isHidden($0) }
+        return regular.first(where: isFavorite) ?? regular.first
+    }
+
+    /// Theme, favourites and the picked server back to the start; the key stays.
+    func resetSettings() {
+        favorites = []
+        UserDefaults.standard.removeObject(forKey: favKey)
+        UserDefaults.standard.set("system", forKey: "theme")
+        UserDefaults.standard.set(false, forKey: "autoconnect")
+        select(subscription?.servers.first?.id)
+        message = "Настройки сброшены"
     }
 
     var selected: Server? {
@@ -31,13 +76,16 @@ final class AppStore: ObservableObject {
         return sub.servers.first { $0.id == selectedId } ?? sub.servers.first
     }
 
-    func activate(_ text: String) async {
+    /// Adds the key; true when the subscription loaded (the caller then connects).
+    @discardableResult
+    func activate(_ text: String) async -> Bool {
         guard let url = SubscriptionAPI.findLink(text) else {
             message = "Это не ключ Titan VPS"
-            return
+            return false
         }
-        await load(url)
-        if subscription != nil { message = "Подписка подключена" }
+        guard await load(url) else { return false }
+        await loadAccount()
+        return true
     }
 
     func refresh() async {
@@ -51,7 +99,8 @@ final class AppStore: ObservableObject {
         if let info = await AccountAPI.fetch(url) { account = info }
     }
 
-    private func load(_ url: String) async {
+    @discardableResult
+    private func load(_ url: String) async -> Bool {
         busy = true
         defer { busy = false }
         do {
@@ -59,8 +108,10 @@ final class AppStore: ObservableObject {
             subscription = sub
             if let data = try? JSONEncoder().encode(sub) { UserDefaults.standard.set(data, forKey: subKey) }
             if !sub.servers.contains(where: { $0.id == selectedId }) { select(sub.servers.first?.id) }
+            return true
         } catch {
             message = error.localizedDescription
+            return false
         }
     }
 
@@ -71,7 +122,9 @@ final class AppStore: ObservableObject {
 
     func logout() {
         subscription = nil
+        account = nil
         pings = [:]
+        pingErrors = [:]
         select(nil)
         UserDefaults.standard.removeObject(forKey: subKey)
     }

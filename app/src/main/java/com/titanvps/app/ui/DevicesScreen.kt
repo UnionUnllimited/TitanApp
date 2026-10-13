@@ -107,7 +107,7 @@ private fun DeviceCard(d: AccountApi.Device) {
         "windows" in os || "mac" in os || "linux" in os -> Icons.Outlined.Computer
         else -> Icons.Outlined.DevicesOther
     }
-    val thisDevice = AccountApi.appName(d.app) == "Titan VPS" &&
+    val thisDevice = AccountApi.appName(d.app).startsWith("Titan VPS") &&
         d.model.isNotEmpty() && android.os.Build.MODEL.isNotEmpty() &&
         (d.model.contains(android.os.Build.MODEL, true) || android.os.Build.MODEL.contains(d.model, true))
     SectionCard {

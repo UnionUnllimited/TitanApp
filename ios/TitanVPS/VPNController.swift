@@ -73,6 +73,10 @@ final class VPNController: ObservableObject {
             m.protocolConfiguration = proto
             m.localizedDescription = "Titan VPS"
             m.isEnabled = true
+            // Автоподключение: iOS itself brings the VPN back (after a restart, sleep, network
+            // change) until it is turned off by hand.
+            m.onDemandRules = [NEOnDemandRuleConnect()]
+            m.isOnDemandEnabled = UserDefaults.standard.bool(forKey: "autoconnect")
             state = .connecting
             try await m.saveToPreferences()
             // Saving the first time asks the user to allow the VPN; reload to get a usable manager.
@@ -89,7 +93,24 @@ final class VPNController: ObservableObject {
 
     func disconnect() {
         state = .disconnecting
-        manager?.connection.stopVPNTunnel()
+        guard let m = manager else { return }
+        // Turned off by hand: iOS must not bring it back on its own.
+        if m.isOnDemandEnabled {
+            m.isOnDemandEnabled = false
+            Task {
+                try? await m.saveToPreferences()
+                m.connection.stopVPNTunnel()
+            }
+        } else {
+            m.connection.stopVPNTunnel()
+        }
+    }
+
+    /// Автоподключение switched in the settings: applies to the VPN profile at once.
+    func setAutoconnect(_ on: Bool) {
+        guard let m = manager, isOn else { return }
+        m.isOnDemandEnabled = on
+        Task { try? await m.saveToPreferences() }
     }
 
     /// Reconnects on another server while on.
