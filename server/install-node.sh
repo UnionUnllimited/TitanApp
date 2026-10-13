@@ -58,8 +58,20 @@ here=$(curl -fsS4 --max-time 10 https://api.ipify.org 2>/dev/null || true)
 echo "   $DOMAIN -> ${ip:-?}, this server: ${here:-?}"
 [ -n "$ip" ] || fail "$DOMAIN doesn't resolve yet — add the A record (no proxy) and wait a minute"
 [ -z "$here" ] || [ "$ip" = "$here" ] || fail "$DOMAIN points to $ip, not to this server ($here). Proxied in Cloudflare? Turn the cloud grey."
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $REMNAWAVE_TOKEN" "${REMNAWAVE_URL%/}/api/users?start=0&size=1" || true)
-[ "$code" = 200 ] || fail "Remnawave API answers $code — check the address and the token (needs read access to users)"
+api_err=$(mktemp)
+code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $REMNAWAVE_TOKEN" "${REMNAWAVE_URL%/}/api/users?start=0&size=1" 2>"$api_err" || true)
+if [ "$code" != 200 ]; then
+  # curl's reason, the panel's host masked (it is private).
+  panel_host=$(printf '%s' "$REMNAWAVE_URL" | sed -E 's#^[a-z]+://##; s#[/:].*##')
+  reason=$(sed "s/$(printf '%s' "$panel_host" | sed 's/[.[\*^$/]/\\&/g')/<panel>/g" "$api_err" | tail -1)
+  rm -f "$api_err"
+  case "$code" in
+    000) fail "the panel doesn't answer from this server: ${reason:-no connection}. Is it reachable from here (curl -sI https://<panel>)? A firewall or the hoster may block it" ;;
+    401|403) fail "Remnawave API answers $code — the token is wrong or lacks read access to users" ;;
+    *) fail "Remnawave API answers $code — check the address (https://<panel>, no path) and the token" ;;
+  esac
+fi
+rm -f "$api_err"
 echo "   Remnawave API ok"
 busy=""
 for p in 80 "$PORT_NAIVE" "$PORT_ANYTLS" "$PORT_SHADOWTLS" "$PORT_MASQUE" "$PORT_SSH" 30120; do
