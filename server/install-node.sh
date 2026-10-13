@@ -37,9 +37,10 @@ ask() { # var prompt default secret
   if [ -n "${!1:-}" ]; then return; fi
   [ -t 0 ] || exec </dev/tty
   if [ "${4:-}" = secret ]; then
-    read -r -s -p "$2${3:+ [Enter: keep the saved one]}: " value; echo
+    # Hidden like a password: nothing shows while typing or pasting — paste, then Enter.
+    read -r -s -p "$2 (hidden: paste and press Enter)${3:+ [Enter: keep the saved one]}: " value || true; echo
   else
-    read -r -p "$2${3:+ [$3]}: " value
+    read -r -p "$2${3:+ [$3]}: " value || true
   fi
   value=$(printf '%s' "${value:-$3}" | tr -d '[:space:]')
   [ -n "$value" ] || fail "$2: empty"
