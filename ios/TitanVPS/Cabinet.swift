@@ -69,6 +69,7 @@ final class CabinetAPI {
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
         config.timeoutIntervalForRequest = 20
+        config.httpAdditionalHeaders = ["User-Agent": Config.userAgent]
         let api = CabinetAPI(base: c.url!, session: URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil))
         return (api, try await api.page(url))
     }
@@ -237,6 +238,21 @@ enum AccountAPI {
         let devicesEnabled: Bool
     }
 
+    /// "Titan(IOS/0.2.29)" → "Titan VPS · iOS 0.2.29"; "Happ/5.9.0/ios/…" → "Happ 5.9.0".
+    static func appName(_ userAgent: String) -> String {
+        if let m = userAgent.range(of: #"^Titan\(([^/)]+)/([^)]*)\)"#, options: .regularExpression) {
+            let inner = userAgent[m].dropFirst(6).dropLast()
+            let parts = inner.split(separator: "/", maxSplits: 1).map(String.init)
+            let platform = ["ios": "iOS", "android": "Android", "windows": "Windows"][parts[0].lowercased()] ?? parts[0]
+            return "Titan VPS · \(platform)" + (parts.count > 1 && !parts[1].isEmpty ? " \(parts[1])" : "")
+        }
+        let parts = userAgent.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let name = parts.first, !name.isEmpty else { return "Неизвестное приложение" }
+        if name.lowercased() == "titan" { return "Titan VPS" }
+        if parts.count > 1, parts[1].first?.isNumber == true { return "\(name) \(parts[1])" }
+        return name
+    }
+
     static func fetch(_ subscriptionUrl: String) async -> Info? {
         guard let re = try? NSRegularExpression(pattern: "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
               let m = re.matches(in: subscriptionUrl, range: NSRange(subscriptionUrl.startIndex..., in: subscriptionUrl)).last,
@@ -246,7 +262,7 @@ enum AccountAPI {
         for host in hosts {
             guard let url = URL(string: "https://\(host)/api/sub/\(uuid)/info") else { continue }
             var req = URLRequest(url: url, timeoutInterval: 15)
-            req.setValue("Titan", forHTTPHeaderField: "User-Agent")
+            req.setValue(Config.userAgent, forHTTPHeaderField: "User-Agent")
             guard let (body, resp) = try? await URLSession.shared.data(for: req),
                   let code = (resp as? HTTPURLResponse)?.statusCode else { continue }
             if code == 404 { return nil }

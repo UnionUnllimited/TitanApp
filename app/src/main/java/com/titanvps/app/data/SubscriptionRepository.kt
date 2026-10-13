@@ -114,7 +114,7 @@ class SubscriptionRepository(private val context: Context) {
      */
     private fun downloadWithFallback(url: String): Pair<SubscriptionInfo, String> {
         var firstError: Exception? = null
-        // "Titan" is our own UA. Until the server answers it everywhere, fall back to
+        // Our own UA ("Titan(Android/…)"). Until the server answers it everywhere, fall back to
         // "Xray" when it drops the connection or doesn't return Xray JSON.
         for (ua in USER_AGENTS) for (candidate in listOf(url) + alternates(url)) {
             try {
@@ -167,7 +167,7 @@ class SubscriptionRepository(private val context: Context) {
     }
 
     private companion object {
-        val USER_AGENTS = listOf("Titan", "Xray")
+        val USER_AGENTS = listOf(UserAgent.titan, "Xray")
     }
 
     @SuppressLint("HardwareIds")

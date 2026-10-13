@@ -8,8 +8,10 @@ import java.util.Base64
 object Config {
     val HOSTS = setOf("api1.titanvps.su", "api2.titanvps.online")
     const val TELEGRAM_URL = "https://t.me/TitanVPS_bot"
+    /** Our User-Agent everywhere: "Titan(Windows/<version>)" (Android and iOS the same way). */
+    val TITAN_UA = "Titan(Windows/${System.getProperty("jpackage.app-version") ?: "dev"})"
     /** Our own UA first; "Xray" if the server doesn't answer it (same as Android). */
-    val USER_AGENTS = listOf("Titan", "Xray")
+    val USER_AGENTS = listOf(TITAN_UA, "Xray")
 }
 
 data class SubscriptionInfo(

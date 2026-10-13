@@ -97,7 +97,7 @@ class CabinetApi private constructor(private val base: HttpUrl, private val clie
     }
 
     private fun get(url: HttpUrl): Document {
-        client.newCall(Request.Builder().url(url).header("Accept", "text/html").build()).execute().use { r ->
+        client.newCall(Request.Builder().url(url).header("User-Agent", UserAgent.titan).header("Accept", "text/html").build()).execute().use { r ->
             val final = r.request.url
             if (!r.isSuccessful || !final.encodedPath.startsWith("/cabinet")) {
                 throw CabinetException("Не удалось войти в кабинет. Обновите подписку и попробуйте ещё раз")
@@ -108,7 +108,7 @@ class CabinetApi private constructor(private val base: HttpUrl, private val clie
 
     private fun post(path: String, field: String, value: String): JSONObject {
         val body = MultipartBody.Builder().setType(MultipartBody.FORM).addFormDataPart(field, value).build()
-        val request = Request.Builder().url(base.resolve(path)!!).post(body).header("Accept", "application/json").build()
+        val request = Request.Builder().url(base.resolve(path)!!).post(body).header("User-Agent", UserAgent.titan).header("Accept", "application/json").build()
         client.newCall(request).execute().use { r ->
             val text = r.body.string()
             return runCatching { JSONObject(text) }.getOrElse {

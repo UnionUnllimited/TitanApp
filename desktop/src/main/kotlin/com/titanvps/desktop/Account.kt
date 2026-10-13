@@ -35,7 +35,7 @@ object Account {
         var last: Exception? = null
         for (host in hosts) for (c in clients) {
             try {
-                c.newCall(Request.Builder().url("https://$host/api/sub/$uuid/info").header("User-Agent", "Titan").build()).execute().use { r ->
+                c.newCall(Request.Builder().url("https://$host/api/sub/$uuid/info").header("User-Agent", Config.TITAN_UA).build()).execute().use { r ->
                     if (r.code == 404) return null
                     if (!r.isSuccessful) error("HTTP ${r.code}")
                     return parse(JSONObject(r.body.string()))
@@ -66,6 +66,11 @@ object Account {
 
     /** "Happ/5.9.0/ios/…" → "Happ 5.9.0"; our own UAs → "Titan VPS". */
     fun appName(userAgent: String): String {
+        // Our own: "Titan(Android/1.4.2)" → "Titan VPS · Android 1.4.2".
+        Regex("""^Titan\(([^/)]+)/([^)]*)\)""").find(userAgent)?.let { m ->
+            val platform = mapOf("ios" to "iOS", "android" to "Android", "windows" to "Windows")[m.groupValues[1].lowercase()] ?: m.groupValues[1]
+            return "Titan VPS · $platform" + m.groupValues[2].let { if (it.isEmpty()) "" else " $it" }
+        }
         val parts = userAgent.split('/')
         val name = parts.firstOrNull().orEmpty().trim()
         return when {

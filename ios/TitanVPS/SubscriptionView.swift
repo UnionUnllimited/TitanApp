@@ -5,6 +5,7 @@ struct SubscriptionView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.openURL) private var openURL
     @State private var showCabinet = false
+    @State private var showDevices = false
 
     var body: some View {
         ScrollView {
@@ -41,28 +42,6 @@ struct SubscriptionView: View {
                         }
                         .padding(16)
                     }
-                    if let acc = store.account, acc.devicesEnabled {
-                        Card {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Устройства").foregroundStyle(.secondary).font(.system(size: 14))
-                                Text("\(acc.devices.count)" + (acc.deviceLimit > 0 ? " из \(acc.deviceLimit)" : ""))
-                                    .font(.system(size: 26, weight: .bold))
-                                ForEach(acc.devices) { d in
-                                    HStack(spacing: 10) {
-                                        Image(systemName: d.os.lowercased().contains("ios") ? "iphone" : d.os.lowercased().contains("android") ? "smartphone" : "desktopcomputer")
-                                            .foregroundStyle(Palette.primary).frame(width: 22)
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            Text([d.model, d.os + (d.osVersion.isEmpty ? "" : " \(d.osVersion)")].filter { !$0.isEmpty }.joined(separator: " · "))
-                                                .font(.system(size: 14))
-                                            if !d.app.isEmpty { Text(d.app).font(.system(size: 12)).foregroundStyle(.secondary) }
-                                        }
-                                    }
-                                }
-                                Text("Чтобы отвязать лишнее устройство, напишите в поддержку.").font(.system(size: 12)).foregroundStyle(.secondary)
-                            }
-                            .padding(16)
-                        }
-                    }
                     Button {
                         if info.webPageUrl != nil { showCabinet = true } else { openURL(Config.telegram) }
                     } label: {
@@ -71,6 +50,20 @@ struct SubscriptionView: View {
                             .frame(maxWidth: .infinity, minHeight: 50)
                     }
                     .buttonStyle(.borderedProminent)
+                    if let acc = store.account, acc.devicesEnabled {
+                        Button { showDevices = true } label: {
+                            HStack {
+                                Label("Подключённые устройства", systemImage: "iphone.and.arrow.forward")
+                                Spacer()
+                                Text("\(acc.devices.count)" + (acc.deviceLimit > 0 ? " из \(acc.deviceLimit)" : ""))
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                            }
+                            .font(.system(size: 16, weight: .medium))
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                        }
+                        .buttonStyle(.bordered)
+                    }
                     Card {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("В личном кабинете").fontWeight(.semibold)
@@ -108,6 +101,9 @@ struct SubscriptionView: View {
         }
         .background(Palette.background.ignoresSafeArea())
         .task { await store.loadAccount() }
+        .sheet(isPresented: $showDevices) {
+            if let acc = store.account { DevicesView(account: acc) }
+        }
         .sheet(isPresented: $showCabinet) {
             if let link = store.subscription?.info.webPageUrl {
                 CabinetView(link: link, devices: store.account.map { ($0.devices.count, $0.deviceLimit) })
@@ -128,6 +124,63 @@ struct SubscriptionView: View {
         f.locale = Locale(identifier: "ru_RU")
         f.dateFormat = "d MMMM yyyy"
         return "до " + f.string(from: Date(timeIntervalSince1970: TimeInterval(expire)))
+    }
+}
+
+/// The devices that used the key, and the limit (from the bot's /api/sub/…/info).
+struct DevicesView: View {
+    let account: AccountAPI.Info
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        Text("Подключено")
+                        Spacer()
+                        Text("\(account.devices.count)" + (account.deviceLimit > 0 ? " из \(account.deviceLimit)" : ""))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Section {
+                    if account.devices.isEmpty {
+                        Text("Пока ни одного устройства").foregroundStyle(.secondary)
+                    }
+                    ForEach(account.devices) { d in
+                        HStack(spacing: 12) {
+                            Image(systemName: icon(d.os)).foregroundStyle(Palette.primary).frame(width: 26)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text([d.model, d.os + (d.osVersion.isEmpty ? "" : " \(d.osVersion)")].filter { !$0.isEmpty }.joined(separator: " · "))
+                                    .font(.system(size: 15))
+                                if !d.app.isEmpty {
+                                    Text(AccountAPI.appName(d.app)).font(.system(size: 12)).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                } footer: {
+                    Text("Отвязать лишнее устройство или изменить лимит можно в боте.")
+                }
+                Section {
+                    Button { openURL(Config.telegram) } label: { Label("Открыть бота", systemImage: "paperplane") }
+                }
+            }
+            .navigationTitle("Устройства")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } }
+            }
+        }
+    }
+
+    private func icon(_ os: String) -> String {
+        let o = os.lowercased()
+        if o.contains("ios") || o.contains("iphone") { return "iphone" }
+        if o.contains("android") { return "smartphone" }
+        return "desktopcomputer"
     }
 }
 

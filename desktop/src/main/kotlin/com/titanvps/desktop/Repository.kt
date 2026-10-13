@@ -22,7 +22,7 @@ object Repository {
     fun fetch(url: String): Subscription {
         if (!Links.isAllowed(url)) throw SubscriptionException("Недопустимый адрес подписки")
         var firstError: Exception? = null
-        // "Titan" is our own UA; "Xray" if the server doesn't answer it with Xray JSON.
+        // Our own UA ("Titan(Windows/…)"); "Xray" if the server doesn't answer it with Xray JSON.
         for (ua in Config.USER_AGENTS) for (candidate in listOf(url) + Links.alternates(url)) {
             try {
                 val (info, body) = download(candidate, ua)

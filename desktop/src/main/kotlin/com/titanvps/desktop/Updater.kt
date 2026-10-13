@@ -32,7 +32,7 @@ object Updater {
     /** Newest Windows release, or null if this build is the latest. */
     fun findNewer(proxyPort: Int): Release? {
         val body = client(proxyPort).newCall(
-            Request.Builder().url(RELEASES).header("Accept", "application/vnd.github+json").build()
+            Request.Builder().url(RELEASES).header("User-Agent", Config.TITAN_UA).header("Accept", "application/vnd.github+json").build()
         ).execute().use { r ->
             if (!r.isSuccessful) error("HTTP ${r.code}")
             r.body.string()
@@ -56,7 +56,7 @@ object Updater {
         val dir = File(System.getProperty("java.io.tmpdir"), "TitanVPS-update").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
         val file = File(dir, "titan-vps-setup-${release.build}.exe")
-        client(proxyPort, readSec = 60).newCall(Request.Builder().url(release.url).build()).execute().use { r ->
+        client(proxyPort, readSec = 60).newCall(Request.Builder().url(release.url).header("User-Agent", Config.TITAN_UA).build()).execute().use { r ->
             if (!r.isSuccessful) error("HTTP ${r.code}")
             val total = r.body.contentLength()
             r.body.byteStream().use { input ->

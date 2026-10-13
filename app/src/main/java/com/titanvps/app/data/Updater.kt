@@ -140,7 +140,7 @@ class Updater(private val context: Context, private val requestVpn: () -> Unit) 
                 .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
                 .build()
             val request = okhttp3.Request.Builder().url(url)
-                .header("User-Agent", "Titan")
+                .header("User-Agent", UserAgent.titan)
                 .apply { if (json) header("Accept", "application/vnd.github+json") }
                 .build()
             val target = File(dir, name).apply { delete() }

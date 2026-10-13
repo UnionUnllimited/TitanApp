@@ -5,7 +5,9 @@ enum Config {
     static let hosts: Set<String> = ["api1.titanvps.su", "api2.titanvps.online"]
     static let telegram = URL(string: "https://t.me/TitanVPS_bot")!
     /// Same as Android: our own UA first, "Xray" if the panel doesn't answer it with Xray JSON.
-    static let userAgents = ["Titan", "Xray"]
+    /// Our User-Agent everywhere: "Titan(IOS/<version>)" (Android and Windows the same way).
+    static let userAgent = "Titan(IOS/\((Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0"))"
+    static let userAgents = [userAgent, "Xray"]
 }
 
 struct SubscriptionInfo: Codable, Equatable {
@@ -75,7 +77,7 @@ enum SubscriptionAPI {
     static func fetch(_ url: String) async throws -> Subscription {
         guard isAllowed(url) else { throw SubscriptionError(message: "Недопустимый адрес подписки") }
         var firstError: Error?
-        // "Titan" is our own UA; "Xray" if the server doesn't answer it with Xray JSON.
+        // Our own UA ("Titan(IOS/…)"); "Xray" if the server doesn't answer it with Xray JSON.
         for ua in Config.userAgents {
             for candidate in [url] + alternates(url) {
                 do {
