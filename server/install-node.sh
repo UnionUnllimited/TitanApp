@@ -59,7 +59,7 @@ echo "   $DOMAIN -> ${ip:-?}, this server: ${here:-?}"
 [ -n "$ip" ] || fail "$DOMAIN doesn't resolve yet — add the A record (no proxy) and wait a minute"
 [ -z "$here" ] || [ "$ip" = "$here" ] || fail "$DOMAIN points to $ip, not to this server ($here). Proxied in Cloudflare? Turn the cloud grey."
 api_err=$(mktemp)
-code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $REMNAWAVE_TOKEN" "${REMNAWAVE_URL%/}/api/users?start=0&size=1" 2>"$api_err" || true)
+code=$(curl --http1.1 -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $REMNAWAVE_TOKEN" "${REMNAWAVE_URL%/}/api/users?start=0&size=1" 2>"$api_err" || true)
 if [ "$code" != 200 ]; then
   # curl's reason, the panel's host masked (it is private).
   panel_host=$(printf '%s' "$REMNAWAVE_URL" | sed -E 's#^[a-z]+://##; s#[/:].*##')
