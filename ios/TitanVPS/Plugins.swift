@@ -161,12 +161,15 @@ enum Plugins {
             throw SubscriptionError(message: "\(ep.kind.title) пока не работает на iPhone. Выберите другой сервер")
         }
         if ep.kind == .masque { return PreparedServer(json: withMasque(json, tag: tag, ep), plugin: nil) }
+        // The clients' own DNS doesn't work on iOS (no resolv.conf): they get the address
+        // resolved here by the system (TLS names stay the host's), as Mieru on Android.
+        let address = resolve(ep.host)
         let port = try Titan.freePort()
         let log = ep.kind == .mieru ? nil : (NSTemporaryDirectory() as NSString).appendingPathComponent("singbox-\(port).log")
         if let log { try? FileManager.default.removeItem(atPath: log) }
         let request: [String: Any] = ep.kind == .mieru
-            ? ["method": "startMieru", "profile": mieruProfile(ep), "port": port]
-            : ["method": "startSingBox", "config": singBoxConfig(ep, port: port, log: log)]
+            ? ["method": "startMieru", "profile": mieruProfile(ep, address: address), "port": port]
+            : ["method": "startSingBox", "config": singBoxConfig(ep, port: port, log: log, address: address)]
         let plugin = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
         return PreparedServer(json: withLocalSocks(json, tag: tag, port: port), plugin: plugin, log: log)
     }
@@ -187,7 +190,32 @@ enum Plugins {
     }
 
     /// sing-box as the client for TUIC / AnyTLS / ShadowTLS / SSH (same as Android's).
-    static func singBoxConfig(_ ep: PluginEndpoint, port: Int, log: String? = nil) -> String {
+    /// The host's address by the system resolver (IPv4 first); the host itself if it fails.
+    static func resolve(_ host: String) -> String {
+        if IPv4Address(host) != nil || IPv6Address(host) != nil { return host }
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var result: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &result) == 0, let first = result else { return host }
+        defer { freeaddrinfo(first) }
+        var v4: String?
+        var v6: String?
+        var p: UnsafeMutablePointer<addrinfo>? = first
+        while let ai = p {
+            var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(ai.pointee.ai_addr, ai.pointee.ai_addrlen, &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0 {
+                let ip = String(cString: buf)
+                if ai.pointee.ai_family == AF_INET, v4 == nil { v4 = ip }
+                if ai.pointee.ai_family == AF_INET6, v6 == nil { v6 = ip }
+            }
+            p = ai.pointee.ai_next
+        }
+        return v4 ?? v6 ?? host
+    }
+
+    static func singBoxConfig(_ ep: PluginEndpoint, port: Int, log: String? = nil, address: String? = nil) -> String {
+        let server = address ?? ep.host
         func tls(_ sni: String) -> [String: Any] { ["enabled": true, "server_name": sni] }
         // Firefox: Russian DPI stalls the large Chrome ClientHello.
         let firefox: [String: Any] = ["enabled": true, "fingerprint": "firefox"]
@@ -197,14 +225,14 @@ enum Plugins {
             var t = tls(ep.host)
             t["alpn"] = ["h3"]
             outbounds.append([
-                "type": "tuic", "tag": "proxy", "server": ep.host, "server_port": ep.port,
+                "type": "tuic", "tag": "proxy", "server": server, "server_port": ep.port,
                 "uuid": ep.tuicUuid, "password": ep.password,
                 "congestion_control": "bbr", "udp_relay_mode": "native", "tls": t,
             ])
         case .anytls:
             var t = tls(ep.host)
             t["utls"] = firefox
-            outbounds.append(["type": "anytls", "tag": "proxy", "server": ep.host, "server_port": ep.port, "password": ep.password, "tls": t])
+            outbounds.append(["type": "anytls", "tag": "proxy", "server": server, "server_port": ep.port, "password": ep.password, "tls": t])
         case .shadowtls:
             // ShadowTLS v3: a real TLS handshake with the cover site, then Shadowsocks 2022
             // whose per-user key tells the node who it is.
@@ -215,13 +243,13 @@ enum Plugins {
                 "password": ep.ss2022Password, "detour": "shadowtls",
             ])
             outbounds.append([
-                "type": "shadowtls", "tag": "shadowtls", "server": ep.host, "server_port": ep.port,
+                "type": "shadowtls", "tag": "shadowtls", "server": server, "server_port": ep.port,
                 "version": 3, "password": ep.password, "tls": t,
             ])
         case .ssh:
             // SSH tunnel (like "ssh -D") to the node's gateway, looking like stock OpenSSH.
             outbounds.append([
-                "type": "ssh", "tag": "proxy", "server": ep.host, "server_port": ep.port,
+                "type": "ssh", "tag": "proxy", "server": server, "server_port": ep.port,
                 "user": ep.user, "password": ep.password,
                 "client_version": "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.5",
             ])
@@ -240,9 +268,10 @@ enum Plugins {
     }
 
     /// Mieru's client profile (same as Android's, without the app-level fields).
-    static func mieruProfile(_ ep: PluginEndpoint) -> String {
+    static func mieruProfile(_ ep: PluginEndpoint, address: String? = nil) -> String {
+        let host = address ?? ep.host
         var server: [String: Any] = ["portBindings": [["port": ep.port, "protocol": "TCP"]]]
-        if IPv4Address(ep.host) != nil || IPv6Address(ep.host) != nil { server["ipAddress"] = ep.host } else { server["domainName"] = ep.host }
+        if IPv4Address(host) != nil || IPv6Address(host) != nil { server["ipAddress"] = host } else { server["domainName"] = host }
         let profile: [String: Any] = [
             "profileName": "titan",
             "user": ["name": ep.user, "password": ep.password],
