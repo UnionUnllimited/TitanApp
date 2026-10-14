@@ -80,6 +80,8 @@ object Repository {
         /** "exclude": [excludedApps] bypass the VPN; "only": just [vpnApps] go through it. */
         val appsMode: String = "exclude",
         val vpnApps: Set<String> = emptySet(),
+        /** The hidden «Технический режим» was unlocked by its code (its row stays visible). */
+        val techMode: Boolean = false,
     )
 
     fun load(): State {
@@ -105,6 +107,7 @@ object Repository {
         return State(
             sub, o.optString("selected").ifEmpty { null }, o.optString("theme", "system"), o.optString("mode", "proxy"),
             names("excludedApps"), o.optBoolean("autoConnect", false), o.optString("appsMode", "exclude"), names("vpnApps"),
+            o.optBoolean("techMode", false),
         )
     }
 
@@ -113,6 +116,7 @@ object Repository {
             .put("mode", state.mode).put("excludedApps", JSONArray(state.excludedApps.sorted()))
             .put("autoConnect", state.autoConnect)
             .put("appsMode", state.appsMode).put("vpnApps", JSONArray(state.vpnApps.sorted()))
+            .put("techMode", state.techMode)
         state.subscription?.let { s ->
             o.put("subscription", JSONObject()
                 .put("url", s.url).put("fetchedAt", s.fetchedAt)

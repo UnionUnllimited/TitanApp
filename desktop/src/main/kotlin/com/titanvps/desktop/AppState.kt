@@ -51,6 +51,8 @@ class AppState {
     val pickedApps: Set<String> get() = if (appsMode == "only") vpnApps else excludedApps
     var autoConnect by mutableStateOf(false); private set
     var autostart by mutableStateOf(false); private set
+    /** Hidden diagnostics screen unlocked by its code (TechMode.kt). */
+    var techMode by mutableStateOf(false); private set
     /** Account status and devices from the bot (null until loaded). */
     var account by mutableStateOf<Account.Info?>(null); private set
     var accountLoading by mutableStateOf(false); private set
@@ -90,6 +92,7 @@ class AppState {
         appsMode = st.appsMode
         vpnApps = st.vpnApps
         autoConnect = st.autoConnect
+        techMode = st.techMode
         scope.launch { autostart = withContext(Dispatchers.IO) { Autostart.isEnabled } }
         Runtime.getRuntime().addShutdownHook(Thread { shutdown() })
         scope.launch {
@@ -105,7 +108,7 @@ class AppState {
         }
     }
 
-    private fun persist() = Repository.save(Repository.State(subscription, selectedId, theme, mode, excludedApps, autoConnect, appsMode, vpnApps))
+    private fun persist() = Repository.save(Repository.State(subscription, selectedId, theme, mode, excludedApps, autoConnect, appsMode, vpnApps, techMode))
 
     fun activate(text: String) {
         val url = Links.find(text.trim()) ?: run { message = "Это не ключ Titan VPS"; return }
@@ -230,6 +233,14 @@ class AppState {
             if (!ok) message = "Не удалось изменить автозапуск"
         }
     }
+
+    fun changeTechMode(value: Boolean) {
+        techMode = value
+        scope.launch(Dispatchers.IO) { persist() }
+    }
+
+    /** Local HTTP inbound of the running core, 0 when off (Технический режим checks through it). */
+    val localProxyPort: Int get() = if (vpn is VpnState.Connected) proxyPort else 0
 
     fun loadAccount() {
         val url = subscription?.url ?: return

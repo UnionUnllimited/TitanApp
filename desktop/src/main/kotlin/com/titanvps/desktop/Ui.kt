@@ -1021,7 +1021,9 @@ private fun SettingsPage(state: AppState) {
     val uri = LocalUriHandler.current
     var confirmLogout by remember { mutableStateOf(false) }
     var showApps by remember { mutableStateOf(false) }
+    var showTech by remember { mutableStateOf(false) }
     if (showApps) { AppsPage(state) { showApps = false; state.applyExclusions() }; return }
+    if (showTech) { TechModePage(state) { showTech = false }; return }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(
             Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -1102,7 +1104,8 @@ private fun SettingsPage(state: AppState) {
                     if (confirmLogout) state.logout() else confirmLogout = true
                 }
             }
-            Text("Версия ${System.getProperty("jpackage.app-version") ?: "dev"}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // 7 taps open the hidden «Технический режим» (TechMode.kt).
+            TechModeEntry(state) { showTech = true }
         }
     }
 }
