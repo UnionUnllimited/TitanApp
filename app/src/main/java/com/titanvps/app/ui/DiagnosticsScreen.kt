@@ -80,7 +80,8 @@ internal fun DiagnosticsScreen(onBack: () -> Unit) {
     }
 }
 
-private fun readLogs(dir: File): String {
+/** Tail of the Xray (and plugin) logs; also shown in «Технический режим». */
+internal fun readLogs(dir: File, errorLines: Int = 150, accessLines: Int = 300): String {
     fun tail(name: String, lines: Int): String {
         val f = File(dir, name)
         if (!f.exists()) return "(нет данных — подключитесь к VPN)"
@@ -95,6 +96,6 @@ private fun readLogs(dir: File): String {
     // Naive / Mieru clients (only when such a server was used).
     val plugins = listOf("plugins.log", "naive.log", "mieru.log").filter { File(dir, it).exists() }
         .joinToString("") { "\n\n=== ${it.uppercase()} ===\n" + tail(it, 40) }
-    return "=== ОШИБКИ ===\n" + tail(XrayConfigs.ERROR_LOG, 150) + plugins +
-        "\n\n=== СОЕДИНЕНИЯ (последние) ===\n" + tail(XrayConfigs.ACCESS_LOG, 300)
+    return "=== ОШИБКИ ===\n" + tail(XrayConfigs.ERROR_LOG, errorLines) + plugins +
+        "\n\n=== СОЕДИНЕНИЯ (последние) ===\n" + tail(XrayConfigs.ACCESS_LOG, accessLines)
 }

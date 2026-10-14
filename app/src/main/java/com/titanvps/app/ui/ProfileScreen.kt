@@ -1,7 +1,9 @@
 package com.titanvps.app.ui
 
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +46,7 @@ internal fun ProfileScreen(
     onOpenApps: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenHome: () -> Unit,
+    onOpenTech: () -> Unit,
 ) {
     val context = LocalContext.current
     val theme by viewModel.theme.collectAsState()
@@ -54,6 +57,11 @@ internal fun ProfileScreen(
     var confirmReset by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
+    val techMode by viewModel.techMode.collectAsState()
+    var askCode by remember { mutableStateOf(false) }
+    // Hidden entry: 7 taps on the version in «О приложении», at most 3 s apart.
+    var versionTaps by remember { mutableStateOf(0) }
+    var lastTapAt by remember { mutableStateOf(0L) }
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -109,6 +117,7 @@ internal fun ProfileScreen(
                 ToggleRow("Уведомления", notifications) { viewModel.setNotifications(it) }
                 NavRow("Поддержка") { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) }
                 NavRow("Обновление приложения", value = "v${BuildConfig.VERSION_NAME}") { viewModel.checkUpdate() }
+                if (techMode) NavRow("Технический режим") { onOpenTech() }
                 NavRow("О приложении", divider = false) { about = true }
             }
 
@@ -129,7 +138,26 @@ internal fun ProfileScreen(
             title = { Text("Titan VPS") },
             text = {
                 Column {
-                    Text("Версия ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ядро Xray", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Версия ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ядро Xray",
+                        // No ripple: the tap target stays hidden.
+                        Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            val now = SystemClock.elapsedRealtime()
+                            versionTaps = if (now - lastTapAt <= 3_000) versionTaps + 1 else 1
+                            lastTapAt = now
+                            if (versionTaps >= 7) {
+                                versionTaps = 0
+                                about = false
+                                if (techMode) {
+                                    onOpenTech()
+                                } else {
+                                    askCode = true
+                                }
+                            }
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (techMode) TextButton(onClick = { about = false; onOpenTech() }) { Text("Технический режим") }
                     TextButton(onClick = { about = false; onOpenDiagnostics() }) { Text("Диагностика") }
                     TextButton(onClick = { about = false; confirmReset = true }) { Text("Сброс настроек") }
                     TextButton(onClick = { about = false; confirmLogout = true }) {
@@ -138,6 +166,12 @@ internal fun ProfileScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { about = false }) { Text("Закрыть") } },
+        )
+    }
+    if (askCode) {
+        TechCodeDialog(
+            onDismiss = { askCode = false },
+            onUnlocked = { askCode = false; viewModel.setTechMode(true); onOpenTech() },
         )
     }
     if (confirmReset) {

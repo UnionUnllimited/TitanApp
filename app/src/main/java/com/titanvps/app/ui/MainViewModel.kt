@@ -68,6 +68,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setAutoBypass(enabled: Boolean) = settings.setAutoBypass(enabled)
 
+    val techMode = settings.techMode
+    fun setTechMode(enabled: Boolean) = settings.setTechMode(enabled)
+
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
 

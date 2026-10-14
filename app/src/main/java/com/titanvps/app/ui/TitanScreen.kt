@@ -123,6 +123,8 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
     val sub = subscription
     var tab by rememberSaveable { mutableStateOf(MainTab.HOME) }
     var overlay by rememberSaveable { mutableStateOf<Overlay?>(null) }
+    // Diagnostics opened from «Технический режим» goes back there.
+    var logsFromTech by rememberSaveable { mutableStateOf(false) }
     // Launch screen from the mockup, once per cold start.
     var splash by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(Unit) { if (splash) { delay(900); splash = false } }
@@ -145,7 +147,14 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
             when {
                 sub == null -> WelcomeScreen(viewModel, busy)
                 overlay == Overlay.APPS -> AppsScreen(viewModel) { overlay = null; viewModel.reconnectIfConnected() }
-                overlay == Overlay.DIAGNOSTICS -> DiagnosticsScreen { overlay = null }
+                overlay == Overlay.DIAGNOSTICS -> DiagnosticsScreen {
+                    overlay = if (logsFromTech) Overlay.TECH else null
+                    logsFromTech = false
+                }
+                overlay == Overlay.TECH -> TechModeScreen(
+                    viewModel, sub,
+                    onOpenLogs = { logsFromTech = true; overlay = Overlay.DIAGNOSTICS },
+                ) { overlay = null }
                 overlay == Overlay.DEVICES -> DevicesScreen(viewModel) { overlay = null }
                 tab == MainTab.HOME -> HomeScreen(
                     viewModel, sub, busy, onConnect,
@@ -156,6 +165,7 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
                     viewModel, sub,
                     onOpenApps = { overlay = Overlay.APPS },
                     onOpenDiagnostics = { overlay = Overlay.DIAGNOSTICS },
+                    onOpenTech = { overlay = Overlay.TECH },
                     onOpenHome = { tab = MainTab.HOME },
                 )
             }
@@ -169,7 +179,7 @@ private enum class MainTab(val title: String, val icon: ImageVector, val selecte
     PROFILE("Профиль", Icons.Outlined.Person, Icons.Filled.Person),
 }
 
-private enum class Overlay { APPS, DIAGNOSTICS, DEVICES }
+private enum class Overlay { APPS, DIAGNOSTICS, DEVICES, TECH }
 
 /** Logo and "Titan VPS" on a plain background, as in the mockup. */
 @Composable

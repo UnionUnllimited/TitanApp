@@ -101,6 +101,15 @@ class AppSettings(context: Context) {
         _ruAppsOff.value = off
     }
 
+    private val _techMode = MutableStateFlow(prefs.getBoolean(KEY_TECH_MODE, false))
+    /** Hidden «Технический режим» unlocked by code: its row is shown in settings. */
+    val techMode: StateFlow<Boolean> = _techMode.asStateFlow()
+
+    fun setTechMode(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TECH_MODE, enabled).apply()
+        _techMode.value = enabled
+    }
+
     fun reset() {
         prefs.edit().clear().apply()
         _excludedApps.value = emptySet()
@@ -111,6 +120,7 @@ class AppSettings(context: Context) {
         _autoConnect.value = false
         _notifications.value = true
         _favorites.value = emptySet()
+        _techMode.value = false
     }
 
     private companion object {
@@ -122,5 +132,6 @@ class AppSettings(context: Context) {
         const val KEY_AUTO_CONNECT = "auto_connect"
         const val KEY_NOTIFICATIONS = "notifications"
         const val KEY_FAVORITES = "favorites"
+        const val KEY_TECH_MODE = "tech_mode"
     }
 }
