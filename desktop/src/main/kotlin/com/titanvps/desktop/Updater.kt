@@ -79,6 +79,10 @@ object Updater {
     /**
      * Installs [setup] silently after this app exits; the installer starts the new
      * version. The caller must quit right after (the running app's files are locked).
+     *
+     * A PowerShell script does it with no console window (Java starts it with
+     * CREATE_NO_WINDOW), showing its own "Обновляем Titan VPS…" window instead until the
+     * new version is up.
      */
     fun installAndRestart(setup: File) {
         val pid = ProcessHandle.current().pid()
@@ -87,27 +91,70 @@ object Updater {
         val installed = File(System.getenv("LOCALAPPDATA") ?: "", "Programs\\Titan VPS\\Titan VPS.exe")
         val exe = installed.takeIf { it.isFile }?.absolutePath
             ?: ProcessHandle.current().info().command().orElse(null)
-        val script = File(setup.parentFile, "update.cmd")
+        fun q(path: String) = "'" + path.replace("'", "''") + "'" // PowerShell single quotes
+        val script = File(setup.parentFile, "update.ps1")
         script.writeText(
-            buildString {
-                appendLine("@echo off")
-                appendLine("chcp 65001 >nul") // paths may contain Cyrillic (user name)
-                // Wait for the app to quit, then make sure none of our xray.exe keep files
-                // locked: a locked file makes Windows Installer hang on "configuring".
-                appendLine(":wait")
-                appendLine("tasklist /FI \"PID eq $pid\" | find \"$pid\" >nul && (timeout /t 1 /nobreak >nul & goto wait)")
-                appendLine("powershell -NoProfile -Command \"Get-Process xray,sing-box -ErrorAction SilentlyContinue | Where-Object { \$_.Path -like '$coreDir*' } | Stop-Process -Force\"")
-                appendLine("timeout /t 1 /nobreak >nul")
-                appendLine("\"${setup.absolutePath}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS")
-                // The installer should start the new version itself, but doesn't always:
-                // start it here unless it's already running.
-                if (exe != null) {
-                    appendLine("timeout /t 3 /nobreak >nul")
-                    appendLine("tasklist /FI \"IMAGENAME eq Titan VPS.exe\" | find /I \"Titan VPS.exe\" >nul || start \"\" \"$exe\"")
+            "\uFEFF" + // UTF-8 with BOM: Windows PowerShell reads Cyrillic paths right
+                """
+                ${'$'}ErrorActionPreference = 'SilentlyContinue'
+                Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+                [System.Windows.Forms.Application]::EnableVisualStyles()
+                ${'$'}form = New-Object System.Windows.Forms.Form
+                ${'$'}form.Text = 'Titan VPS'
+                ${'$'}form.FormBorderStyle = 'FixedDialog'
+                ${'$'}form.ControlBox = ${'$'}false
+                ${'$'}form.StartPosition = 'CenterScreen'
+                ${'$'}form.TopMost = ${'$'}true
+                ${'$'}form.ClientSize = New-Object System.Drawing.Size(420, 140)
+                ${'$'}form.BackColor = [System.Drawing.Color]::FromArgb(14, 19, 29)
+                ${'$'}title = New-Object System.Windows.Forms.Label
+                ${'$'}title.Text = 'Обновляем Titan VPS…'
+                ${'$'}title.Font = New-Object System.Drawing.Font('Segoe UI', 15, [System.Drawing.FontStyle]::Bold)
+                ${'$'}title.ForeColor = [System.Drawing.Color]::White
+                ${'$'}title.Location = New-Object System.Drawing.Point(24, 20)
+                ${'$'}title.Size = New-Object System.Drawing.Size(380, 34)
+                ${'$'}sub = New-Object System.Windows.Forms.Label
+                ${'$'}sub.Text = 'Подождите, приложение откроется само'
+                ${'$'}sub.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+                ${'$'}sub.ForeColor = [System.Drawing.Color]::FromArgb(160, 170, 190)
+                ${'$'}sub.Location = New-Object System.Drawing.Point(24, 58)
+                ${'$'}sub.Size = New-Object System.Drawing.Size(380, 24)
+                ${'$'}bar = New-Object System.Windows.Forms.ProgressBar
+                ${'$'}bar.Style = 'Marquee'
+                ${'$'}bar.MarqueeAnimationSpeed = 30
+                ${'$'}bar.Location = New-Object System.Drawing.Point(24, 100)
+                ${'$'}bar.Size = New-Object System.Drawing.Size(372, 12)
+                ${'$'}form.Controls.AddRange(@(${'$'}title, ${'$'}sub, ${'$'}bar))
+                ${'$'}form.Show()
+                function Pump([double]${'$'}sec) {
+                    ${'$'}end = (Get-Date).AddSeconds(${'$'}sec)
+                    do { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 } while ((Get-Date) -lt ${'$'}end)
                 }
-            }.replace("\n", "\r\n"),
+                # Wait for the app to quit, then make sure none of our xray.exe keep files
+                # locked: a locked file makes the installer hang.
+                while (Get-Process -Id $pid -ErrorAction SilentlyContinue) { Pump 0.5 }
+                Get-Process xray, sing-box | Where-Object { ${'$'}_.Path -like ${q("$coreDir*")} } | Stop-Process -Force
+                Pump 1
+                ${'$'}setup = Start-Process -FilePath ${q(setup.absolutePath)} -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS' -PassThru
+                while (-not ${'$'}setup.HasExited) { Pump 0.5 }
+                Pump 3
+                """.trimIndent() + "\n" +
+                // The installer should start the new version itself, but doesn't always.
+                (if (exe != null) "if (-not (Get-Process 'Titan VPS')) { Start-Process -FilePath ${q(exe)} }\n" else "") +
+                """
+                # The window stays until the new version shows its own.
+                ${'$'}until = (Get-Date).AddSeconds(45)
+                while ((Get-Date) -lt ${'$'}until) {
+                    if (Get-Process 'Titan VPS' | Where-Object { ${'$'}_.MainWindowHandle -ne 0 }) { break }
+                    Pump 0.5
+                }
+                ${'$'}form.Close()
+                """.trimIndent() + "\n",
             Charsets.UTF_8,
         )
-        ProcessBuilder("cmd.exe", "/c", "start", "\"\"", "/min", script.absolutePath).start()
+        ProcessBuilder("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script.absolutePath)
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
     }
 }

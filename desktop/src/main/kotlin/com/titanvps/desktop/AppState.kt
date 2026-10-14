@@ -339,7 +339,7 @@ class AppState {
         scope.launch {
             if (!ensureVpn()) { update = UpdateState.Error("Не удалось включить VPN. Попробуйте ещё раз"); return@launch }
             update = UpdateState.Checking
-            update = runCatching { withContext(Dispatchers.IO) { Updater.findNewer(proxyPort) } }
+            update = runCatching { viaVpn { withContext(Dispatchers.IO) { Updater.findNewer(proxyPort) } } }
                 .fold({ it?.let(UpdateState::Available) ?: UpdateState.UpToDate }, { UpdateState.Error("Не удалось проверить обновление") })
         }
     }
@@ -350,8 +350,10 @@ class AppState {
             if (!ensureVpn()) { update = UpdateState.Error("Не удалось включить VPN. Попробуйте ещё раз"); return@launch }
             update = UpdateState.Downloading(0f)
             try {
-                val msi = withContext(Dispatchers.IO) {
-                    Updater.download(release, proxyPort) { p -> scope.launch { update = UpdateState.Downloading(p) } }
+                val msi = viaVpn {
+                    withContext(Dispatchers.IO) {
+                        Updater.download(release, proxyPort) { p -> scope.launch { update = UpdateState.Downloading(p) } }
+                    }
                 }
                 update = UpdateState.Installing
                 withContext(Dispatchers.IO) {
@@ -370,10 +372,35 @@ class AppState {
         if (update !is UpdateState.Available && update !is UpdateState.Downloading && update != UpdateState.Installing) update = UpdateState.Idle
     }
 
+    /** АВТО (the balancer over every server): updates go through it, it always has a working one. */
+    private val autoServer: Server?
+        get() = subscription?.servers?.firstOrNull { it.name.contains("авто", ignoreCase = true) }
+
+    /**
+     * [block] over the VPN; if it fails on the picked server, once more through АВТО
+     * (a dead server picked must not keep the app from updating).
+     */
+    private suspend fun <T> viaVpn(block: suspend () -> T): T = try {
+        block()
+    } catch (e: Exception) {
+        val auto = autoServer
+        if (auto == null || selectedId == auto.id || vpn !is VpnState.Connected) throw e
+        select(auto.id) // reconnects
+        if (!ensureVpn()) throw e
+        block()
+    }
+
     private suspend fun ensureVpn(): Boolean {
         if (vpn is VpnState.Connected) return true
         if (subscription == null) return false
         update = UpdateState.ConnectingVpn
+        // Off: the update goes through АВТО rather than whatever server was picked last.
+        autoServer?.let { auto ->
+            if (vpn != VpnState.Connecting && selectedId != auto.id) {
+                selectedId = auto.id
+                scope.launch(Dispatchers.IO) { persist() }
+            }
+        }
         if (vpn != VpnState.Connecting) connect()
         repeat(90) {
             if (vpn is VpnState.Connected) return true
