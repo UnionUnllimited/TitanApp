@@ -134,7 +134,10 @@ internal fun HomeScreen(
     val measuring by viewModel.measuring.collectAsState()
     val account by viewModel.account.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
-    val onMobile by viewModel.onMobile.collectAsState()
+    val mobileNet by viewModel.onMobile.collectAsState()
+    val techMode by viewModel.techMode.collectAsState()
+    // Bypass servers: mobile internet only, any network in Технический режим.
+    val onMobile = mobileNet || techMode
     val theme by viewModel.theme.collectAsState()
     val dark = isDark(theme)
     var details by remember { mutableStateOf<Server?>(null) }

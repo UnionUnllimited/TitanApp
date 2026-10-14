@@ -154,7 +154,7 @@ internal fun TechModeScreen(
     val bypassCount = ServerGroups.split(sub.servers).toMap()[ServerGroups.Group.BYPASS].orEmpty().size
     val selectedGroup = selected?.let { ServerGroups.groupOf(it, sub.servers) }
     val bypassRows = listOf(
-        "Обходы сейчас" to (if (onMobile) "разрешены (мобильный интернет)" else "запрещены (обычный Wi‑Fi)"),
+        "Обходы сейчас" to (if (onMobile) "разрешены (мобильный интернет)" else "разрешены на Wi‑Fi (технический режим)"),
         "Серверов-обходов" to "$bypassCount",
         "Выбран" to (selectedGroup?.title ?: "—"),
         "Автопереход на обходы" to (if (autoBypass) "включён" else "выключен"),

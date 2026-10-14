@@ -395,7 +395,7 @@ private fun bypassRows(state: AppState): List<Pair<String, String>> {
             false -> "нет — интернет обычный"
             null -> "не определено (ничего не ответило)"
         } + if (state.whitelistChecking) " · проверяем…" else "",
-        "Обходы сейчас" to if (state.bypassLocked) "заблокированы (интернет обычный)" else "разрешены",
+        "Обходы сейчас" to if (state.bypassLocked) "заблокированы (интернет обычный)" else if (state.whitelist == false) "разрешены (технический режим)" else "разрешены",
         "Серверов-обходов" to bypass.size.toString(),
         "Выбран обход" to if (state.selected?.let(ServerGroups::isBypass) == true) "да" else "нет",
         "Правило" to "На Windows обходы открываются, только когда интернет работает по белым спискам " +

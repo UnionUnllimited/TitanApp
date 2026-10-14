@@ -58,8 +58,9 @@ final class AppStore: ObservableObject {
         UserDefaults.standard.set(Array(favorites), forKey: favKey)
     }
 
-    /// A bypass server picked while on Wi-Fi: not allowed (same as Android).
-    func blockedOnWifi(_ s: Server?) -> Bool { onWifi && s.map(ServerGroup.isBypass) == true }
+    /// A bypass server picked while on Wi-Fi: not allowed (same as Android), except in Технический режим.
+    func blockedOnWifi(_ s: Server?) -> Bool { bypassLockedOnWifi && s.map(ServerGroup.isBypass) == true }
+    var bypassLockedOnWifi: Bool { onWifi && !UserDefaults.standard.bool(forKey: TechMode.key) }
 
     /// Where to go from a bypass server on Wi-Fi: a favourite regular server, else the first.
     var firstRegular: Server? {

@@ -289,7 +289,7 @@ struct TechModeView: View {
     private var bypassRows: [(String, String)] {
         let all = store.subscription?.servers ?? []
         var rows: [(String, String)] = [
-            ("Обходы сейчас", store.onWifi ? "недоступны — устройство в Wi‑Fi" : "доступны — Wi‑Fi нет"),
+            ("Обходы сейчас", store.onWifi ? "доступны на Wi‑Fi (технический режим)" : "доступны — Wi‑Fi нет"),
             ("Серверов-обходов", "\(all.filter(ServerGroup.isBypass).count) из \(all.count)"),
         ]
         if let s = store.selected {

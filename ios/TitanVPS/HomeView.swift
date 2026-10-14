@@ -246,7 +246,7 @@ struct HomeView: View {
             .font(.system(size: 13)).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
 
-            if page == .bypass && store.onWifi {
+            if page == .bypass && store.bypassLockedOnWifi {
                 Text("Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Серверы».")
                     .font(.system(size: 13)).foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)

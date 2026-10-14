@@ -68,8 +68,8 @@ class AppState {
     /** Whitelist mode right now: true / false (normal internet) / null (not known, offline). */
     var whitelist by mutableStateOf<Boolean?>(null); private set
     var whitelistChecking by mutableStateOf(false); private set
-    /** Bypass servers spend GB and are only needed in whitelist mode: locked on normal internet. */
-    val bypassLocked: Boolean get() = whitelist == false
+    /** Bypass servers spend GB and are only needed in whitelist mode: locked on normal internet (not in Технический режим). */
+    val bypassLocked: Boolean get() = whitelist == false && !techMode
     var update by mutableStateOf<UpdateState>(UpdateState.Idle); private set
     /** Shown as a dialog: set by a manual check or when a new version is found. */
     var updateDialog by mutableStateOf(false)

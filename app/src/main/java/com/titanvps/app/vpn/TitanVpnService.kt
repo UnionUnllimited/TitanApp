@@ -66,9 +66,9 @@ class TitanVpnService : VpnService() {
             // background once connected, so a down subscription server never blocks connecting.
             val refreshAfter = repo.isStale()
             var server = repo.selectedServer() ?: error("В подписке нет серверов")
-            // Bypass servers only on mobile data (tile / always-on can start us on Wi-Fi).
+            // Bypass servers only on mobile data (tile / always-on can start us on Wi-Fi), any network in Технический режим.
             val all = repo.subscription.value!!.servers
-            if (isBypass(server, all) && !TitanApp.get(this).network.current()) {
+            if (isBypass(server, all) && !TitanApp.get(this).settings.techMode.value && !TitanApp.get(this).network.current()) {
                 regularServer(all)?.let { server = it; repo.select(it.id); notifyWifiSwitch(it.name) }
             }
 
@@ -197,7 +197,7 @@ class TitanVpnService : VpnService() {
     /** Connected via a bypass server and the phone moved to Wi-Fi: move to a regular server. */
     private fun watchWifi(server: com.titanvps.app.data.Server, all: List<com.titanvps.app.data.Server>) {
         wifiJob?.cancel()
-        if (!isBypass(server, all)) return
+        if (!isBypass(server, all) || TitanApp.get(this).settings.techMode.value) return
         wifiJob = scope.launch {
             TitanApp.get(this@TitanVpnService).network.onMobile.first { !it }
             val target = regularServer(all) ?: return@launch

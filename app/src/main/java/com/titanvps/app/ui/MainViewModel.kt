@@ -44,7 +44,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val sub = subscription.value ?: return true
         val server = sub.servers.firstOrNull { it.id == selectedId.value } ?: sub.servers.firstOrNull() ?: return true
         val bypass = com.titanvps.app.data.ServerGroups.groupOf(server, sub.servers) == com.titanvps.app.data.ServerGroups.Group.BYPASS
-        if (bypass && !TitanApp.get(getApplication<Application>()).network.current()) {
+        if (bypass && !settings.techMode.value && !TitanApp.get(getApplication<Application>()).network.current()) {
             _message.value = com.titanvps.app.data.NetworkMonitor.BYPASS_WIFI_MESSAGE
             return false
         }
