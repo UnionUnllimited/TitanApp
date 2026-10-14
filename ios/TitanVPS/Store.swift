@@ -20,6 +20,12 @@ final class AppStore: ObservableObject {
     /// On Wi-Fi: bypass servers (Обходы) work only over mobile internet.
     @Published private(set) var onWifi = false
 
+    /// Set by the app: pings turn the VPN off while they run and back on after.
+    weak var vpn: VPNController?
+    private var pingUsers = 0
+    private var pausing: Task<Void, Never>?
+    private var resumeOn: Server?
+
     private let subKey = "titan.subscription"
     private let selKey = "titan.selected"
     private let favKey = "titan.favorites"
@@ -147,6 +153,8 @@ final class AppStore: ObservableObject {
         pinging = true
         measuring = Set(order.map(\.id))
         pingTask = Task {
+            await beginPing()
+            defer { endPing() }
             await XrayPing.pingMany(order) { [weak self] id, ms, error in
                 guard let self, self.pinging else { return }
                 self.pings[id] = ms
@@ -169,6 +177,8 @@ final class AppStore: ObservableObject {
         if measuring.contains(server.id) { measuring.remove(server.id); return }
         measuring.insert(server.id)
         Task {
+            await beginPing()
+            defer { endPing() }
             await XrayPing.pingMany([server]) { [weak self] id, ms, error in
                 guard let self, self.measuring.contains(id) else { return }
                 self.pings[id] = ms
@@ -176,6 +186,27 @@ final class AppStore: ObservableObject {
                 self.measuring.remove(id)
             }
         }
+    }
+
+    /// The first ping in flight stops the VPN (remembering its server); later ones wait for that.
+    private func beginPing() async {
+        pingUsers += 1
+        if pingUsers == 1, let vpn, vpn.isOn {
+            let server = selected
+            pausing = Task { if await vpn.pauseForPing() { self.resumeOn = server } }
+        }
+        await pausing?.value
+    }
+
+    /// The last ping done: the VPN back on the server it was on (unless it was turned on by hand meanwhile).
+    private func endPing() {
+        pingUsers -= 1
+        guard pingUsers == 0 else { return }
+        pausing = nil
+        guard let server = resumeOn else { return }
+        resumeOn = nil
+        guard let vpn, !vpn.isOn else { return }
+        Task { await vpn.connect(selected ?? server) }
     }
 
     nonisolated static func tcpPing(host: String?, port: Int?) async -> Int {

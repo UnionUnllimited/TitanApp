@@ -11,6 +11,7 @@ struct TitanVPSApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(vpn)
+                .onAppear { store.vpn = vpn }
                 .preferredColorScheme(theme == "dark" ? .dark : theme == "light" ? .light : nil)
                 .tint(Palette.primary)
         }

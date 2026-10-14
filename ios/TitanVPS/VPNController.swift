@@ -125,6 +125,24 @@ final class VPNController: ObservableObject {
         Task { try? await m.saveToPreferences() }
     }
 
+    /// Turns the tunnel off for a ping: through it nearly every probe times out (the app's own
+    /// traffic goes into the VPN). Автоподключение is held off so iOS doesn't bring it back
+    /// meanwhile; `connect` restores it. Returns once the tunnel is down; false if it was off.
+    func pauseForPing() async -> Bool {
+        guard isOn, let m = manager else { return false }
+        if m.isOnDemandEnabled {
+            m.isOnDemandEnabled = false
+            try? await m.saveToPreferences()
+        }
+        m.connection.stopVPNTunnel()
+        for _ in 0..<50 {
+            let status = m.connection.status
+            if status == .disconnected || status == .invalid { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return true
+    }
+
     /// Reconnects on another server while on.
     func switchTo(_ server: Server) async {
         guard isOn else { return }
