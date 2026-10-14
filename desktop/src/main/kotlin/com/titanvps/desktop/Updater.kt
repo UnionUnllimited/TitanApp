@@ -92,6 +92,9 @@ object Updater {
         val exe = installed.takeIf { it.isFile }?.absolutePath
             ?: ProcessHandle.current().info().command().orElse(null)
         fun q(path: String) = "'" + path.replace("'", "''") + "'" // PowerShell single quotes
+        // Our logo for the window (the app's resources are gone once it quits).
+        val logo = File(setup.parentFile, "titan-logo.png")
+        runCatching { Updater::class.java.getResourceAsStream("/logo.png")?.use { input -> logo.outputStream().use { input.copyTo(it) } } }
         val script = File(setup.parentFile, "update.ps1")
         script.writeText(
             "\uFEFF" + // UTF-8 with BOM: Windows PowerShell reads Cyrillic paths right
@@ -107,24 +110,34 @@ object Updater {
                 ${'$'}form.TopMost = ${'$'}true
                 ${'$'}form.ClientSize = New-Object System.Drawing.Size(420, 140)
                 ${'$'}form.BackColor = [System.Drawing.Color]::FromArgb(14, 19, 29)
+                # Titan's icon on the window and in the taskbar, its logo inside.
+                ${'$'}logo = [System.Drawing.Image]::FromFile(${q(logo.absolutePath)})
+                ${'$'}appIcon = ${if (exe != null) "[System.Drawing.Icon]::ExtractAssociatedIcon(${q(exe)})" else "${'$'}null"}
+                if (-not ${'$'}appIcon -and ${'$'}logo) { ${'$'}appIcon = [System.Drawing.Icon]::FromHandle((New-Object System.Drawing.Bitmap(${'$'}logo, 64, 64)).GetHicon()) }
+                if (${'$'}appIcon) { ${'$'}form.Icon = ${'$'}appIcon }
+                ${'$'}pic = New-Object System.Windows.Forms.PictureBox
+                ${'$'}pic.Image = ${'$'}logo
+                ${'$'}pic.SizeMode = 'Zoom'
+                ${'$'}pic.Location = New-Object System.Drawing.Point(24, 22)
+                ${'$'}pic.Size = New-Object System.Drawing.Size(60, 60)
                 ${'$'}title = New-Object System.Windows.Forms.Label
                 ${'$'}title.Text = 'Обновляем Titan VPS…'
                 ${'$'}title.Font = New-Object System.Drawing.Font('Segoe UI', 15, [System.Drawing.FontStyle]::Bold)
                 ${'$'}title.ForeColor = [System.Drawing.Color]::White
-                ${'$'}title.Location = New-Object System.Drawing.Point(24, 20)
-                ${'$'}title.Size = New-Object System.Drawing.Size(380, 34)
+                ${'$'}title.Location = New-Object System.Drawing.Point(96, 20)
+                ${'$'}title.Size = New-Object System.Drawing.Size(310, 34)
                 ${'$'}sub = New-Object System.Windows.Forms.Label
                 ${'$'}sub.Text = 'Подождите, приложение откроется само'
                 ${'$'}sub.Font = New-Object System.Drawing.Font('Segoe UI', 10)
                 ${'$'}sub.ForeColor = [System.Drawing.Color]::FromArgb(160, 170, 190)
-                ${'$'}sub.Location = New-Object System.Drawing.Point(24, 58)
-                ${'$'}sub.Size = New-Object System.Drawing.Size(380, 24)
+                ${'$'}sub.Location = New-Object System.Drawing.Point(96, 58)
+                ${'$'}sub.Size = New-Object System.Drawing.Size(310, 24)
                 ${'$'}bar = New-Object System.Windows.Forms.ProgressBar
                 ${'$'}bar.Style = 'Marquee'
                 ${'$'}bar.MarqueeAnimationSpeed = 30
                 ${'$'}bar.Location = New-Object System.Drawing.Point(24, 100)
                 ${'$'}bar.Size = New-Object System.Drawing.Size(372, 12)
-                ${'$'}form.Controls.AddRange(@(${'$'}title, ${'$'}sub, ${'$'}bar))
+                ${'$'}form.Controls.AddRange(@(${'$'}pic, ${'$'}title, ${'$'}sub, ${'$'}bar))
                 ${'$'}form.Show()
                 function Pump([double]${'$'}sec) {
                     ${'$'}end = (Get-Date).AddSeconds(${'$'}sec)
