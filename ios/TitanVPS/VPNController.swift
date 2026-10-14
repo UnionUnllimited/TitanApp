@@ -140,6 +140,8 @@ final class VPNController: ObservableObject {
             if status == .disconnected || status == .invalid { break }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
+        // Routes and DNS of the network itself come back a moment later.
+        try? await Task.sleep(nanoseconds: 700_000_000)
         return true
     }
 

@@ -29,11 +29,14 @@ enum XrayPing {
     /// Probes per pingBatch call (libXray is patched to take that many; one Xray instance
     /// runs them all in parallel). Calls themselves run one at a time inside libXray.
     private static let batchSize = 80
+    private static let retryBatchSize = 20
+    private static let retryTimeout = 10
+
+    private struct Item { let server: String; let json: String; let tag: String }
 
     /// Measures [servers], reporting each one's best ms (-1: nothing answered) as soon as
     /// its call is done. Every server's members go into the same call where they fit.
     static func pingMany(_ servers: [Server], timeout: Int = 5, onResult: @escaping @MainActor (String, Int, String?) -> Void) async {
-        struct Item { let server: String; let json: String; let tag: String }
         var batches: [[Item]] = [[]]
         // Our protocol clients (sing-box, mieru) run here for the time of the ping.
         var clients: [Int] = []
@@ -61,27 +64,49 @@ enum XrayPing {
             if !batches[batches.count - 1].isEmpty && batches[batches.count - 1].count + items.count > batchSize { batches.append([]) }
             batches[batches.count - 1].append(contentsOf: items)
         }
+        // What failed gets a second, slower try (as on Android): with all servers at once, on a
+        // busy network, or right after the VPN went down, a live server misses the first one.
+        var retry: [Item] = []
         for batch in batches where !batch.isEmpty {
             if Task.isCancelled { return }
-            let delays = await run(batch.map { ($0.json, $0.tag) }, timeout: timeout)
-            var best: [String: Int] = [:]
-            var reason: [String: String] = [:]
-            var order: [String] = []
-            for (item, result) in zip(batch, delays) {
-                let ms = result.0
-                if best[item.server] == nil { order.append(item.server); best[item.server] = -1 }
-                if ms >= 0 && (best[item.server]! < 0 || ms < best[item.server]!) { best[item.server] = ms }
-                if ms < 0, reason[item.server] == nil, let e = result.1, !e.isEmpty { reason[item.server] = shortReason(e) }
-            }
-            if Task.isCancelled { return }
-            for id in order {
-                let ms = best[id] ?? -1
-                // A failed protocol client says why in its own log.
-                let clientLog = ms < 0 ? logs[id]?.logTail() : nil
-                let why = [reason[id], clientLog.map { "[\($0)]" }].compactMap { $0 }.joined(separator: " ")
-                await onResult(id, ms, ms < 0 && !why.isEmpty ? why : nil)
+            for (id, ms, _) in await measure(batch, timeout: timeout) {
+                if ms >= 0 { await onResult(id, ms, nil) } else { retry += batch.filter { $0.server == id } }
             }
         }
+        // A server's members stay in one call.
+        var retries: [[Item]] = [[]]
+        var placed: [String: Int] = [:]
+        for item in retry {
+            if placed[item.server] == nil {
+                if retries[retries.count - 1].count >= retryBatchSize { retries.append([]) }
+                placed[item.server] = retries.count - 1
+            }
+            retries[placed[item.server]!].append(item)
+        }
+        for batch in retries where !batch.isEmpty {
+            if Task.isCancelled { return }
+            for (id, ms, why) in await measure(batch, timeout: retryTimeout) {
+                // A failed protocol client says why in its own log.
+                let clientLog = ms < 0 ? logs[id]?.logTail() : nil
+                let text = [why, clientLog.map { "[\($0)]" }].compactMap { $0 }.joined(separator: " ")
+                await onResult(id, ms, ms < 0 && !text.isEmpty ? text : nil)
+            }
+        }
+    }
+
+    /// One call: each server's best ms (-1: nothing answered) with the reason of a failure.
+    private static func measure(_ batch: [Item], timeout: Int) async -> [(String, Int, String?)] {
+        let delays = await run(batch.map { ($0.json, $0.tag) }, timeout: timeout)
+        var best: [String: Int] = [:]
+        var reason: [String: String] = [:]
+        var order: [String] = []
+        for (item, result) in zip(batch, delays) {
+            let ms = result.0
+            if best[item.server] == nil { order.append(item.server); best[item.server] = -1 }
+            if ms >= 0 && (best[item.server]! < 0 || ms < best[item.server]!) { best[item.server] = ms }
+            if ms < 0, reason[item.server] == nil, let e = result.1, !e.isEmpty { reason[item.server] = shortReason(e) }
+        }
+        return order.map { ($0, best[$0] ?? -1, reason[$0]) }
     }
 
     /// Go's `Head "<url>": <reason>` without the URL part (the reason is what matters).
