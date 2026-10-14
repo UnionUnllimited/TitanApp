@@ -156,6 +156,8 @@ class PingEngine(name: String) {
         val plugins: List<PluginProcess> = emptyList(),
         /** Probes over UDP (Hysteria, TUIC, MASQUE over H3): the only ones measured twice. */
         val udp: Set<String> = emptySet(),
+        /** Probes through a protocol client still starting: measured once it is up. */
+        val ready: Map<String, java.util.concurrent.Future<*>> = emptyMap(),
     )
 
     private val core = XrayProcess(name)
@@ -241,18 +243,21 @@ class PingEngine(name: String) {
         val servers = if (targets.size == 1) all.filter { it.id in targets || it.id in had } else all
         val sigs = servers.associate { it.id to sig(it) }
         session?.plugins?.forEach { runCatching { it.close() } }
-        // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it;
-        // MASQUE: rewritten for Xray itself.
-        // The clients start side by side: each one takes a second or more (antivirus scan).
+        // Naive / Mieru / sing-box servers: their client as a local SOCKS, the probe goes
+        // through it; MASQUE: rewritten for Xray itself. The clients start side by side in
+        // the background (each takes a second or more: antivirus scan) while the core is
+        // already measuring the rest; a probe through a client waits for that client only.
         val plugins = java.util.Collections.synchronizedList(mutableListOf<PluginProcess>())
-        val starts = servers.associate { s ->
-            s.id to startPool.submit(java.util.concurrent.Callable {
-                runCatching { Plugins.prepare(s) }
-                    .map { (json, p) -> p?.let(plugins::add); json }
-                    .getOrDefault(s.xrayJson)
-            })
+        val startOf = HashMap<String, java.util.concurrent.Future<*>>()
+        val jsonOf = servers.associate { s ->
+            val (json, p) = runCatching { Plugins.prepare(s, start = false) }.getOrDefault(s.xrayJson to null)
+            if (p != null) {
+                plugins += p
+                startOf[s.id] = startPool.submit { p.start() }
+            }
+            s.id to json
         }
-        val jsonOf = starts.mapValues { (id, f) -> runCatching { f.get() }.getOrDefault(servers.first { it.id == id }.xrayJson) }
+        val ready = HashMap<String, java.util.concurrent.Future<*>>()
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
         val udp = HashSet<String>()
@@ -264,13 +269,14 @@ class PingEngine(name: String) {
                 val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
                 if (key !in probes && probes.size < 200) probes[key] = Probe(json, tag)
                 if (key in probes && (serverUdp || isUdp(json, tag))) udp += key
+                startOf[s.id]?.let { if (key in probes) ready[key] = it }
                 key.takeIf { it in probes }
             }.distinct()
         }
         val keys = probes.keys.toList()
         val ports = if (keys.isEmpty()) emptyList() else freePorts(keys.size)
         if (keys.isNotEmpty()) core.start(XrayConfigs.buildPingConfig(keys.map { probes.getValue(it).let { p -> p.json to p.tag } }, ports))
-        return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp).also { session = it }
+        return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp, ready).also { session = it }
     }
 
     /** Hysteria, QUIC, mKCP… outbounds: they go over UDP. */
@@ -310,6 +316,10 @@ class PingEngine(name: String) {
             pool.submit {
                 if (cancelled()) return@submit
                 synchronized(lock) { ids.filter { started.add(it) }.takeIf { it.isNotEmpty() }?.let(onStart) }
+                // Through a protocol client: once it is up (it didn't start: no answer).
+                s.ready[key]?.let { start ->
+                    if (runCatching { start.get(30, TimeUnit.SECONDS) }.isFailure) { report(key, -1); return@submit }
+                }
                 val port = s.ports.getValue(key)
                 // One cold attempt (a dead server costs 4 s); if it answered, a second one
                 // and the better of the two.

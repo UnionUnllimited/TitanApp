@@ -121,15 +121,18 @@ object Plugins {
      * The config to run for [server]: as is, MASQUE rewritten for Xray, or pointed at a
      * started [PluginProcess] (returned, to be closed by the caller).
      */
-    fun prepare(server: Server): Pair<String, PluginProcess?> {
+    /** [start] false: the client isn't started yet (the caller starts it; its port is fixed). */
+    fun prepare(server: Server, start: Boolean = true): Pair<String, PluginProcess?> {
         val ep = endpoint(server) ?: return server.xrayJson to null
         if (ep.kind.exe == null) return withMasque(server.xrayJson, server.proxyTag, ep) to null
         val p = PluginProcess(ep)
-        try {
-            p.start()
-        } catch (e: Exception) {
-            p.close()
-            throw e
+        if (start) {
+            try {
+                p.start()
+            } catch (e: Exception) {
+                p.close()
+                throw e
+            }
         }
         return withLocalSocks(server.xrayJson, server.proxyTag, p.port) to p
     }

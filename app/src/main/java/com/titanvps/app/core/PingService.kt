@@ -40,6 +40,8 @@ class PingService : Service() {
         val plugins: List<PluginProcess> = emptyList(),
         /** Probes over UDP (Hysteria, TUIC, MASQUE over H3): the only ones measured twice. */
         val udp: Set<String> = emptySet(),
+        /** Probes through a protocol client still starting: measured once it is up. */
+        val ready: Map<String, java.util.concurrent.Future<*>> = emptyMap(),
     )
 
     private val requests = Executors.newCachedThreadPool()
@@ -127,19 +129,23 @@ class PingService : Service() {
         stopSession()
         XrayCore.ensurePingDns()
 
-        // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it;
-        // MASQUE: rewritten for Xray itself.
-        // The clients start side by side, not one after another.
+        // Naive / Mieru / sing-box servers: their client as a local SOCKS, the probe goes
+        // through it; MASQUE: rewritten for Xray itself. The clients start side by side in the
+        // background while the core is already measuring the rest; a probe through a client
+        // waits for that client only.
         val plugins = java.util.Collections.synchronizedList(mutableListOf<PluginProcess>())
-        val starts = servers.associate { item ->
+        val startOf = HashMap<String, java.util.concurrent.Future<*>>()
+        val jsonOf = servers.associate { item ->
             val json = item.getString("json")
-            item.getString("id") to startPool.submit(java.util.concurrent.Callable {
-                runCatching { Plugins.prepare(this, item.optString("name"), json, item.getString("tag")) }
-                    .map { (prepared, p) -> p?.let(plugins::add); prepared }
-                    .getOrDefault(json) // client didn't start: the probe just times out
-            })
+            val (prepared, p) = runCatching { Plugins.prepare(this, item.optString("name"), json, item.getString("tag"), start = false) }
+                .getOrDefault(json to null)
+            if (p != null) {
+                plugins += p
+                startOf[item.getString("id")] = startPool.submit { p.start() }
+            }
+            item.getString("id") to prepared
         }
-        val jsonOf = starts.mapValues { (id, f) -> runCatching { f.get() }.getOrElse { servers.first { it.getString("id") == id }.getString("json") } }
+        val ready = HashMap<String, java.util.concurrent.Future<*>>()
 
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
@@ -153,6 +159,7 @@ class PingService : Service() {
                 val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
                 if (key !in probes && probes.size < MAX_PROBES) probes[key] = Probe(json, tag)
                 if (key in probes && (serverUdp || isUdp(json, tag))) udp += key
+                startOf[item.getString("id")]?.let { if (key in probes) ready[key] = it }
                 key.takeIf { it in probes }
             }.distinct()
         }
@@ -164,7 +171,7 @@ class PingService : Service() {
             plugins.forEach { runCatching { it.close() } }
             throw e
         }
-        Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp).also { session = it }
+        Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp, ready).also { session = it }
     }
 
     /**
@@ -210,6 +217,10 @@ class PingService : Service() {
                 synchronized(lock) {
                     val fresh = ids.filter { started.add(it) }
                     if (fresh.isNotEmpty()) sendStarted(receiver, fresh)
+                }
+                // Through a protocol client: once it is up (it didn't start: no answer).
+                s.ready[key]?.let { start ->
+                    if (runCatching { start.get(30, java.util.concurrent.TimeUnit.SECONDS) }.isFailure) { report(key, -1L); return@submit }
                 }
                 val r = measureKey(s.ports.getValue(key))
                 // In a full run a bad result over UDP (Hysteria, TUIC) is often just the crowd:
