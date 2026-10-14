@@ -73,6 +73,22 @@ jobs:
       # A plain download link (artifacts need a GitHub login): for signing services
       # (UDID certificate) and Sideloadly. Not "latest": Android reads releases/latest.
       - name: Publish release
+        id: publish
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Titan VPS для iOS (неподписанный IPA) ${{ github.run_number }}
+          make_latest: false
+          files: ios/TitanVPS-unsigned.ipa
+
+      # GitHub's release API sometimes fails once ("reading 'data'"); a second try a bit later works.
+      - name: Wait before retrying the release
+        if: steps.publish.outcome == 'failure'
+        run: sleep 20
+      - name: Publish release (retry)
+        if: steps.publish.outcome == 'failure'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ios-${{ github.run_number }}
