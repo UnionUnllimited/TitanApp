@@ -188,6 +188,14 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Other checks that must not go through the tunnel (Технический режим's TCP check):
+    /// the VPN off for their time, as for a ping, and back on after.
+    func withVPNPaused(_ work: () async -> Void) async {
+        await beginPing()
+        defer { endPing() }
+        await work()
+    }
+
     /// The first ping in flight stops the VPN (remembering its server); later ones wait for that.
     private func beginPing() async {
         pingUsers += 1

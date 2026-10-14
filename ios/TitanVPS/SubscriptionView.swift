@@ -226,6 +226,14 @@ struct ProfileView: View {
     @State private var confirmLogout = false
     @State private var confirmReset = false
     @State private var about = false
+    /// Технический режим: 7 taps on the version (under 3 s apart) ask for the code.
+    @AppStorage(TechMode.key) private var techMode = false
+    @State private var taps = 0
+    @State private var lastTap = Date.distantPast
+    @State private var askCode = false
+    @State private var code = ""
+    @State private var wrongCode = false
+    @State private var showTech = false
 
     private var version: String {
         let info = Bundle.main.infoDictionary
@@ -265,6 +273,16 @@ struct ProfileView: View {
                     Link(destination: store.supportURL) { Label("Поддержка", systemImage: "headphones") }
                     Button { Task { await store.refresh() } } label: { Label("Обновить подписку", systemImage: "arrow.clockwise") }
                     Button { about = true } label: { Label("О приложении", systemImage: "info.circle") }
+                    HStack {
+                        Text("Версия")
+                        Spacer()
+                        Text(wrongCode ? "Неверный код" : version).foregroundColor(wrongCode ? .red : .secondary)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { versionTapped() }
+                    if techMode {
+                        Button { showTech = true } label: { Label("Технический режим", systemImage: "wrench.and.screwdriver") }
+                    }
                 }
                 Section {
                     Button("Сброс настроек") { confirmReset = true }
@@ -272,6 +290,12 @@ struct ProfileView: View {
                 }
             }
             .navigationTitle("Настройки")
+            .navigationDestination(isPresented: $showTech) { TechModeView() }
+            .alert("Код", isPresented: $askCode) {
+                SecureField("Код", text: $code).keyboardType(.numberPad)
+                Button("Открыть") { enterCode() }
+                Button("Отмена", role: .cancel) { code = "" }
+            }
             .alert("Titan VPS", isPresented: $about) {
                 Button("Закрыть", role: .cancel) {}
             } message: {
@@ -295,6 +319,32 @@ struct ProfileView: View {
                 Button("Отмена", role: .cancel) {}
             } message: {
                 Text("VPN отключится, ключ нужно будет вставить заново.")
+            }
+        }
+    }
+
+    @MainActor private func versionTapped() {
+        let now = Date()
+        taps = now.timeIntervalSince(lastTap) < 3 ? taps + 1 : 1
+        lastTap = now
+        guard taps >= 7 else { return }
+        taps = 0
+        code = ""
+        askCode = true
+    }
+
+    /// Checked by hash only; a wrong code just says so for a moment.
+    @MainActor private func enterCode() {
+        let ok = TechMode.check(code)
+        code = ""
+        if ok {
+            techMode = true
+            showTech = true
+        } else {
+            wrongCode = true
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                wrongCode = false
             }
         }
     }
