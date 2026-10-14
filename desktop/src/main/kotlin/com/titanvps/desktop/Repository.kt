@@ -169,6 +169,11 @@ class PingEngine(name: String) {
     private var session: Session? = null
     /** Bumped by [cancel]: measurements started before it stop taking new probes. */
     private val generation = java.util.concurrent.atomic.AtomicInteger()
+    /**
+     * Measurements hold it shared; a new core (other servers) waits for them: restarting
+     * the core under a running measurement made it a timeout (ping one, then the next).
+     */
+    private val sessionLock = java.util.concurrent.locks.ReentrantReadWriteLock()
 
     /** Stops the measurements in progress: what is still queued isn't measured. */
     fun cancel() { generation.incrementAndGet() }
@@ -182,7 +187,12 @@ class PingEngine(name: String) {
         val gen = generation.get()
         active.incrementAndGet()
         try {
-            measure(ensureSession(all, targets), targets, targets.size == 1, onStart, onResult) { generation.get() != gen }
+            val s = acquireSession(all, targets)
+            try {
+                measure(s, targets, targets.size == 1, onStart, onResult) { generation.get() != gen }
+            } finally {
+                sessionLock.readLock().unlock()
+            }
         } finally {
             if (active.decrementAndGet() == 0) synchronized(this) {
                 idleStop = timer.schedule(Runnable { stopIfIdle() }, KEEP_WARM_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -200,14 +210,35 @@ class PingEngine(name: String) {
         session = null
     }
 
+    private fun sig(s: Server) = (s.xrayJson + s.proxyTag).hashCode()
+
+    /** The warm core, if it already has the servers asked for (unchanged). */
+    @Synchronized
+    private fun covering(all: List<Server>, targets: List<String>): Session? =
+        session?.takeIf { s -> core.isRunning && all.filter { it.id in targets }.all { s.sigs[it.id] == sig(it) } }
+
+    /** A session with [targets], returned with the read lock held (the caller unlocks). */
+    private fun acquireSession(all: List<Server>, targets: List<String>): Session {
+        sessionLock.readLock().lock()
+        covering(all, targets)?.let { return it }
+        sessionLock.readLock().unlock()
+        sessionLock.writeLock().lock()
+        try {
+            val s = covering(all, targets) ?: ensureSession(all, targets)
+            sessionLock.readLock().lock() // downgrade: measure under the read lock
+            return s
+        } finally {
+            sessionLock.writeLock().unlock()
+        }
+    }
+
     @Synchronized
     private fun ensureSession(all: List<Server>, targets: List<String>): Session {
-        val sig = { s: Server -> (s.xrayJson + s.proxyTag).hashCode() }
-        // A warm core that already has the servers asked for (unchanged) is reused.
-        session?.takeIf { s -> core.isRunning && all.filter { it.id in targets }.all { s.sigs[it.id] == sig(it) } }?.let { return it }
-        // Cold: one server asked for → a core for it alone (starting every Naive / sing-box
+        // Cold: one server asked for → a core for it and those the old core had (pinging one
+        // server after another doesn't restart it each time; starting every Naive / sing-box
         // client of the subscription first would take a minute); a list → all of them.
-        val servers = if (targets.size == 1) all.filter { it.id in targets } else all
+        val had = session?.sigs?.keys.orEmpty()
+        val servers = if (targets.size == 1) all.filter { it.id in targets || it.id in had } else all
         val sigs = servers.associate { it.id to sig(it) }
         session?.plugins?.forEach { runCatching { it.close() } }
         // Naive / Mieru servers: their client as a local SOCKS, the probe goes through it;

@@ -88,14 +88,41 @@ class PingService : Service() {
         return START_NOT_STICKY
     }
 
-    /** Starts (or reuses) the core with every server of the subscription. */
+    /**
+     * Measurements hold it shared; a new core (other servers) waits for them: restarting
+     * the core under a running measurement made it a timeout (ping one, then the next).
+     */
+    private val sessionLock = java.util.concurrent.locks.ReentrantReadWriteLock()
+
+    private fun sig(it: JSONObject) = (it.getString("json") + it.getString("tag")).hashCode()
+
+    /** The warm core, if it already has the servers asked for (unchanged). */
+    private fun covering(all: List<JSONObject>, targets: List<String>): Session? = synchronized(coreLock) {
+        session?.takeIf { s -> all.filter { it.getString("id") in targets }.all { s.serverSigs[it.getString("id")] == sig(it) } }
+    }
+
+    /** A session with [targets], returned with the read lock held (the caller unlocks). */
+    private fun acquireSession(all: List<JSONObject>, targets: List<String>): Session {
+        sessionLock.readLock().lock()
+        covering(all, targets)?.let { return it }
+        sessionLock.readLock().unlock()
+        sessionLock.writeLock().lock()
+        try {
+            val s = covering(all, targets) ?: ensureSession(all, targets)
+            sessionLock.readLock().lock() // downgrade: measure under the read lock
+            return s
+        } finally {
+            sessionLock.writeLock().unlock()
+        }
+    }
+
+    /** Starts the core with the servers asked for. */
     private fun ensureSession(all: List<JSONObject>, targets: List<String>): Session = synchronized(coreLock) {
-        val sig = { it: JSONObject -> (it.getString("json") + it.getString("tag")).hashCode() }
-        // Reuse the warm core if it already has the servers asked for, unchanged.
-        session?.takeIf { s -> all.filter { it.getString("id") in targets }.all { s.serverSigs[it.getString("id")] == sig(it) } }?.let { return it }
-        // Cold: one server asked for → a core for it alone (starting every Naive / sing-box
+        // Cold: one server asked for → a core for it and those the old core had (pinging one
+        // server after another doesn't restart it each time; starting every Naive / sing-box
         // client of the subscription first takes long); a list → all of them.
-        val servers = if (targets.size == 1) all.filter { it.getString("id") in targets } else all
+        val had = session?.serverSigs?.keys.orEmpty()
+        val servers = if (targets.size == 1) all.filter { it.getString("id") in targets || it.getString("id") in had } else all
         val sigs = servers.associate { it.getString("id") to sig(it) }
         stopSession()
         XrayCore.ensurePingDns()
@@ -147,7 +174,15 @@ class PingService : Service() {
     private fun measureTargets(servers: List<JSONObject>, targets: List<String>, single: Boolean, receiver: ResultReceiver?): Boolean {
         val gen = generation.get()
         val cancelled = { generation.get() != gen }
-        val s = ensureSession(servers, targets)
+        val s = acquireSession(servers, targets)
+        try {
+            return measureWith(s, targets, single, receiver, cancelled)
+        } finally {
+            sessionLock.readLock().unlock()
+        }
+    }
+
+    private fun measureWith(s: Session, targets: List<String>, single: Boolean, receiver: ResultReceiver?, cancelled: () -> Boolean): Boolean {
         val pool = if (single) singlePool else listPool
         val keysOf = targets.associateWith { s.serverKeys[it].orEmpty() }
         val best = HashMap<String, Long>()
