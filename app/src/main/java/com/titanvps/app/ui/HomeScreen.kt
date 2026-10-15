@@ -201,7 +201,7 @@ internal fun HomeScreen(
                 connected = connected && s.id == selected?.id,
                 favorite = s.name in favorites,
                 locked = bypassLocked,
-                limited = page == Group.BYPASS,
+                limited = page == Group.BYPASS && ServerGroups.isLimited(s),
                 onClick = { if (bypassLocked) viewModel.explainBypassOnWifi() else viewModel.select(s.id) },
                 onLongClick = { details = s },
                 onPing = { viewModel.pingOne(s.id) },

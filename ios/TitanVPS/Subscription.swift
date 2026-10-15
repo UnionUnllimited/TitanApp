@@ -285,6 +285,8 @@ enum ServerGroup: String, CaseIterable, Identifiable {
     }
 
     static func isBypass(_ s: Server) -> Bool { s.name.lowercased().contains("обход") }
+    /// A bypass server that spends GB: all but the free ones ("Обход 1 бесплатный").
+    static func isLimited(_ s: Server) -> Bool { isBypass(s) && !s.name.lowercased().contains("бесплатн") }
 
     /// Headers ("👇БЕЗЛИМИТНЫЕ👇", "ЛИМИТНЫЕ ОСТ: …") and notices with a dummy address.
     static func isHidden(_ s: Server) -> Bool {

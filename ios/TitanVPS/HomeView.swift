@@ -257,7 +257,7 @@ struct HomeView: View {
                 let locked = store.blockedOnWifi(s)
                 ServerRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
                           unsupported: Plugins.endpoint(s).map { !$0.kind.supportedOnIOS } ?? false,
-                          onPing: { store.pingOne(s) }, error: store.pingErrors[s.id], limited: page == .bypass,
+                          onPing: { store.pingOne(s) }, error: store.pingErrors[s.id], limited: page == .bypass && ServerGroup.isLimited(s),
                           favorite: store.isFavorite(s), locked: locked,
                           selected: s.id == store.selected?.id) {
                     if locked { wifiInfo = true; return }

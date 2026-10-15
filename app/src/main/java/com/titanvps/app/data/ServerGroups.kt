@@ -20,6 +20,9 @@ object ServerGroups {
     /** "Обходы" are exactly the servers with "обход" in the name (Обход 5, АВТО | Быстрые обходы). */
     fun isBypass(server: Server): Boolean = "обход" in server.name.lowercase()
 
+    /** A bypass server that spends GB: all but the free ones ("Обход 1 бесплатный"). */
+    fun isLimited(server: Server): Boolean = isBypass(server) && "бесплатн" !in server.name.lowercase()
+
     fun groupOf(server: Server, @Suppress("UNUSED_PARAMETER") all: List<Server> = emptyList()): Group =
         if (isBypass(server)) Group.BYPASS else Group.SERVERS
 

@@ -116,6 +116,9 @@ object ServerGroups {
     /** "Обходы" are exactly the servers with "обход" in the name (same as on Android). */
     fun isBypass(server: Server): Boolean = "обход" in server.name.lowercase()
 
+    /** A bypass server that spends GB: all but the free ones ("Обход 1 бесплатный"). */
+    fun isLimited(server: Server): Boolean = isBypass(server) && "бесплатн" !in server.name.lowercase()
+
     fun split(servers: List<Server>): Map<Group, List<Server>> {
         val (bypass, regular) = servers.partition(::isBypass)
         return mapOf(Group.SERVERS to regular, Group.BYPASS to bypass).filterValues { it.isNotEmpty() }
