@@ -32,6 +32,26 @@ func titanEcho(t *testing.T, ln stdnet.Listener) {
 	}()
 }
 
+// titanServe answers every connection that sends n bytes; others (the TFO warm-up's
+// one byte) are just closed.
+func titanServe(ln stdnet.Listener, n int, answer func(stdnet.Conn, []byte)) {
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				b := make([]byte, n)
+				if _, err := io.ReadFull(c, b); err == nil {
+					answer(c, b)
+				}
+			}()
+		}
+	}()
+}
+
 func titanRoundTrip(t *testing.T, addr string) {
 	start := time.Now()
 	c, err := dialTFO(context.Background(), &stdnet.Dialer{Timeout: 5 * time.Second}, "tcp", addr)
@@ -71,13 +91,7 @@ func TestTitanTFO(t *testing.T) {
 	for i := range payload {
 		payload[i] = byte(i)
 	}
-	go func() {
-		c, _ := big.Accept()
-		b := make([]byte, len(payload))
-		io.ReadFull(c, b)
-		c.Write(b)
-		c.Close()
-	}()
+	titanServe(big, len(payload), func(c stdnet.Conn, b []byte) { c.Write(b) })
 	bc, err := dialTFO(context.Background(), &stdnet.Dialer{Timeout: 5 * time.Second}, "tcp", big.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -98,14 +112,10 @@ func TestTitanTFO(t *testing.T) {
 	// A server that stays silent for a while (an XHTTP upload): the connection is kept.
 	slow, _ := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	defer slow.Close()
-	go func() {
-		c, _ := slow.Accept()
-		b := make([]byte, 5)
-		io.ReadFull(c, b)
+	titanServe(slow, 5, func(c stdnet.Conn, b []byte) {
 		time.Sleep(2500 * time.Millisecond)
 		c.Write(append([]byte("re:"), b...))
-		c.Close()
-	}()
+	})
 	titanRoundTrip(t, slow.Addr().String())
 	t.Log(TitanTFOLog())
 

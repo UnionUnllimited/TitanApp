@@ -144,6 +144,53 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Hosts whose TFO cookie we fetched, per network (the source address it was fetched from).
+var tfoWarm sync.Map // "<source ip>|<address>" -> *sync.Once
+
+// warmUp makes sure the system has the server's TFO cookie before the real connection.
+// Without one (after a reboot, on a network not used with that server yet: the cookie
+// is kept per network) the SYN goes without data, the request follows the handshake in
+// plain sight and gets the connection blocked where only TFO gets through. So once per
+// server and network a throwaway connection asks for the cookie first (one round trip);
+// the next connections carry their data in the SYN. Concurrent dials wait for it.
+func (c *tfoConn) warmUp() {
+	key := tfoSource(c.network, c.address) + "|" + c.address
+	once, _ := tfoWarm.LoadOrStore(key, new(sync.Once))
+	once.(*sync.Once).Do(func() {
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
+		defer cancel()
+		// One byte: an empty write doesn't open the connection. The server just drops it.
+		conn, err := c.dialer.DialContext(ctx, c.network, c.address, []byte{0})
+		if err != nil {
+			tfoNote("tfo warm-up: %v", err)
+			return
+		}
+		conn.Close()
+		tfoNote("tfo warm-up in %d ms", time.Since(start).Milliseconds())
+	})
+}
+
+// tfoSource is the local address the system would use for address (no packets sent):
+// it changes with the network, and so does the TFO cookie.
+func tfoSource(network, address string) string {
+	udp := "udp"
+	if strings.HasSuffix(network, "6") {
+		udp = "udp6"
+	} else if strings.HasSuffix(network, "4") {
+		udp = "udp4"
+	}
+	conn, err := stdnet.Dial(udp, address)
+	if err != nil {
+		return "?"
+	}
+	defer conn.Close()
+	if a, ok := conn.LocalAddr().(*stdnet.UDPAddr); ok {
+		return a.IP.String()
+	}
+	return "?"
+}
+
 // open dials with TFO (the first part of b in the SYN), or the usual way for a host where
 // a TFO dial failed lately.
 func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
@@ -156,6 +203,7 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
 		if len(first) > limit {
 			first = first[:limit]
 		}
+		c.warmUp()
 		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
 		conn, err := c.dialer.DialContext(ctx, c.network, c.address, first)
 		cancel()
