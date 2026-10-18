@@ -1,15 +1,17 @@
-//go:build darwin
+//go:build darwin || windows
 
 package internet
 
-// Titan patch: real TCP Fast Open on iOS/macOS. Setting TCP_FASTOPEN on the socket is not
-// enough there: the data has to go with connectx(). The connection is opened on the first
-// Write, carrying that data in the SYN (tfo-go), like sing-box does.
+// Titan patch: real TCP Fast Open on iOS/macOS and Windows. Setting TCP_FASTOPEN on the
+// socket is not enough there: the data has to go with connectx() (Apple) or ConnectEx()
+// (Windows). The connection is opened on the first Write, carrying that data in the SYN
+// (tfo-go), like sing-box does.
 //
 // Apple's TCP puts at most the default MSS minus options in a SYN (tcp_tfo_check): with
 // more queued it sends no data in the SYN at all and the connection goes like a plain one.
-// So the SYN gets the first part of the first write and the rest follows. A connection is
-// never redialed for staying silent: some protocols (an XHTTP upload) get no answer.
+// So the SYN gets the first part of the first write (tfoSynData, per system) and the rest
+// follows. A connection is never redialed for staying silent: some protocols (an XHTTP
+// upload) get no answer.
 
 import (
 	"context"
@@ -26,11 +28,6 @@ import (
 )
 
 const (
-	// Data Apple's TCP puts in a SYN: before the handshake it assumes the default MSS (512
-	// for IPv4, 1024 for IPv6) less 40 bytes of options.
-	tfoSynData4 = 512 - 40
-	tfoSynData6 = 1024 - 40
-
 	// How long a TFO dial may take before the host is tried without TFO.
 	tfoDialTimeout = 3 * time.Second
 	// How long a host where a TFO dial failed is dialed without it.

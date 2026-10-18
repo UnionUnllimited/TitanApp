@@ -43,6 +43,13 @@ class TitanVpnService : VpnService() {
                 scope.launch { lock.withLock { switchToBypass(auto = false) } }
                 return START_STICKY
             }
+            // The status notification was swiped away (Android 14+ lets users): back while on.
+            ACTION_RESHOW -> {
+                val st = VpnStatus.state.value
+                if (st !is VpnState.Connected && st != VpnState.Connecting) { stopSelf(startId); return START_NOT_STICKY }
+                startForegroundCompat(notificationText, connectedAt)
+                return START_STICKY
+            }
             ACTION_STOP -> {
                 scope.launch { lock.withLock { stopVpn() }; stopSelf() }
                 return START_NOT_STICKY
@@ -118,7 +125,7 @@ class TitanVpnService : VpnService() {
             VpnStatus.localProxy = localProxy
 
             VpnStatus.set(VpnState.Connected(server.name, System.currentTimeMillis()))
-            startForegroundCompat(getString(R.string.notification_connected, server.name))
+            startForegroundCompat(getString(R.string.notification_connected, server.name), System.currentTimeMillis())
             startWatcher(server)
             watchWifi(server, all)
             watchUpdates()
@@ -319,10 +326,30 @@ class TitanVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private fun startForegroundCompat(text: String) {
+    private var notificationText = ""
+    private var connectedAt = 0L
+
+    /**
+     * The VPN's own notification, kept at the top of the shade while on: a channel of
+     * default importance (the main section, not "Silent") without sound, connection time on
+     * a timer, and shown again if swiped away. [since]: connected at, 0 while connecting.
+     */
+    private fun startForegroundCompat(text: String, since: Long = 0L) {
+        notificationText = text
+        connectedAt = since
         val nm = getSystemService(NotificationManager::class.java)
+        // The old low-importance channel went to "Silent" at the bottom; a channel's
+        // importance can't be raised, hence a new one.
+        nm.deleteNotificationChannel(OLD_CHANNEL_ID)
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_DEFAULT).apply {
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
+            }
+        )
+        val reshow = PendingIntent.getService(
+            this, 2, Intent(this, TitanVpnService::class.java).setAction(ACTION_RESHOW), PendingIntent.FLAG_IMMUTABLE
         )
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
@@ -335,6 +362,15 @@ class TitanVpnService : VpnService() {
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(false)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setShowWhen(since > 0)
+            .setWhen(if (since > 0) since else System.currentTimeMillis())
+            .setUsesChronometer(since > 0)
+            .setDeleteIntent(reshow)
             .setContentIntent(open)
             .addAction(0, getString(R.string.action_disconnect), stop)
             .build()
@@ -350,7 +386,9 @@ class TitanVpnService : VpnService() {
         private const val UPDATE_CHANNEL_ID = "updates"
         private const val UPDATE_ID = 3
         private const val ALERT_ID = 2
-        private const val CHANNEL_ID = "vpn"
+        private const val CHANNEL_ID = "vpn_status"
+        private const val OLD_CHANNEL_ID = "vpn"
+        private const val ACTION_RESHOW = "com.titanvps.app.RESHOW"
         private const val NOTIFICATION_ID = 1
         private const val MTU = 1500
 

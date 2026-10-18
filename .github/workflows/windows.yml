@@ -3,7 +3,7 @@ name: Windows
 on:
   push:
     branches: [main, "claude/**"]
-    paths: ["desktop/**", ".github/workflows/windows.yml"]
+    paths: ["desktop/**", ".github/workflows/windows.yml", "scripts/ios-patches/xray-tfo/**"]
   workflow_dispatch:
 
 # One run at a time per branch: two runs publishing releases at once made one fail.
@@ -26,16 +26,34 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # Xray core for Windows + the same geo files as Android.
-      - name: Download xray.exe and geo files
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      # Xray built here, patched for real TCP Fast Open on Windows (the first data goes in
+      # the SYN through ConnectEx; the socket option alone sends none): the same patch as
+      # on iOS (scripts/ios-patches/xray-tfo).
+      - name: Build xray.exe with TCP Fast Open
+        shell: bash
+        env:
+          GOTOOLCHAIN: auto
+        run: |
+          dest=desktop/resources/windows
+          mkdir -p "$dest"
+          git clone -q --depth 1 -b v26.9.30 https://github.com/XTLS/Xray-core xray-src
+          python scripts/ios-patches/xray-tfo/apply.py xray-src
+          cd xray-src
+          go get github.com/database64128/tfo-go/v2@v2.4.2
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -buildid=" -o "../$dest/xray.exe" ./main
+          ls -la "../$dest/xray.exe"
+
+      # The same geo files as Android, the TUN core and protocol clients.
+      - name: Download geo files and clients
         shell: pwsh
         run: |
           $dest = "desktop/resources/windows"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          # Pinned: MASQUE needs Xray 26.9.30+ (a pre-release, so not "latest" yet).
-          Invoke-WebRequest -Uri "https://github.com/XTLS/Xray-core/releases/download/v26.9.30/Xray-windows-64.zip" -OutFile xray.zip
-          Expand-Archive xray.zip -DestinationPath xray
-          Copy-Item xray/xray.exe $dest/
           $geo = "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download"
           Invoke-WebRequest -Uri "$geo/geoip.dat" -OutFile "$dest/geoip.dat"
           Invoke-WebRequest -Uri "$geo/geosite.dat" -OutFile "$dest/geosite.dat"
