@@ -74,10 +74,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         pathMonitor = monitor
     }
 
-    private func networkChanged(_ path: NWPath) {
+    private func networkChanged(_ path: Network.NWPath) {
         // The physical network the traffic goes out through: the first one iOS prefers
         // (our own utun is type .other). A second one coming and going doesn't count.
-        let primary = path.availableInterfaces.first { $0.type != .other && $0.type != .loopback }
+        let primary = path.availableInterfaces.first { $0.type != NWInterface.InterfaceType.other && $0.type != NWInterface.InterfaceType.loopback }
         let now = path.status == .satisfied ? primary.map { "\($0.type):\($0.name)" } : nil
         let before = network
         network = now
