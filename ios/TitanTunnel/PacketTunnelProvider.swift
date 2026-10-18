@@ -1,4 +1,5 @@
 import LibXray
+import Network
 import NetworkExtension
 import os
 
@@ -29,6 +30,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             do {
                 if let plugin { try self.startPlugin(plugin) }
                 try self.startXray(config)
+                self.running = (config, plugin)
+                self.watchNetwork()
                 completionHandler(nil)
             } catch {
                 self.log.error("start failed: \(error.localizedDescription, privacy: .public)")
@@ -39,12 +42,77 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        running = nil
         _ = Self.invoke("stopXray")
         stopPlugin()
         completionHandler()
     }
 
     private var pluginHandle: Int?
+
+    // MARK: Network changes
+
+    /// What runs now, to start again on a new network.
+    private var running: (config: String, plugin: String?)?
+    private var pathMonitor: NWPathMonitor?
+    private let queue = DispatchQueue(label: "su.titanvps.tunnel.network")
+    private var network: String?
+    private var pendingRestart: DispatchWorkItem?
+
+    /// After a reboot iOS starts the VPN before the network (LTE above all) is really up,
+    /// and on a Wi-Fi ↔ LTE switch the old one goes away: connections Xray opened then
+    /// hang until they time out, so the VPN "works only after a while". When the network
+    /// the tunnel goes out through appears or changes, Xray (and the protocol client) start
+    /// again on it with fresh connections. The utun fd stays: on iOS Xray doesn't close it.
+    private func watchNetwork() {
+        pathMonitor?.cancel()
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in self?.networkChanged(path) }
+        monitor.start(queue: queue)
+        pathMonitor = monitor
+    }
+
+    private func networkChanged(_ path: NWPath) {
+        // The physical network the traffic goes out through: the first one iOS prefers
+        // (our own utun is type .other). A second one coming and going doesn't count.
+        let primary = path.availableInterfaces.first { $0.type != .other && $0.type != .loopback }
+        let now = path.status == .satisfied ? primary.map { "\($0.type):\($0.name)" } : nil
+        let before = network
+        network = now
+        // The first report is the network we started on (or none yet).
+        guard reported else { reported = true; return }
+        // No network: nothing to do until one comes; the same one: nothing to do.
+        guard let now, now != before else { return }
+        log.info("network: \(before ?? "none", privacy: .public) -> \(now, privacy: .public)")
+        scheduleRestart()
+    }
+    private var reported = false
+
+    /// Waits a moment for the network to settle (several reports come at once).
+    private func scheduleRestart() {
+        pendingRestart?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.restart() }
+        pendingRestart = work
+        queue.asyncAfter(deadline: .now() + 1.5, execute: work)
+    }
+
+    private func restart() {
+        pendingRestart = nil
+        guard let run = running else { return }
+        reasserting = true
+        defer { reasserting = false }
+        _ = Self.invoke("stopXray")
+        do {
+            if let plugin = run.plugin { try startPlugin(plugin) }
+            try startXray(run.config)
+            log.info("restarted on the new network")
+        } catch {
+            log.error("restart failed: \(error.localizedDescription, privacy: .public)")
+            cancelTunnelWithError(error)
+        }
+    }
 
     private func startPlugin(_ request: String) throws {
         stopPlugin()
