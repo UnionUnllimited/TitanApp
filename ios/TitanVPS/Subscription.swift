@@ -167,58 +167,6 @@ enum SubscriptionAPI {
         proxy["streamSettings"] = stream
     }
 
-    /// iOS puts at most ~470 bytes in a TFO SYN (Android ~1400), and an XHTTP request with
-    /// the default browser headers and padding is 700-1600: the rest of its plain HTTP
-    /// headers went after the handshake, where the DPI box saw them. For XHTTP over TFO
-    /// the request is cut down to fit: a short browser User-Agent and padding at the bottom
-    /// of the server's range (the server checks only its length).
-    /// Upload bytes per XHTTP POST over TFO on iOS (headers ~330 B + this ≤ ~470 B in a SYN).
-    static let xhttpPostInSyn = 120
-
-    /// A browser's User-Agent short enough for the SYN ("golang" gave the program away to
-    /// the DPI box; Xray's default Chrome one is ~50 B longer).
-    static let xhttpUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X)"
-
-    static func fitXhttpInSyn(_ outbound: inout [String: Any]) {
-        guard var stream = outbound["streamSettings"] as? [String: Any],
-              ["xhttp", "splithttp"].contains((stream["network"] as? String) ?? ""),
-              (stream["sockopt"] as? [String: Any])?["tcpFastOpen"] as? Bool == true else { return }
-        let key = stream["xhttpSettings"] != nil ? "xhttpSettings" : "splithttpSettings"
-        var xhttp = stream[key] as? [String: Any] ?? [:]
-        func tighten(_ s: inout [String: Any]) {
-            var headers = s["headers"] as? [String: Any] ?? [:]
-            if !headers.keys.contains(where: { $0.lowercased() == "user-agent" }) { headers["User-Agent"] = xhttpUserAgent }
-            s["headers"] = headers
-            // Exactly the bottom of the server's range: the request size doesn't wander.
-            let from = paddingFrom(s["xPaddingBytes"]) ?? 100
-            s["xPaddingBytes"] = "\(from)-\(from)"
-            // Uploads too: Android puts each POST with its data (up to ~1300 B) in a SYN;
-            // here a POST that doesn't fit sent the rest after the handshake, and with it the
-            // site's name from the TLS handshake inside, so the DPI box cut the connection.
-            // Small POSTs fit with their headers (~330 B) in the ~470 B a SYN takes.
-            s["scMaxEachPostBytes"] = xhttpPostInSyn
-        }
-        // "extra" overrides the top-level settings in Xray: both get the same.
-        if var extra = xhttp["extra"] as? [String: Any] {
-            if xhttp["xPaddingBytes"] == nil, let p = extra["xPaddingBytes"] { xhttp["xPaddingBytes"] = p }
-            tighten(&extra)
-            xhttp["extra"] = extra
-        }
-        tighten(&xhttp)
-        stream[key] = xhttp
-        outbound["streamSettings"] = stream
-    }
-
-    /// The lower end of an Xray range ("100-1000", 100, {"from": 100, ...}).
-    private static func paddingFrom(_ value: Any?) -> Int? {
-        switch value {
-        case let n as Int: return n
-        case let s as String: return Int(s.split(separator: "-").first.map(String.init) ?? s)
-        case let d as [String: Any]: return d["from"] as? Int
-        default: return nil
-        }
-    }
-
     /// Xray JSON (array of configs or one config): name from `remarks`, endpoint of the
     /// first proxy outbound for the TCP ping.
     static func parseServers(_ body: String) throws -> [Server] {
@@ -236,7 +184,6 @@ enum SubscriptionAPI {
             if ((outbounds[proxyIndex]["tag"] as? String) ?? "").isEmpty { outbounds[proxyIndex]["tag"] = "proxy" }
             let name = ((cfg["remarks"] as? String)?.nilIfEmpty) ?? "Сервер \(i + 1)"
             applyTfo(name, &outbounds[proxyIndex])
-            for i in outbounds.indices { fitXhttpInSyn(&outbounds[i]) }
             cfg["outbounds"] = outbounds
             let proxy = outbounds[proxyIndex]
             let proxyTag = proxy["tag"] as? String ?? "proxy"
