@@ -150,6 +150,12 @@ final class AppStore: ObservableObject {
         case .info: break
         }
         toast = Toast(text: text, kind: kind)
+        // VoiceOver says it too (a moment later, so the tap's own speech doesn't cut it off).
+        if UIAccessibility.isVoiceOverRunning {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                UIAccessibility.post(notification: .announcement, argument: text)
+            }
+        }
     }
 
     func loadAccount() async {
@@ -207,13 +213,16 @@ final class AppStore: ObservableObject {
         pingTotal = order.count
         measuring = Set(order.map(\.id))
         pingTask = Task {
+            // Стоп before the VPN was touched.
+            guard !Task.isCancelled else { return }
             let hold = await beginPing()
             defer { endPing(hold) }
             // Стоп while the VPN was going off.
             guard !Task.isCancelled else { return }
             pingAllHold = hold
             await XrayPing.pingMany(order) { [weak self] id, ms, error in
-                guard let self, self.pinging else { return }
+                // A stopped run's call may still answer: its results don't go into a newer one.
+                guard let self, self.pinging, self.pingAllHold == hold else { return }
                 self.pings[id] = ms
                 self.pingErrors[id] = error
                 self.measuring.remove(id)
@@ -254,7 +263,7 @@ final class AppStore: ObservableObject {
             guard measuring.contains(server.id) else { return }
             oneHolds[server.id] = hold
             await XrayPing.pingMany([server]) { [weak self] id, ms, error in
-                guard let self, self.measuring.contains(id) else { return }
+                guard let self, self.oneHolds[id] == hold, self.measuring.contains(id) else { return }
                 self.pings[id] = ms
                 self.pingErrors[id] = error
                 self.measuring.remove(id)

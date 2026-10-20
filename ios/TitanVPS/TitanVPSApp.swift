@@ -5,6 +5,7 @@ struct TitanVPSApp: App {
     @StateObject private var store = AppStore()
     @StateObject private var vpn = VPNController()
     @AppStorage("theme") private var theme = "system"
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -15,6 +16,8 @@ struct TitanVPSApp: App {
                 .preferredColorScheme(theme == "dark" ? .dark : theme == "light" ? .light : nil)
                 .tint(Palette.primary)
                 .onChange(of: theme) { AppIconSwitcher.schedule(theme: $0) }
+                // Left the app before the icon could change: change it on return.
+                .onChange(of: scenePhase) { if $0 == .active { AppIconSwitcher.applyDeferred() } }
         }
     }
 }
@@ -25,6 +28,7 @@ struct TitanVPSApp: App {
 /// one change, a moment after the last tap (a change while one is running would fail).
 enum AppIconSwitcher {
     private static var pending: DispatchWorkItem?
+    private static var deferred: String?
 
     static func schedule(theme: String) {
         pending?.cancel()
@@ -33,9 +37,17 @@ enum AppIconSwitcher {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
+    static func applyDeferred() {
+        guard let theme = deferred else { return }
+        deferred = nil
+        schedule(theme: theme)
+    }
+
     static func apply(theme: String) {
         let app = UIApplication.shared
-        guard app.supportsAlternateIcons, app.applicationState == .active else { return }
+        guard app.supportsAlternateIcons else { return }
+        guard app.applicationState == .active else { deferred = theme; return }
+        deferred = nil
         let name: String? = theme == "dark" ? "AppIconDark" : theme == "light" ? "AppIconLight" : nil
         guard app.alternateIconName != name else { return }
         app.setAlternateIconName(name) { _ in }
@@ -55,7 +67,7 @@ enum Palette {
     /// The logo's colours across a title.
     static let logoGradient = LinearGradient(colors: [cyan, primary, violet], startPoint: .leading, endPoint: .trailing)
     static let accentGradient = LinearGradient(colors: [primary, violet], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let greenGradient = LinearGradient(colors: [dynamic(light: 0x22C55E, dark: 0x34D399), green],
+    static let greenGradient = LinearGradient(colors: [Color(UIColor(hex: 0x16A34A)), Color(UIColor(hex: 0x15803D))],
                                               startPoint: .topLeading, endPoint: .bottomTrailing)
     /// The Выкл | Вкл knob while off: raised above the track.
     static let knob = dynamic(light: 0xFFFFFF, dark: 0x343D4F)
@@ -75,8 +87,11 @@ extension UIColor {
 struct Card<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        // Clipped: a pressed row's highlight keeps the rounded corners.
         VStack(alignment: .leading, spacing: 0) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(Palette.surface, in: shape)
+            .clipShape(shape)
     }
 }

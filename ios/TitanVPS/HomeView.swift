@@ -8,6 +8,8 @@ struct HomeView: View {
     @State private var page: ServerGroup = .servers
     @State private var expanded = false
     @State private var wifiInfo = false
+    /// The Выкл | Вкл knob is being dragged sideways: the page stays still.
+    @State private var holdingKnob = false
     @Environment(\.openURL) private var openURL
     var openSubscription: () -> Void
     var openSettings: () -> Void
@@ -19,7 +21,7 @@ struct HomeView: View {
                 header
                 if wide {
                     HStack(alignment: .top, spacing: 0) {
-                        ScrollView { VStack(spacing: 12) { controls }.padding(16) }
+                        ScrollView { VStack(spacing: 12) { controls }.padding(16) }.scrollDisabled(holdingKnob)
                         ScrollView { VStack(spacing: 10) { list }.padding(16) }.refreshable { await store.refreshFromPull() }
                     }
                 } else {
@@ -32,6 +34,7 @@ struct HomeView: View {
                         .frame(maxWidth: 640)
                         .frame(maxWidth: .infinity)
                     }
+                    .scrollDisabled(holdingKnob)
                     .refreshable { await store.refreshFromPull() }
                 }
             }
@@ -126,7 +129,8 @@ struct HomeView: View {
             subscriptionCard(sub)
             PowerSlider(phase: powerPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Пинг…",
                         failures: vpn.failures, onToggle: toggleVPN,
-                        onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) })
+                        onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) },
+                        onHold: { holdingKnob = $0 })
                 .padding(.top, 6)
             statusBlock
         }
@@ -281,7 +285,10 @@ struct HomeView: View {
                             .frame(width: 44, height: 44)
                             .background(active ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Color.red), in: Circle())
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(active ? "Подписка активна" : "Подписка истекла").font(.system(size: 16, weight: .semibold))
+                            HStack(spacing: 4) {
+                                Text(active ? "Подписка активна" : "Подписка истекла").font(.system(size: 16, weight: .semibold))
+                                Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(.tertiary)
+                            }
                             Text(sub.info.expire > 0 ? "До " + Fmt.date(sub.info.expire) : "Бессрочно")
                                 .font(.system(size: 14)).foregroundStyle(.secondary)
                         }
@@ -290,18 +297,11 @@ struct HomeView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(PressableStyle(scale: 0.98))
-                CircleIconButton(icon: "arrow.clockwise", spinning: store.busy) {
+                CircleIconButton(icon: "arrow.clockwise", spinning: store.busy, size: 44) {
                     Task { await store.refreshByHand() }
                 }
                 .disabled(store.busy)
                 .accessibilityLabel("Обновить подписку")
-                Button(action: openSubscription) {
-                    Image(systemName: "chevron.right").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
-                        .frame(width: 24, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Открыть подписку")
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             Divider().padding(.horizontal, 14)

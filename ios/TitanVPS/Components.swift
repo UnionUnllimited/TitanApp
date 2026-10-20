@@ -136,10 +136,11 @@ struct TitanToggleStyle: ToggleStyle {
             Haptics.tap()
             configuration.isOn.toggle()
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityValue(configuration.isOn ? "включено" : "выключено")
-        .accessibilityAction { configuration.isOn.toggle() }
+        // VoiceOver: an ordinary switch with the label's text.
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .toggleStyle(.switch)
+        }
     }
 }
 
@@ -160,6 +161,7 @@ struct IconTile: View {
                 LinearGradient(colors: [color.opacity(0.8), color], startPoint: .top, endPoint: .bottom),
                 in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
             )
+            .accessibilityHidden(true)
     }
 }
 

@@ -90,20 +90,14 @@ struct SubscriptionView: View {
                             Text("Расширенные функции").fontWeight(.semibold)
                             Text("Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте или в полном кабинете на сайте (вход по почте или через Telegram).")
                                 .font(.system(size: 13)).foregroundStyle(.secondary)
-                            HStack(spacing: 10) {
-                                Button { openURL(Config.telegram) } label: {
-                                    Label("Открыть бота", systemImage: "paperplane.fill").lineLimit(1)
-                                }
-                                .buttonStyle(SecondaryButtonStyle(height: 46))
-                                if let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
-                                    guard let scheme = u.scheme, let host = u.host else { return nil }
-                                    return URL(string: "\(scheme)://\(host)/auth")
-                                }) {
-                                    Button { openURL(site) } label: {
-                                        Label("Открыть сайт", systemImage: "globe").lineLimit(1)
-                                    }
-                                    .buttonStyle(SecondaryButtonStyle(height: 46))
-                                }
+                            let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
+                                guard let scheme = u.scheme, let host = u.host else { return nil }
+                                return URL(string: "\(scheme)://\(host)/auth")
+                            })
+                            // Side by side where both fit, one under the other on a narrow phone.
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 10) { linkButtons(site) }
+                                VStack(spacing: 10) { linkButtons(site) }
                             }
                         }
                         .padding(16)
@@ -124,6 +118,19 @@ struct SubscriptionView: View {
             if let link = store.subscription?.info.webPageUrl {
                 CabinetView(link: link, devices: store.account.map { ($0.devices.count, $0.deviceLimit) })
             }
+        }
+    }
+
+    @ViewBuilder private func linkButtons(_ site: URL?) -> some View {
+        Button { openURL(Config.telegram) } label: {
+            Label("Открыть бота", systemImage: "paperplane.fill").lineLimit(1)
+        }
+        .buttonStyle(SecondaryButtonStyle(height: 46))
+        if let site {
+            Button { openURL(site) } label: {
+                Label("Открыть сайт", systemImage: "globe").lineLimit(1)
+            }
+            .buttonStyle(SecondaryButtonStyle(height: 46))
         }
     }
 
@@ -284,6 +291,7 @@ struct ProfileView: View {
                                 IconTile(icon: "bolt.fill", color: Palette.green)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Автоподключение").font(.system(size: 16, weight: .medium))
+                                        .lineLimit(1).minimumScaleFactor(0.75)
                                     Text("VPN включится сам при запуске приложения, включении и после сна устройства")
                                         .font(.system(size: 12)).foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
@@ -489,7 +497,7 @@ struct ThemePicker: View {
                         if on {
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .fill(Palette.accentGradient)
-                                .shadow(color: Palette.primary.opacity(0.35), radius: 8, y: 4)
+                                .shadow(color: Palette.primary.opacity(0.35), radius: 4, y: 2)
                                 .matchedGeometryEffect(id: "picked", in: selection)
                         }
                     }
@@ -512,6 +520,18 @@ struct AboutSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        ScrollView {
+            content
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity)
+        }
+        .background(Palette.background.ignoresSafeArea())
+        .presentationDetents([.height(440), .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var content: some View {
         VStack(spacing: 16) {
             Image("Logo").resizable().scaledToFit().frame(width: 96, height: 96)
                 .shadow(color: Palette.primary.opacity(0.35), radius: 20, y: 8)
@@ -521,7 +541,6 @@ struct AboutSheet: View {
                 Text("Версия \(version)").font(.system(size: 15).monospacedDigit()).foregroundStyle(.secondary)
             }
             chip("cpu", "Ядро Xray")
-            Spacer(minLength: 0)
             VStack(spacing: 10) {
                 Button { openURL(Config.telegram) } label: {
                     Label("Telegram-бот", systemImage: "paperplane.fill")
@@ -533,12 +552,6 @@ struct AboutSheet: View {
                 .buttonStyle(SecondaryButtonStyle())
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.bottom, 20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Palette.background.ignoresSafeArea())
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.visible)
     }
 
     private func chip(_ icon: String, _ text: String) -> some View {

@@ -16,6 +16,9 @@ struct PowerSlider: View {
     /// returns and shakes).
     let onToggle: (Bool) -> Bool
     var onLockedTap: () -> Void = {}
+    /// A sideways drag holds the knob (true) or let it go (false): the page shouldn't scroll
+    /// meanwhile, or its pan takes the touch and the drag is lost.
+    var onHold: (Bool) -> Void = { _ in }
 
     private struct AxisLock: Equatable {
         var start: CGPoint
@@ -78,6 +81,7 @@ struct PowerSlider: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isOn)
         .animation(.easeInOut(duration: 0.25), value: phase)
         .onChange(of: phase) { _ in pending = nil }
+        .onChange(of: dragging?.horizontal == true) { onHold($0) }
         .onChange(of: failures) { _ in
             guard pending != nil else { return }
             withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) { pending = nil }
