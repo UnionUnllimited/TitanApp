@@ -20,7 +20,7 @@ struct HomeView: View {
                 if wide {
                     HStack(alignment: .top, spacing: 0) {
                         ScrollView { VStack(spacing: 12) { controls }.padding(16) }
-                        ScrollView { VStack(spacing: 10) { list }.padding(16) }.refreshable { await store.refreshByHand() }
+                        ScrollView { VStack(spacing: 10) { list }.padding(16) }.refreshable { await store.refreshFromPull() }
                     }
                 } else {
                     ScrollView {
@@ -32,7 +32,7 @@ struct HomeView: View {
                         .frame(maxWidth: 640)
                         .frame(maxWidth: .infinity)
                     }
-                    .refreshable { await store.refreshByHand() }
+                    .refreshable { await store.refreshFromPull() }
                 }
             }
             .frame(maxWidth: wide ? 1200 : .infinity)

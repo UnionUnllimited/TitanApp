@@ -115,7 +115,7 @@ struct SubscriptionView: View {
             }
         }
         .background(Palette.background.ignoresSafeArea())
-        .refreshable { await store.refreshByHand() }
+        .refreshable { await store.refreshFromPull() }
         .task { await store.loadAccount() }
         .sheet(isPresented: $showDevices) {
             if let acc = store.account { DevicesView(account: acc) }

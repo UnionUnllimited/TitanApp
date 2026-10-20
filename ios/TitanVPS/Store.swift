@@ -124,10 +124,17 @@ final class AppStore: ObservableObject {
         guard !busy, let url = subscription?.url else { return }
         if await load(url, quiet: true) {
             showToast("Подписка обновлена", .success)
-        } else {
+        } else if !Task.isCancelled {
             showToast("Не удалось обновить подписку: " + (lastLoadError ?? "сервер не ответил"), .warning)
         }
         await loadAccount()
+    }
+
+    /// Pull to refresh: the same in a Task of its own. SwiftUI cancels the pull's own task when
+    /// the screen changes under it (busy turns the refresh buttons), and the request with it,
+    /// which then read as "Нет соединения с сервером подписки".
+    func refreshFromPull() async {
+        await Task { await refreshByHand() }.value
     }
 
     func showToast(_ text: String, _ kind: Toast.Kind = .info) {

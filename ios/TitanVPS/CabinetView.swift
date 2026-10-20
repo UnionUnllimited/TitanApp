@@ -43,7 +43,9 @@ struct CabinetView: View {
                         .frame(maxWidth: 640)
                         .frame(maxWidth: .infinity)
                     }
-                    .refreshable { await load() }
+                    // In a Task of its own: SwiftUI cancels the pull's task when the screen
+                    // changes under it (the refresh button starts spinning), and the request with it.
+                    .refreshable { await Task { await load() }.value }
                 } else if loading {
                     skeleton
                     Spacer(minLength: 0)
