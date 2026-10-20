@@ -170,10 +170,14 @@ enum SubscriptionAPI {
     /// iOS puts at most ~470 bytes in a TFO SYN (Android ~1400), and an XHTTP request with
     /// the default browser headers and padding is 700-1600: the rest of its plain HTTP
     /// headers went after the handshake, where the DPI box saw them. For XHTTP over TFO
-    /// the request is cut down to fit: Go's own headers ("golang" User-Agent) and padding
-    /// at the bottom of the server's range (the server checks only its length).
+    /// the request is cut down to fit: a short browser User-Agent and padding at the bottom
+    /// of the server's range (the server checks only its length).
     /// Upload bytes per XHTTP POST over TFO on iOS (headers ~330 B + this ≤ ~470 B in a SYN).
     static let xhttpPostInSyn = 120
+
+    /// A browser's User-Agent short enough for the SYN ("golang" gave the program away to
+    /// the DPI box; Xray's default Chrome one is ~50 B longer).
+    static let xhttpUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X)"
 
     static func fitXhttpInSyn(_ outbound: inout [String: Any]) {
         guard var stream = outbound["streamSettings"] as? [String: Any],
@@ -183,7 +187,7 @@ enum SubscriptionAPI {
         var xhttp = stream[key] as? [String: Any] ?? [:]
         func tighten(_ s: inout [String: Any]) {
             var headers = s["headers"] as? [String: Any] ?? [:]
-            if !headers.keys.contains(where: { $0.lowercased() == "user-agent" }) { headers["User-Agent"] = "golang" }
+            if !headers.keys.contains(where: { $0.lowercased() == "user-agent" }) { headers["User-Agent"] = xhttpUserAgent }
             s["headers"] = headers
             // Exactly the bottom of the server's range: the request size doesn't wander.
             let from = paddingFrom(s["xPaddingBytes"]) ?? 100
