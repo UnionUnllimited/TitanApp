@@ -205,6 +205,9 @@ enum SubscriptionAPI {
             xhttp["extra"] = extra
         }
         tighten(&xhttp)
+        // Every upload its own short request that fits a SYN whole (stream-up/one would send
+        // the data after the handshake, where the DPI box cuts it).
+        xhttp["mode"] = "packet-up"
         stream[key] = xhttp
         outbound["streamSettings"] = stream
     }
