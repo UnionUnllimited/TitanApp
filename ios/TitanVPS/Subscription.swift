@@ -172,6 +172,9 @@ enum SubscriptionAPI {
     /// headers went after the handshake, where the DPI box saw them. For XHTTP over TFO
     /// the request is cut down to fit: Go's own headers ("golang" User-Agent) and padding
     /// at the bottom of the server's range (the server checks only its length).
+    /// Upload bytes per XHTTP POST over TFO on iOS (headers ~330 B + this ≤ ~470 B in a SYN).
+    static let xhttpPostInSyn = 120
+
     static func fitXhttpInSyn(_ outbound: inout [String: Any]) {
         guard var stream = outbound["streamSettings"] as? [String: Any],
               ["xhttp", "splithttp"].contains((stream["network"] as? String) ?? ""),
@@ -182,8 +185,14 @@ enum SubscriptionAPI {
             var headers = s["headers"] as? [String: Any] ?? [:]
             if !headers.keys.contains(where: { $0.lowercased() == "user-agent" }) { headers["User-Agent"] = "golang" }
             s["headers"] = headers
+            // Exactly the bottom of the server's range: the request size doesn't wander.
             let from = paddingFrom(s["xPaddingBytes"]) ?? 100
-            s["xPaddingBytes"] = "\(from)-\(from + 40)"
+            s["xPaddingBytes"] = "\(from)-\(from)"
+            // Uploads too: Android puts each POST with its data (up to ~1300 B) in a SYN;
+            // here a POST that doesn't fit sent the rest after the handshake, and with it the
+            // site's name from the TLS handshake inside, so the DPI box cut the connection.
+            // Small POSTs fit with their headers (~330 B) in the ~470 B a SYN takes.
+            s["scMaxEachPostBytes"] = xhttpPostInSyn
         }
         // "extra" overrides the top-level settings in Xray: both get the same.
         if var extra = xhttp["extra"] as? [String: Any] {
