@@ -90,9 +90,11 @@ nstat -az TcpExtTCPFastOpenPassive TcpExtTCPFastOpenPassiveFail TcpExtTCPFastOpe
 ## Состояние на момент передачи
 
 - Android: серверы «Обход» с TFO работают (TFO даёт ядро Linux само через sockopt, в SYN до ~1400 Б).
-- iOS: для XHTTP-серверов TFO включается только при явном `mode: "packet-up"`. stream-up и `auto`
-  дайлятся обычным TCP (`applyTfo` → `xhttpNeedsPlainDial` в `Subscription.swift`). Причина — ниже;
-  так один конфиг из подписки работает и на Android, и на iOS без правок на сервере.
+- iOS: для XHTTP-серверов TFO остаётся только при явном `mode: "packet-up"`. stream-up и `auto`
+  дайлятся обычным TCP. Флаг `tcpFastOpen` для таких серверов ставит сама панель в конфиге подписки,
+  поэтому в `Subscription.swift` он активно снимается (`dropTfoFromStreamUpXhttp` → `xhttpNeedsPlainDial`),
+  а не просто не добавляется. Причина — ниже; так один конфиг из подписки работает и на Android, и на
+  iOS без правок на сервере.
   - Почему stream-up по TFO на iOS не работал: загрузка — один длинный POST, его тело (заголовок
     VLESS и TLS-рукопожатие) по RFC 7413 нельзя повторять, поэтому оно не кладётся в SYN (`tfo_safe.go`)
     и уходит после рукопожатия. На LTE-DPI данные клиент→сервер после TFO-рукопожатия отбрасываются
