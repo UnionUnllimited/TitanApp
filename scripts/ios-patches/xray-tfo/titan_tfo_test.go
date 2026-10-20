@@ -32,8 +32,8 @@ func titanEcho(t *testing.T, ln stdnet.Listener) {
 	}()
 }
 
-// titanServe answers every connection that sends n bytes; others (the TFO warm-up's
-// one byte) are just closed.
+// titanServe answers every connection that sends n bytes; others (a stray probe
+// connection) are just closed.
 func titanServe(ln stdnet.Listener, n int, answer func(stdnet.Conn, []byte)) {
 	go func() {
 		for {
