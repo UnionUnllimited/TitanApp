@@ -32,8 +32,14 @@ final class AppStore: ObservableObject {
 
     /// Set by the app: pings turn the VPN off while they run and back on after.
     weak var vpn: VPNController?
-    private var pingUsers = 0
+    /// Pings (and checks) holding the VPN off: each gives its hold back when it ends, or at
+    /// once when it is stopped (a libXray call in flight can't be cut short).
+    private var holds: Set<UUID> = []
+    private var pingAllHold: UUID?
+    private var oneHolds: [String: UUID] = [:]
     private var pausing: Task<Void, Never>?
+    /// The reconnect after the last ping; a new ping waits for it before pausing again.
+    private var resuming: Task<Void, Never>?
     private var resumeOn: Server?
 
     private let subKey = "titan.subscription"
@@ -201,8 +207,11 @@ final class AppStore: ObservableObject {
         pingTotal = order.count
         measuring = Set(order.map(\.id))
         pingTask = Task {
-            await beginPing()
-            defer { endPing() }
+            let hold = await beginPing()
+            defer { endPing(hold) }
+            // Стоп while the VPN was going off.
+            guard !Task.isCancelled else { return }
+            pingAllHold = hold
             await XrayPing.pingMany(order) { [weak self] id, ms, error in
                 guard let self, self.pinging else { return }
                 self.pings[id] = ms
@@ -223,15 +232,27 @@ final class AppStore: ObservableObject {
         pingTask = nil
         measuring = []
         pinging = false
+        // The VPN and the switch come back now, not when libXray's call returns.
+        let stopped = [pingAllHold].compactMap { $0 } + Array(oneHolds.values)
+        pingAllHold = nil
+        oneHolds = [:]
+        for hold in stopped { endPing(hold) }
     }
 
     /// One server; pressed again while it is measured: stops it.
     func pingOne(_ server: Server) {
-        if measuring.contains(server.id) { measuring.remove(server.id); return }
+        if measuring.contains(server.id) {
+            measuring.remove(server.id)
+            if let hold = oneHolds.removeValue(forKey: server.id) { endPing(hold) }
+            return
+        }
         measuring.insert(server.id)
         Task {
-            await beginPing()
-            defer { endPing() }
+            let hold = await beginPing()
+            defer { endPing(hold) }
+            // Stopped while the VPN was going off.
+            guard measuring.contains(server.id) else { return }
+            oneHolds[server.id] = hold
             await XrayPing.pingMany([server]) { [weak self] id, ms, error in
                 guard let self, self.measuring.contains(id) else { return }
                 self.pings[id] = ms
@@ -244,38 +265,48 @@ final class AppStore: ObservableObject {
     /// Other checks that must not go through the tunnel (Технический режим's TCP check):
     /// the VPN off for their time, as for a ping, and back on after.
     func withVPNPaused(_ work: () async -> Void) async {
-        await beginPing()
-        defer { endPing() }
+        let hold = await beginPing()
+        defer { endPing(hold) }
         await work()
     }
 
     /// The first ping in flight stops the VPN (remembering its server); later ones wait for that.
-    private func beginPing() async {
-        pingUsers += 1
+    /// A reconnect after the previous ping still under way is let finish first, then paused.
+    private func beginPing() async -> UUID {
+        let hold = UUID()
+        holds.insert(hold)
         pingBusy = true
-        if pingUsers == 1, let vpn, vpn.isOn {
+        if holds.count == 1, let vpn, vpn.isOn || resuming != nil {
+            let previous = resuming
             let server = selected
             vpnPaused = true
             pausing = Task {
+                await previous?.value
                 if await vpn.pauseForPing() { self.resumeOn = server } else { self.vpnPaused = false }
             }
         }
         await pausing?.value
+        return hold
     }
 
-    /// The last ping done: the VPN back on the server it was on (unless it was turned on by hand meanwhile).
-    private func endPing() {
-        pingUsers -= 1
-        guard pingUsers == 0 else { return }
+    /// The last hold given back: the VPN back on the server it was on (unless it was turned on
+    /// by hand meanwhile). A hold already given back by Стоп is ignored.
+    private func endPing(_ hold: UUID) {
+        guard holds.remove(hold) != nil else { return }
+        if pingAllHold == hold { pingAllHold = nil }
+        if let key = oneHolds.first(where: { $0.value == hold })?.key { oneHolds[key] = nil }
+        guard holds.isEmpty else { return }
         pingBusy = false
         pausing = nil
         guard let server = resumeOn else { vpnPaused = false; return }
         resumeOn = nil
         guard let vpn, !vpn.isOn else { vpnPaused = false; return }
         // "Пауза" stays on screen until connect has taken over (Подключаемся…).
-        Task {
+        resuming = Task {
             await vpn.connect(selected ?? server)
-            vpnPaused = false
+            resuming = nil
+            // A newer ping may have paused it again meanwhile: that one owns the flag now.
+            if holds.isEmpty { vpnPaused = false }
         }
     }
 

@@ -9,10 +9,18 @@ struct PowerSlider: View {
     let phase: Phase
     var locked = false
     var lockedText = "Пинг…"
+    /// Failed connect attempts so far: a new one puts a just-moved knob back with a shake
+    /// (a failure can come without the phase changing, e.g. .off → .error).
+    var failures = 0
     /// Moved by the user: true to turn on. False back means it can't be done now (the knob
     /// returns and shakes).
     let onToggle: (Bool) -> Bool
     var onLockedTap: () -> Void = {}
+
+    private struct AxisLock: Equatable {
+        var start: CGPoint
+        var horizontal: Bool
+    }
 
     private struct DragState: Equatable {
         var horizontal: Bool
@@ -23,6 +31,9 @@ struct PowerSlider: View {
     private var dragging: DragState? = nil
     /// The side just picked, held until the VPN's state follows (or for a moment at most).
     @State private var pending: Bool?
+    /// Each drag's direction, decided on its first move (by where it started): only a
+    /// sideways one moves the knob or switches; an up or down one is the screen scrolling.
+    @State private var axis: AxisLock?
     @State private var shakes: CGFloat = 0
     @State private var nudge: CGFloat = 0
 
@@ -67,6 +78,11 @@ struct PowerSlider: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isOn)
         .animation(.easeInOut(duration: 0.25), value: phase)
         .onChange(of: phase) { _ in pending = nil }
+        .onChange(of: failures) { _ in
+            guard pending != nil else { return }
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) { pending = nil }
+            refuse()
+        }
         .task(id: pending) {
             guard pending != nil else { return }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -162,8 +178,17 @@ struct PowerSlider: View {
                     transaction.animation = .interactiveSpring(response: 0.18, dampingFraction: 0.86)
                 }
             }
+            .onChanged { value in
+                // A new drag (a cancelled one never ended): its direction is decided now.
+                if axis?.start != value.startLocation {
+                    axis = AxisLock(start: value.startLocation,
+                                    horizontal: abs(value.translation.width) > abs(value.translation.height))
+                }
+            }
             .onEnded { value in
-                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                let horizontal = axis?.start == value.startLocation && axis?.horizontal == true
+                axis = nil
+                guard horizontal else { return }
                 if locked { refuse(); onLockedTap(); return }
                 let wasOn = isOn
                 let base: CGFloat = wasOn ? maxX : 0

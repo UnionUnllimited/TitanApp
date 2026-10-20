@@ -125,7 +125,7 @@ struct HomeView: View {
             }
             subscriptionCard(sub)
             PowerSlider(phase: powerPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Пинг…",
-                        onToggle: toggleVPN,
+                        failures: vpn.failures, onToggle: toggleVPN,
                         onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) })
                 .padding(.top, 6)
             statusBlock

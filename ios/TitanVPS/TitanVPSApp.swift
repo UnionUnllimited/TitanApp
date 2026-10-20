@@ -14,17 +14,28 @@ struct TitanVPSApp: App {
                 .onAppear { store.vpn = vpn }
                 .preferredColorScheme(theme == "dark" ? .dark : theme == "light" ? .light : nil)
                 .tint(Palette.primary)
-                .onChange(of: theme) { AppIconSwitcher.apply(theme: $0) }
+                .onChange(of: theme) { AppIconSwitcher.schedule(theme: $0) }
         }
     }
 }
 
 /// The home-screen icon follows the app's theme: Светлая and Тёмная have their own icon;
 /// Системная is the main one, which iOS 18 itself shows dark (or tinted) with the system.
+/// iOS shows its own "icon changed" alert each time; quick taps on the theme button make
+/// one change, a moment after the last tap (a change while one is running would fail).
 enum AppIconSwitcher {
+    private static var pending: DispatchWorkItem?
+
+    static func schedule(theme: String) {
+        pending?.cancel()
+        let work = DispatchWorkItem { AppIconSwitcher.apply(theme: theme) }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
     static func apply(theme: String) {
         let app = UIApplication.shared
-        guard app.supportsAlternateIcons else { return }
+        guard app.supportsAlternateIcons, app.applicationState == .active else { return }
         let name: String? = theme == "dark" ? "AppIconDark" : theme == "light" ? "AppIconLight" : nil
         guard app.alternateIconName != name else { return }
         app.setAlternateIconName(name) { _ in }

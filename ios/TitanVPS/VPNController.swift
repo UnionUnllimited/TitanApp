@@ -10,6 +10,10 @@ final class VPNController: ObservableObject {
     enum State: Equatable { case off, connecting, connected(since: Date), disconnecting, error(String) }
 
     @Published private(set) var state: State = .off
+    /// Connect attempts that failed (the Выкл | Вкл knob goes back with a shake).
+    @Published private(set) var failures = 0
+    /// What was asked for last: Выкл while connect is still saving the profile wins.
+    private var wantOn = false
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
 
@@ -70,8 +74,9 @@ final class VPNController: ObservableObject {
     }
 
     func connect(_ server: Server) async {
+        wantOn = true
         guard let tunnelId = Self.tunnelBundleId else {
-            state = .error("В этой сборке нет VPN-расширения")
+            fail("В этой сборке нет VPN-расширения")
             return
         }
         do {
@@ -100,15 +105,33 @@ final class VPNController: ObservableObject {
             try await m.loadFromPreferences()
             manager = m
             observe()
+            // Turned off (or paused for a ping) while the profile was being saved: stay off.
+            guard wantOn else {
+                if m.isOnDemandEnabled {
+                    m.isOnDemandEnabled = false
+                    try? await m.saveToPreferences()
+                }
+                // Автоподключение may have started it on the save already.
+                m.connection.stopVPNTunnel()
+                state = .off
+                update()
+                return
+            }
             var options: [String: NSObject] = ["config": config as NSString]
             if let plugin = prepared.plugin { options["plugin"] = plugin as NSString }
             try m.connection.startVPNTunnel(options: options)
         } catch {
-            state = .error(Self.describe(error))
+            fail(Self.describe(error))
         }
     }
 
+    private func fail(_ message: String) {
+        state = .error(message)
+        failures += 1
+    }
+
     func disconnect() {
+        wantOn = false
         state = .disconnecting
         guard let m = manager else { return }
         // Turned off by hand: iOS must not bring it back on its own.
@@ -135,6 +158,7 @@ final class VPNController: ObservableObject {
     /// meanwhile; `connect` restores it. Returns once the tunnel is down; false if it was off.
     func pauseForPing() async -> Bool {
         guard isOn, let m = manager else { return false }
+        wantOn = false
         if m.isOnDemandEnabled {
             m.isOnDemandEnabled = false
             try? await m.saveToPreferences()
