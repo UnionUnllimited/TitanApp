@@ -445,3 +445,48 @@ struct GlowingLogo: View {
         .accessibilityHidden(true)
     }
 }
+
+/// Two or three tabs in a capsule; the picked one slides under its title (not a stock picker).
+struct SegmentedTabs: View {
+    struct Item: Identifiable {
+        let id: Int
+        let title: String
+        let icon: String
+    }
+
+    let items: [Item]
+    @Binding var selection: Int
+    @Namespace private var picked
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(items) { item in
+                let on = item.id == selection
+                Button {
+                    guard !on else { return }
+                    Haptics.selection()
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { selection = item.id }
+                } label: {
+                    Label(item.title, systemImage: item.icon)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(on ? Color.white : Color.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 42)
+                        .background {
+                            if on {
+                                Capsule()
+                                    .fill(Palette.accentGradient)
+                                    .shadow(color: Palette.primary.opacity(0.35), radius: 8, y: 3)
+                                    .matchedGeometryEffect(id: "tab", in: picked)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(Palette.surface, in: Capsule())
+        .overlay(Capsule().stroke(Palette.outline.opacity(0.6), lineWidth: 1))
+    }
+}
