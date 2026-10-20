@@ -14,4 +14,26 @@ if code.count(old) != 1:
 target.write_text(code.replace(old, new))
 for f in ("system_dialer_tfo.go", "tfo_syn_darwin.go", "tfo_syn_windows.go", "system_dialer_tfo_other.go"):
     shutil.copy(here / f, src / "transport/internet" / f)
+
+# XHTTP packet-up over TFO: one upload per connection (splithttp_upload_once.go).
+split = src / "transport/internet/splithttp"
+client = (split / "client.go").read_text()
+dialer = (split / "dialer.go").read_text()
+for name, text, old, new in [
+    ("client.go", client,
+     "\tdialUploadConn func(ctxInner context.Context) (net.Conn, error)\n}",
+     "\tdialUploadConn func(ctxInner context.Context) (net.Conn, error)\n\t// Titan patch: TFO, an upload per connection.\n\tuploadOnce bool\n}"),
+    ("client.go", None,
+     "\t\tc.uploadRawPool.Put(uploadConn)\n",
+     "\t\tc.titanReleaseUpload(h1UploadConn, uploadConn)\n"),
+    ("dialer.go", dialer,
+     "\t\tdialUploadConn: dialContext,\n\t}",
+     "\t\tdialUploadConn: dialContext,\n\t\tuploadOnce:     streamSettings.SocketSettings != nil && streamSettings.SocketSettings.ParseTFOValue() > 0,\n\t}"),
+]:
+    target = split / name
+    code = target.read_text()
+    if code.count(old) != 1:
+        sys.exit(name + ": anchor not found: " + old.strip())
+    target.write_text(code.replace(old, new))
+shutil.copy(here / "splithttp_upload_once.go", split / "titan_upload_once.go")
 print("xray-core TFO patch applied")
