@@ -117,7 +117,19 @@ object ServerGroups {
     fun isBypass(server: Server): Boolean = "обход" in server.name.lowercase()
 
     /** A bypass server that spends GB: all but the free ones ("Обход 1 бесплатный"). */
-    fun isLimited(server: Server): Boolean = isBypass(server) && "бесплатн" !in server.name.lowercase()
+    fun isLimited(server: Server): Boolean = isBypass(server) && "бесплатн" !in letters(server.name)
+
+    /** The name's letters only, lower case, Latin look-alikes read as Cyrillic ("бecплaтный"). */
+    private fun letters(name: String): String = buildString {
+        for (ch in java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFKC).lowercase()) {
+            if (ch.isLetter()) append(LOOKALIKES[ch] ?: ch)
+        }
+    }
+
+    private val LOOKALIKES = mapOf(
+        'a' to 'а', 'e' to 'е', 'o' to 'о', 'p' to 'р', 'c' to 'с', 'x' to 'х', 'y' to 'у',
+        'k' to 'к', 'm' to 'м', 't' to 'т', 'h' to 'н', 'b' to 'в', 'n' to 'п', 'u' to 'и',
+    )
 
     fun split(servers: List<Server>): Map<Group, List<Server>> {
         val (bypass, regular) = servers.partition(::isBypass)

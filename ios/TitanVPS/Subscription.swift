@@ -286,7 +286,17 @@ enum ServerGroup: String, CaseIterable, Identifiable {
 
     static func isBypass(_ s: Server) -> Bool { s.name.lowercased().contains("обход") }
     /// A bypass server that spends GB: all but the free ones ("Обход 1 бесплатный").
-    static func isLimited(_ s: Server) -> Bool { isBypass(s) && !s.name.lowercased().contains("бесплатн") }
+    static func isLimited(_ s: Server) -> Bool { isBypass(s) && !letters(s.name).contains("бесплатн") }
+
+    /// The name's letters only, lower case, Latin look-alikes read as Cyrillic ("бecплaтный").
+    private static func letters(_ name: String) -> String {
+        let map: [Character: Character] = [
+            "a": "а", "e": "е", "o": "о", "p": "р", "c": "с", "x": "х", "y": "у",
+            "k": "к", "m": "м", "t": "т", "h": "н", "b": "в", "n": "п", "u": "и",
+        ]
+        return String(name.precomposedStringWithCompatibilityMapping.lowercased()
+            .filter(\.isLetter).map { map[$0] ?? $0 })
+    }
 
     /// Headers ("👇БЕЗЛИМИТНЫЕ👇", "ЛИМИТНЫЕ ОСТ: …") and notices with a dummy address.
     static func isHidden(_ s: Server) -> Bool {
