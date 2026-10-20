@@ -21,6 +21,11 @@ final class VPNController: ObservableObject {
         switch state { case .connecting, .connected: return true; default: return false }
     }
 
+    var isConnected: Bool {
+        if case .connected = state { return true }
+        return false
+    }
+
     /// The extension's bundle id as it is in this build (a re-signing service may change it).
     private static var tunnelBundleId: String? {
         guard let plugins = Bundle.main.builtInPlugInsURL,

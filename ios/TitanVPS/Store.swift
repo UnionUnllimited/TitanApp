@@ -14,6 +14,16 @@ final class AppStore: ObservableObject {
     @Published var pinging = false
     /// Devices and their limit from the bot (nil until loaded).
     @Published var account: AccountAPI.Info?
+    /// A short note at the top of the screen ("Подписка обновлена").
+    @Published var toast: Toast?
+    /// Проверить соединение: the last check through the running VPN.
+    @Published private(set) var check: ConnectionCheck.Status = .idle
+    /// A ping (or another check that needs the VPN off) is running: Выкл | Вкл can't be moved.
+    @Published private(set) var pingBusy = false
+    /// The VPN was turned off for a ping and comes back by itself after it.
+    @Published private(set) var vpnPaused = false
+    /// Servers in the running "Пинг" (for its progress ring).
+    @Published private(set) var pingTotal = 0
 
     /// Favourite servers, by name (ids change with the subscription).
     @Published private(set) var favorites: Set<String> = []
@@ -97,13 +107,31 @@ final class AppStore: ObservableObject {
 
     /// quiet: at launch / in the background with a saved subscription: no alert on failure
     /// (the network may be busy with the VPN coming up), one more try a bit later.
-    func refresh(quiet: Bool = false) async {
-        guard let url = subscription?.url else { return }
-        if !(await load(url, quiet: quiet)) && quiet {
+    @discardableResult
+    func refresh(quiet: Bool = false) async -> Bool {
+        guard let url = subscription?.url else { return false }
+        var ok = await load(url, quiet: quiet)
+        if !ok && quiet {
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            await load(url, quiet: true)
+            ok = await load(url, quiet: true)
         }
         await loadAccount()
+        return ok
+    }
+
+    /// Обновить подписку by hand: says when it's done (a failure shows its alert).
+    func refreshByHand() async {
+        guard !busy else { return }
+        if await refresh() { showToast("Подписка обновлена", .success) }
+    }
+
+    func showToast(_ text: String, _ kind: Toast.Kind = .info) {
+        switch kind {
+        case .success: Haptics.success()
+        case .warning: Haptics.warning()
+        case .info: break
+        }
+        toast = Toast(text: text, kind: kind)
     }
 
     func loadAccount() async {
@@ -152,6 +180,7 @@ final class AppStore: ObservableObject {
         guard let servers = subscription?.servers else { return }
         let order = servers.filter { first.contains($0.id) } + servers.filter { !first.contains($0.id) }
         pinging = true
+        pingTotal = order.count
         measuring = Set(order.map(\.id))
         pingTask = Task {
             await beginPing()
@@ -164,6 +193,11 @@ final class AppStore: ObservableObject {
             }
             if !Task.isCancelled { measuring = []; pinging = false }
         }
+    }
+
+    /// How much of the running "Пинг" is done, 0…1.
+    var pingProgress: Double {
+        pingTotal > 0 ? Double(pingTotal - measuring.count) / Double(pingTotal) : 0
     }
 
     func stopPing() {
@@ -200,9 +234,13 @@ final class AppStore: ObservableObject {
     /// The first ping in flight stops the VPN (remembering its server); later ones wait for that.
     private func beginPing() async {
         pingUsers += 1
+        pingBusy = true
         if pingUsers == 1, let vpn, vpn.isOn {
             let server = selected
-            pausing = Task { if await vpn.pauseForPing() { self.resumeOn = server } }
+            vpnPaused = true
+            pausing = Task {
+                if await vpn.pauseForPing() { self.resumeOn = server } else { self.vpnPaused = false }
+            }
         }
         await pausing?.value
     }
@@ -211,11 +249,51 @@ final class AppStore: ObservableObject {
     private func endPing() {
         pingUsers -= 1
         guard pingUsers == 0 else { return }
+        pingBusy = false
         pausing = nil
-        guard let server = resumeOn else { return }
+        guard let server = resumeOn else { vpnPaused = false; return }
         resumeOn = nil
-        guard let vpn, !vpn.isOn else { return }
-        Task { await vpn.connect(selected ?? server) }
+        guard let vpn, !vpn.isOn else { vpnPaused = false; return }
+        // "Пауза" stays on screen until connect has taken over (Подключаемся…).
+        Task {
+            await vpn.connect(selected ?? server)
+            vpnPaused = false
+        }
+    }
+
+    // MARK: Проверить соединение
+
+    private var checkTask: Task<Void, Never>?
+
+    /// A request through the VPN that is on now. auto: right after connecting, a few tries
+    /// (the tunnel may need a moment), no haptics; by hand: one more try on a failure.
+    func checkConnection(auto: Bool = false) {
+        guard let vpn, vpn.isConnected else { return }
+        checkTask?.cancel()
+        check = .checking
+        checkTask = Task {
+            if auto { try? await Task.sleep(nanoseconds: 1_200_000_000) }
+            var result = ConnectionCheck.Status.failed("")
+            for attempt in 0..<(auto ? 3 : 2) {
+                if Task.isCancelled { return }
+                if attempt > 0 { try? await Task.sleep(nanoseconds: 1_500_000_000) }
+                if Task.isCancelled { return }
+                result = await ConnectionCheck.run()
+                if case .ok = result { break }
+            }
+            guard !Task.isCancelled else { return }
+            check = result
+            if !auto {
+                if case .ok = result { Haptics.success() } else { Haptics.warning() }
+            }
+        }
+    }
+
+    /// The VPN went off or to another server: the old result says nothing any more.
+    func resetCheck() {
+        checkTask?.cancel()
+        checkTask = nil
+        check = .idle
     }
 
     nonisolated static func tcpPing(host: String?, port: Int?) async -> Int {

@@ -14,27 +14,41 @@ struct SubscriptionView: View {
                 let now = Int64(Date().timeIntervalSince1970)
                 let active = info.expire <= 0 || info.expire > now
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Подписка").font(.system(size: 28, weight: .bold)).padding(.top, 8)
+                    HStack {
+                        Text("Подписка").font(.system(size: 28, weight: .bold))
+                        Spacer()
+                        CircleIconButton(icon: "arrow.clockwise", spinning: store.busy, size: 42) {
+                            Task { await store.refreshByHand() }
+                        }
+                        .disabled(store.busy)
+                        .accessibilityLabel("Обновить подписку")
+                    }
+                    .padding(.top, 8)
                     Card {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                Circle().fill(active ? Palette.green : .red).frame(width: 10, height: 10)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 6) {
+                                Circle().fill(active ? Palette.green : .red).frame(width: 8, height: 8)
                                 Text(active ? "Подписка активна" : "Подписка истекла")
-                                    .foregroundStyle(active ? Palette.green : .red).font(.system(size: 14))
+                                    .font(.system(size: 13, weight: .semibold))
                             }
+                            .foregroundStyle(active ? Palette.green : .red)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background((active ? Palette.green : Color.red).opacity(0.14), in: Capsule())
                             Text(expiry(info.expire)).font(.system(size: 26, weight: .bold))
                             if info.expire > 0 {
                                 Text("Осталось \(max((info.expire - now) / 86400, 0)) дн.").foregroundStyle(.secondary)
                             }
+                            Text("Обновлено " + Fmt.ago(sub.fetchedAt)).font(.system(size: 12)).foregroundStyle(.tertiary)
                         }
                         .padding(16)
                     }
                     Card {
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Трафик на обходах").foregroundStyle(.secondary).font(.system(size: 14))
                             if info.total > 0 {
                                 Text("\(formatBytes(info.remaining)) из \(formatBytes(info.total))").font(.system(size: 26, weight: .bold))
-                                ProgressView(value: Double(info.remaining), total: Double(info.total))
+                                GradientBar(value: Double(info.remaining) / Double(max(info.total, 1)),
+                                            gradient: info.remaining * 10 < info.total ? LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing) : Palette.accentGradient)
                             } else {
                                 Text("Безлимит").font(.system(size: 26, weight: .bold))
                             }
@@ -47,24 +61,19 @@ struct SubscriptionView: View {
                     Button {
                         if info.webPageUrl != nil { showCabinet = true } else { openURL(Config.telegram) }
                     } label: {
-                        Label("Личный кабинет", systemImage: "person.crop.circle")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(maxWidth: .infinity, minHeight: 50)
+                        Label("Личный кабинет", systemImage: "person.crop.circle.fill")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PrimaryButtonStyle())
                     if let acc = store.account, acc.devicesEnabled {
-                        Button { showDevices = true } label: {
-                            HStack {
-                                Label("Подключённые устройства", systemImage: "iphone.and.arrow.forward")
-                                Spacer()
-                                Text("\(acc.devices.count)" + (acc.deviceLimit > 0 ? " из \(acc.deviceLimit)" : ""))
-                                    .foregroundStyle(.secondary)
-                                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                        Card {
+                            Button { showDevices = true } label: {
+                                SettingsRow(icon: "iphone.and.arrow.forward", color: Palette.primary, title: "Подключённые устройства", chevron: true) {
+                                    Text("\(acc.devices.count)" + (acc.deviceLimit > 0 ? " из \(acc.deviceLimit)" : ""))
+                                        .font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)
+                                }
                             }
-                            .font(.system(size: 16, weight: .medium))
-                            .frame(maxWidth: .infinity, minHeight: 48)
+                            .buttonStyle(RowButtonStyle())
                         }
-                        .buttonStyle(.bordered)
                     }
                     Card {
                         VStack(alignment: .leading, spacing: 12) {
@@ -82,14 +91,18 @@ struct SubscriptionView: View {
                             Text("Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте или в полном кабинете на сайте (вход по почте или через Telegram).")
                                 .font(.system(size: 13)).foregroundStyle(.secondary)
                             HStack(spacing: 10) {
-                                Button { openURL(Config.telegram) } label: { Text("Открыть бота").lineLimit(1).frame(maxWidth: .infinity) }
-                                    .buttonStyle(.bordered)
+                                Button { openURL(Config.telegram) } label: {
+                                    Label("Открыть бота", systemImage: "paperplane.fill").lineLimit(1)
+                                }
+                                .buttonStyle(SecondaryButtonStyle(height: 46))
                                 if let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
                                     guard let scheme = u.scheme, let host = u.host else { return nil }
                                     return URL(string: "\(scheme)://\(host)/auth")
                                 }) {
-                                    Button { openURL(site) } label: { Text("Открыть сайт").lineLimit(1).frame(maxWidth: .infinity) }
-                                        .buttonStyle(.bordered)
+                                    Button { openURL(site) } label: {
+                                        Label("Открыть сайт", systemImage: "globe").lineLimit(1)
+                                    }
+                                    .buttonStyle(SecondaryButtonStyle(height: 46))
                                 }
                             }
                         }
@@ -102,6 +115,7 @@ struct SubscriptionView: View {
             }
         }
         .background(Palette.background.ignoresSafeArea())
+        .refreshable { await store.refreshByHand() }
         .task { await store.loadAccount() }
         .sheet(isPresented: $showDevices) {
             if let acc = store.account { DevicesView(account: acc) }
@@ -221,6 +235,7 @@ struct DevicesView: View {
 struct ProfileView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var vpn: VPNController
+    @Environment(\.openURL) private var openURL
     @AppStorage("theme") private var theme = "system"
     @AppStorage("autoconnect") private var autoconnect = false
     @State private var confirmLogout = false
@@ -234,6 +249,8 @@ struct ProfileView: View {
     @State private var code = ""
     @State private var wrongCode = false
     @State private var showTech = false
+    var openSubscription: () -> Void = {}
+    var openHome: () -> Void = {}
 
     private var version: String {
         let info = Bundle.main.infoDictionary
@@ -242,64 +259,106 @@ struct ProfileView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Оформление") {
-                    Picker("Тема", selection: $theme) {
-                        Text("Системная").tag("system")
-                        Text("Светлая").tag("light")
-                        Text("Тёмная").tag("dark")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let sub = store.subscription { accountCard(sub) }
+
+                    SectionTitle("Оформление")
+                    Card { ThemePicker(theme: $theme) }
+
+                    SectionTitle("Подключение")
+                    Card {
+                        Button {
+                            Haptics.selection()
+                            openHome()
+                        } label: {
+                            SettingsRow(icon: "server.rack", color: Palette.primary, title: "Сервер", chevron: true) {
+                                Text(serverName).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
+                                    .frame(maxWidth: 170, alignment: .trailing)
+                            }
+                        }
+                        .buttonStyle(RowButtonStyle())
+                        RowDivider()
+                        Toggle(isOn: $autoconnect) {
+                            HStack(spacing: 14) {
+                                IconTile(icon: "bolt.fill", color: Palette.green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Автоподключение").font(.system(size: 16, weight: .medium))
+                                    Text("VPN включится сам при запуске приложения, включении и после сна устройства")
+                                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                        .toggleStyle(TitanToggleStyle())
+                        .padding(.horizontal, 16).padding(.vertical, 12)
+                        .onChange(of: autoconnect) { vpn.setAutoconnect($0) }
                     }
-                    .pickerStyle(.segmented)
-                }
-                Section {
-                    HStack {
-                        Text("Выбор сервера")
-                        Spacer()
-                        Text(store.selected.map { $0.name.splitFlag.1 } ?? "Автоматически")
-                            .foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Toggle(isOn: $autoconnect) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Автоподключение")
-                            Text("VPN включится сам при запуске приложения, включении и после сна устройства")
-                                .font(.system(size: 12)).foregroundStyle(.secondary)
+
+                    SectionTitle("Приложение")
+                    Card {
+                        Button { openURL(store.supportURL) } label: {
+                            SettingsRow(icon: "headphones", color: Palette.primary, title: "Поддержка", subtitle: "Ответим в Telegram") {
+                                Image(systemName: "arrow.up.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
+                            }
+                        }
+                        .buttonStyle(RowButtonStyle())
+                        RowDivider()
+                        Button { Task { await store.refreshByHand() } } label: {
+                            SettingsRow(icon: "arrow.clockwise", color: Palette.green, title: "Обновить подписку",
+                                        subtitle: store.subscription.map { "Обновлено " + Fmt.ago($0.fetchedAt) }) {
+                                if store.busy { ProgressView() }
+                            }
+                        }
+                        .buttonStyle(RowButtonStyle())
+                        .disabled(store.busy)
+                        RowDivider()
+                        Button { about = true } label: {
+                            SettingsRow(icon: "info.circle.fill", color: Palette.violet, title: "О приложении", chevron: true)
+                        }
+                        .buttonStyle(RowButtonStyle())
+                        RowDivider()
+                        SettingsRow(icon: "number", color: .gray, title: "Версия") {
+                            Text(wrongCode ? "Неверный код" : version)
+                                .font(.system(size: 15).monospacedDigit())
+                                .foregroundStyle(wrongCode ? Color.red : Color.secondary)
+                        }
+                        .onTapGesture { versionTapped() }
+                        if techMode {
+                            RowDivider()
+                            Button { showTech = true } label: {
+                                SettingsRow(icon: "wrench.and.screwdriver.fill", color: .orange, title: "Технический режим", chevron: true)
+                            }
+                            .buttonStyle(RowButtonStyle())
                         }
                     }
-                    .onChange(of: autoconnect) { vpn.setAutoconnect($0) }
-                } header: {
-                    Text("Подключение")
-                }
-                Section("Приложение") {
-                    Link(destination: store.supportURL) { Label("Поддержка", systemImage: "headphones") }
-                    Button { Task { await store.refresh() } } label: { Label("Обновить подписку", systemImage: "arrow.clockwise") }
-                    Button { about = true } label: { Label("О приложении", systemImage: "info.circle") }
-                    HStack {
-                        Text("Версия")
-                        Spacer()
-                        Text(wrongCode ? "Неверный код" : version).foregroundColor(wrongCode ? .red : .secondary)
+
+                    Card {
+                        Button { confirmReset = true } label: {
+                            SettingsRow(icon: "arrow.counterclockwise", color: .orange, title: "Сброс настроек")
+                        }
+                        .buttonStyle(RowButtonStyle())
+                        RowDivider()
+                        Button { confirmLogout = true } label: {
+                            SettingsRow(icon: "rectangle.portrait.and.arrow.right", color: .red, title: "Выйти из аккаунта", titleColor: .red)
+                        }
+                        .buttonStyle(RowButtonStyle())
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture { versionTapped() }
-                    if techMode {
-                        Button { showTech = true } label: { Label("Технический режим", systemImage: "wrench.and.screwdriver") }
-                    }
+                    .padding(.top, 18)
                 }
-                Section {
-                    Button("Сброс настроек") { confirmReset = true }
-                    Button("Выйти из аккаунта", role: .destructive) { confirmLogout = true }
-                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+                .frame(maxWidth: 640)
+                .frame(maxWidth: .infinity)
             }
+            .background(Palette.background.ignoresSafeArea())
             .navigationTitle("Настройки")
             .navigationDestination(isPresented: $showTech) { TechModeView() }
+            .sheet(isPresented: $about) { AboutSheet(version: version, support: store.supportURL) }
             .alert("Код", isPresented: $askCode) {
                 SecureField("Код", text: $code).keyboardType(.numberPad)
                 Button("Открыть") { enterCode() }
                 Button("Отмена", role: .cancel) { code = "" }
-            }
-            .alert("Titan VPS", isPresented: $about) {
-                Button("Закрыть", role: .cancel) {}
-            } message: {
-                Text("Версия \(version) · ядро Xray")
             }
             .alert("Сбросить настройки?", isPresented: $confirmReset) {
                 Button("Сбросить", role: .destructive) {
@@ -321,6 +380,50 @@ struct ProfileView: View {
                 Text("VPN отключится, ключ нужно будет вставить заново.")
             }
         }
+    }
+
+    private var serverName: String {
+        guard let s = store.selected else { return "Автоматически" }
+        let parts = s.name.splitFlag
+        return [parts.0, parts.1].compactMap { $0 }.joined(separator: " ")
+    }
+
+    /// Who this is: the subscription's state and devices, a tap opens Подписка.
+    private func accountCard(_ sub: Subscription) -> some View {
+        let now = Int64(Date().timeIntervalSince1970)
+        let active = sub.info.expire <= 0 || sub.info.expire > now
+        return Button {
+            Haptics.selection()
+            openSubscription()
+        } label: {
+            HStack(spacing: 14) {
+                Image("Logo").resizable().scaledToFit().frame(width: 44, height: 44)
+                    .padding(8)
+                    .background(Palette.track, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Titan VPS").font(.system(size: 19, weight: .bold))
+                    HStack(spacing: 6) {
+                        Circle().fill(active ? Palette.green : Color.red).frame(width: 8, height: 8)
+                        Text(active ? (sub.info.expire > 0 ? "Активна до " + Fmt.date(sub.info.expire) : "Подписка бессрочная") : "Подписка истекла")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(active ? Color.primary : Color.red)
+                    }
+                    if let acc = store.account, acc.devicesEnabled {
+                        Text("Устройства: \(acc.devices.count)" + (acc.deviceLimit > 0 ? " из \(acc.deviceLimit)" : ""))
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Palette.primary.opacity(0.25), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle(scale: 0.98))
+        .padding(.top, 4)
     }
 
     @MainActor private func versionTapped() {
@@ -347,5 +450,102 @@ struct ProfileView: View {
                 wrongCode = false
             }
         }
+    }
+}
+
+/// Системная / Светлая / Тёмная as three tiles; the picked one slides under the choice.
+struct ThemePicker: View {
+    @Binding var theme: String
+    @Namespace private var selection
+
+    private struct Option: Identifiable {
+        let id: String
+        let title: String
+        let icon: String
+    }
+
+    private let options = [
+        Option(id: "system", title: "Системная", icon: "circle.lefthalf.filled"),
+        Option(id: "light", title: "Светлая", icon: "sun.max.fill"),
+        Option(id: "dark", title: "Тёмная", icon: "moon.fill"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(options) { o in
+                let on = theme == o.id
+                Button {
+                    guard !on else { return }
+                    Haptics.selection()
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { theme = o.id }
+                } label: {
+                    VStack(spacing: 6) {
+                        Image(systemName: o.icon).font(.system(size: 18, weight: .semibold))
+                        Text(o.title).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .foregroundStyle(on ? Color.white : Color.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 64)
+                    .background {
+                        if on {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Palette.accentGradient)
+                                .shadow(color: Palette.primary.opacity(0.35), radius: 8, y: 4)
+                                .matchedGeometryEffect(id: "picked", in: selection)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PressableStyle(scale: 0.95))
+                .accessibilityLabel("Тема: " + o.title)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(6)
+    }
+}
+
+/// О приложении: the logo, the version and where to write.
+struct AboutSheet: View {
+    let version: String
+    let support: URL
+    @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image("Logo").resizable().scaledToFit().frame(width: 96, height: 96)
+                .shadow(color: Palette.primary.opacity(0.35), radius: 20, y: 8)
+                .padding(.top, 28)
+            VStack(spacing: 4) {
+                Text("Titan VPS").font(.system(size: 26, weight: .bold))
+                Text("Версия \(version)").font(.system(size: 15).monospacedDigit()).foregroundStyle(.secondary)
+            }
+            chip("cpu", "Ядро Xray")
+            Spacer(minLength: 0)
+            VStack(spacing: 10) {
+                Button { openURL(Config.telegram) } label: {
+                    Label("Telegram-бот", systemImage: "paperplane.fill")
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                Button { openURL(support) } label: {
+                    Label("Поддержка", systemImage: "headphones")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.background.ignoresSafeArea())
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func chip(_ icon: String, _ text: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Palette.primary)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(Palette.primary.opacity(0.12), in: Capsule())
     }
 }

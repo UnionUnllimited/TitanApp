@@ -25,6 +25,13 @@ enum Palette {
     static let track = dynamic(light: 0xE8EBF1, dark: 0x1F2633)
     static let outline = dynamic(light: 0xD5DAE3, dark: 0x2C3444)
     static let green = dynamic(light: 0x12A150, dark: 0x22C55E)
+    /// The logo's blue to violet: main buttons, the picked theme.
+    static let violet = Color(red: 0x5B / 255, green: 0x3D / 255, blue: 0xF5 / 255)
+    static let accentGradient = LinearGradient(colors: [primary, violet], startPoint: .topLeading, endPoint: .bottomTrailing)
+    static let greenGradient = LinearGradient(colors: [dynamic(light: 0x22C55E, dark: 0x34D399), green],
+                                              startPoint: .topLeading, endPoint: .bottomTrailing)
+    /// The Выкл | Вкл knob while off: raised above the track.
+    static let knob = dynamic(light: 0xFFFFFF, dark: 0x343D4F)
 
     private static func dynamic(light: UInt32, dark: UInt32) -> Color {
         Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) })

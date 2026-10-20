@@ -44,6 +44,9 @@
 - Пинг: iOS `ios/TitanVPS/XrayPing.swift`; Android `app/.../core/PingService.kt`; Windows `desktop/.../Repository.kt` (`PingEngine`).
 - VPN: iOS `ios/TitanVPS/VPNController.swift` и `ios/TitanTunnel/PacketTunnelProvider.swift`;
   Android `app/.../vpn/TitanVpnService.kt`; Windows `desktop/.../AppState.kt`, `Tun.kt`.
+- Интерфейс iOS: общие кнопки, переключатели, строки настроек, тосты и хаптика — `ios/TitanVPS/Components.swift`;
+  ползунок «Выкл | Вкл» (перетаскивание, блокировка на время пинга) — `PowerSlider.swift`;
+  «Проверить соединение» (запрос через работающий VPN: задержка, страна и IP выхода) — `ConnectionCheck.swift`.
 - Обновление Windows: `desktop/.../Updater.kt` (окно обновления на PowerShell).
 - Технический режим (диагностика, скрыт за кодом): iOS `ios/TitanVPS/TechModeView.swift`,
   Android `app/.../ui/TechModeScreen.kt`, Windows `desktop/.../TechMode.kt`.

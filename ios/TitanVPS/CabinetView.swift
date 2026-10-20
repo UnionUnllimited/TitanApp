@@ -45,7 +45,9 @@ struct CabinetView: View {
                 } else {
                     VStack(spacing: 12) {
                         Text(error ?? "Ошибка").multilineTextAlignment(.center).foregroundStyle(.secondary)
-                        Button("Повторить") { Task { await load() } }.buttonStyle(.borderedProminent)
+                        Button { Task { await load() } } label: { Label("Повторить", systemImage: "arrow.clockwise") }
+                            .buttonStyle(PrimaryButtonStyle(height: 48))
+                            .frame(maxWidth: 240)
                     }
                     .padding(32)
                     Spacer()
@@ -272,14 +274,11 @@ private struct PayPane: View {
                             busy = true
                             Task { await onPay(t, m.id); busy = false }
                         } label: {
-                            Group {
-                                if busy { ProgressView().tint(.white) } else {
-                                    Text("Оплатить \(price(t.price))" + (m.title.isEmpty ? "" : " · \(m.title)")).fontWeight(.semibold)
-                                }
+                            if busy { ProgressView().tint(.white) } else {
+                                Text("Оплатить \(price(t.price))" + (m.title.isEmpty ? "" : " · \(m.title)")).fontWeight(.semibold)
                             }
-                            .frame(maxWidth: .infinity, minHeight: 50)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(PrimaryButtonStyle(height: 50))
                         .disabled(busy)
                     }
                 }
