@@ -160,11 +160,33 @@ enum SubscriptionAPI {
     /// "tfo" dial with TFO.
     static func applyTfo(_ name: String, _ proxy: inout [String: Any]) {
         guard name.lowercased().contains("tfo") || ((proxy["titan"] as? String) ?? "").lowercased().contains("tfo") else { return }
+        // Stream-up (and "auto") XHTTP can't ride iOS's TFO: its upload is one long POST whose
+        // body — the inner VLESS header and TLS handshake — is sent after the handshake (a POST
+        // body isn't safe to repeat, so it stays out of the SYN), and on this mobile DPI the box
+        // drops client→server data that follows a TFO handshake. The same server over a plain
+        // dial is ordinary XHTTP (the body becomes normal segments after the 3-way handshake),
+        // which works everywhere. So leave TFO off for it: the one subscription config then works
+        // on iOS just as on Android, where these dial over the Linux kernel's TFO untouched.
+        // Only explicit packet-up stays on TFO — there each upload is its own request that fits a
+        // SYN whole (fitXhttpInSyn), the case iOS TFO actually helps.
+        if xhttpNeedsPlainDial(proxy) { return }
         var stream = proxy["streamSettings"] as? [String: Any] ?? [:]
         var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
         sockopt["tcpFastOpen"] = true
         stream["sockopt"] = sockopt
         proxy["streamSettings"] = stream
+    }
+
+    /// True for an XHTTP/splithttp outbound that must not use iOS's manual TFO: anything but an
+    /// explicit packet-up upload (stream-up or "auto" send the request after the handshake).
+    private static func xhttpNeedsPlainDial(_ outbound: [String: Any]) -> Bool {
+        guard let stream = outbound["streamSettings"] as? [String: Any],
+              ["xhttp", "splithttp"].contains((stream["network"] as? String) ?? "") else { return false }
+        let key = stream["xhttpSettings"] != nil ? "xhttpSettings" : "splithttpSettings"
+        let xhttp = stream[key] as? [String: Any] ?? [:]
+        let extra = xhttp["extra"] as? [String: Any]
+        let mode = ((xhttp["mode"] as? String) ?? (extra?["mode"] as? String) ?? "auto").lowercased()
+        return mode != "packet-up"
     }
 
     /// iOS puts at most ~470 bytes in a TFO SYN (Android ~1400), and an XHTTP request with
