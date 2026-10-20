@@ -44,6 +44,8 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The icon follows the app's theme (Светлая / Тёмная); AppIcon itself has iOS 18's dark and tinted looks.
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "AppIconLight AppIconDark"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         # Cronet (Chromium's network stack, for Naive) is linked here, with what it needs.

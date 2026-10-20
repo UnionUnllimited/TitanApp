@@ -119,10 +119,15 @@ final class AppStore: ObservableObject {
         return ok
     }
 
-    /// Обновить подписку by hand: says when it's done (a failure shows its alert).
+    /// Обновить подписку by hand: says how it went in a note at the top (no alert to dismiss).
     func refreshByHand() async {
-        guard !busy else { return }
-        if await refresh() { showToast("Подписка обновлена", .success) }
+        guard !busy, let url = subscription?.url else { return }
+        if await load(url, quiet: true) {
+            showToast("Подписка обновлена", .success)
+        } else {
+            showToast("Не удалось обновить подписку: " + (lastLoadError ?? "сервер не ответил"), .warning)
+        }
+        await loadAccount()
     }
 
     func showToast(_ text: String, _ kind: Toast.Kind = .info) {
@@ -139,10 +144,14 @@ final class AppStore: ObservableObject {
         if let info = await AccountAPI.fetch(url) { account = info }
     }
 
+    /// Why the last load failed (for the note after Обновить подписку).
+    private var lastLoadError: String?
+
     @discardableResult
     private func load(_ url: String, quiet: Bool = false) async -> Bool {
         busy = true
         defer { busy = false }
+        lastLoadError = nil
         do {
             let sub = try await SubscriptionAPI.fetch(url)
             subscription = sub
@@ -150,7 +159,9 @@ final class AppStore: ObservableObject {
             if !sub.servers.contains(where: { $0.id == selectedId }) { select(sub.servers.first?.id) }
             return true
         } catch {
-            if !quiet || subscription == nil { message = error.localizedDescription }
+            let text = error.localizedDescription
+            lastLoadError = text.prefix(1).lowercased() + text.dropFirst()
+            if !quiet || subscription == nil { message = text }
             return false
         }
     }

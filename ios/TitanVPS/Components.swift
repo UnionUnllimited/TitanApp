@@ -381,3 +381,67 @@ enum Fmt {
         Locale(identifier: "ru_RU").localizedString(forRegionCode: code.uppercased())
     }
 }
+
+// MARK: - Backdrops
+
+/// A backdrop with slowly drifting light in the logo's colours (splash, key entry).
+struct AuroraBackground: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { ctx in
+            let t = CGFloat(ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3600))
+            GeometryReader { g in
+                let w = g.size.width
+                let h = g.size.height
+                ZStack {
+                    Palette.background
+                    blob(Palette.cyan, size: w * 1.1)
+                        .offset(x: w * (0.08 * sin(t / 5) - 0.28), y: h * (0.05 * cos(t / 6) - 0.3))
+                    blob(Palette.primary, size: w * 1.25)
+                        .offset(x: w * (0.07 * cos(t / 7) + 0.3), y: h * (0.06 * sin(t / 4.5) - 0.04))
+                    blob(Palette.violet, size: w * 1.15)
+                        .offset(x: w * (0.09 * sin(t / 6.5) - 0.12), y: h * (0.05 * cos(t / 5.5) + 0.34))
+                }
+                .frame(width: w, height: h)
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+
+    private func blob(_ color: Color, size: CGFloat) -> some View {
+        let strength = scheme == .dark ? 0.42 : 0.26
+        return Circle()
+            .fill(RadialGradient(colors: [color.opacity(strength), color.opacity(0)],
+                                 center: .center, startRadius: 0, endRadius: size / 2))
+            .frame(width: size, height: size)
+    }
+}
+
+/// The logo with a soft glow behind it that slowly breathes.
+struct GlowingLogo: View {
+    let size: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { ctx in
+            let t = CGFloat(ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3600))
+            let breath = reduceMotion ? 0 : sin(t * 1.4)
+            ZStack {
+                Circle()
+                    .fill(RadialGradient(colors: [Palette.primary.opacity(0.5), Palette.violet.opacity(0.22), Color.clear],
+                                         center: .center, startRadius: 0, endRadius: size * 0.78))
+                    .frame(width: size * 1.6, height: size * 1.6)
+                    .scaleEffect(1 + 0.06 * breath)
+                    .opacity(0.85 + 0.15 * breath)
+                Image("Logo").resizable().scaledToFit().frame(width: size, height: size)
+                    .shadow(color: Palette.primary.opacity(0.45), radius: size * 0.14, y: size * 0.05)
+            }
+        }
+        .frame(width: size * 1.6, height: size * 1.6)
+        .padding(-size * 0.25)
+        .accessibilityHidden(true)
+    }
+}

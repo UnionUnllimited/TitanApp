@@ -14,7 +14,20 @@ struct TitanVPSApp: App {
                 .onAppear { store.vpn = vpn }
                 .preferredColorScheme(theme == "dark" ? .dark : theme == "light" ? .light : nil)
                 .tint(Palette.primary)
+                .onChange(of: theme) { AppIconSwitcher.apply(theme: $0) }
         }
+    }
+}
+
+/// The home-screen icon follows the app's theme: Светлая and Тёмная have their own icon;
+/// Системная is the main one, which iOS 18 itself shows dark (or tinted) with the system.
+enum AppIconSwitcher {
+    static func apply(theme: String) {
+        let app = UIApplication.shared
+        guard app.supportsAlternateIcons else { return }
+        let name: String? = theme == "dark" ? "AppIconDark" : theme == "light" ? "AppIconLight" : nil
+        guard app.alternateIconName != name else { return }
+        app.setAlternateIconName(name) { _ in }
     }
 }
 
@@ -27,6 +40,9 @@ enum Palette {
     static let green = dynamic(light: 0x12A150, dark: 0x22C55E)
     /// The logo's blue to violet: main buttons, the picked theme.
     static let violet = Color(red: 0x5B / 255, green: 0x3D / 255, blue: 0xF5 / 255)
+    static let cyan = Color(red: 0x00 / 255, green: 0xC8 / 255, blue: 0xFF / 255)
+    /// The logo's colours across a title.
+    static let logoGradient = LinearGradient(colors: [cyan, primary, violet], startPoint: .leading, endPoint: .trailing)
     static let accentGradient = LinearGradient(colors: [primary, violet], startPoint: .topLeading, endPoint: .bottomTrailing)
     static let greenGradient = LinearGradient(colors: [dynamic(light: 0x22C55E, dark: 0x34D399), green],
                                               startPoint: .topLeading, endPoint: .bottomTrailing)
