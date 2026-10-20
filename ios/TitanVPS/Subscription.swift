@@ -167,6 +167,28 @@ enum SubscriptionAPI {
         proxy["streamSettings"] = stream
     }
 
+    /// iOS: a server marked "pktup" in its name (or Host Mapper "titan" field) uploads in XHTTP
+    /// packet-up over TFO. Each upload is then its own request that fits a SYN whole (fitXhttpInSyn
+    /// caps it), so no upload data trails the handshake in the open — which some mobile DPI drops on
+    /// certain nodes, where Android still gets through only because its larger SYN hides the whole
+    /// handshake. The server inbound must be "auto" or "packet-up"; a stream-up-only inbound answers
+    /// packet-up with 400. Marker-gated, so the stream-up production servers are untouched.
+    static func applyPacketUp(_ name: String, _ outbound: inout [String: Any]) {
+        guard name.lowercased().contains("pktup") || ((outbound["titan"] as? String) ?? "").lowercased().contains("pktup"),
+              var stream = outbound["streamSettings"] as? [String: Any],
+              ["xhttp", "splithttp"].contains((stream["network"] as? String) ?? "") else { return }
+        // Packet-up rides a SYN only over TFO.
+        var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
+        sockopt["tcpFastOpen"] = true
+        stream["sockopt"] = sockopt
+        let key = stream["xhttpSettings"] != nil ? "xhttpSettings" : "splithttpSettings"
+        var xhttp = stream[key] as? [String: Any] ?? [:]
+        xhttp["mode"] = "packet-up"
+        if var extra = xhttp["extra"] as? [String: Any] { extra["mode"] = "packet-up"; xhttp["extra"] = extra }
+        stream[key] = xhttp
+        outbound["streamSettings"] = stream
+    }
+
     /// iOS puts at most ~470 bytes in a TFO SYN (Android ~1400), and an XHTTP request with
     /// the default browser headers and padding is 700-1600: the rest of its plain HTTP
     /// headers went after the handshake, where the DPI box saw them. For XHTTP over TFO
@@ -236,6 +258,7 @@ enum SubscriptionAPI {
             if ((outbounds[proxyIndex]["tag"] as? String) ?? "").isEmpty { outbounds[proxyIndex]["tag"] = "proxy" }
             let name = ((cfg["remarks"] as? String)?.nilIfEmpty) ?? "Сервер \(i + 1)"
             applyTfo(name, &outbounds[proxyIndex])
+            applyPacketUp(name, &outbounds[proxyIndex])
             for i in outbounds.indices { fitXhttpInSyn(&outbounds[i]) }
             cfg["outbounds"] = outbounds
             let proxy = outbounds[proxyIndex]
