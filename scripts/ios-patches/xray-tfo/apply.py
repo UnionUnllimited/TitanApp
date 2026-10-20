@@ -12,7 +12,7 @@ new = ("\tif sockopt != nil && sockopt.ParseTFOValue() > 0 {\n"
 if code.count(old) != 1:
     sys.exit("system_dialer.go: dial line not found")
 target.write_text(code.replace(old, new))
-for f in ("system_dialer_tfo.go", "tfo_syn_darwin.go", "tfo_syn_windows.go", "system_dialer_tfo_other.go"):
+for f in ("system_dialer_tfo.go", "tfo_syn_darwin.go", "tfo_syn_windows.go", "system_dialer_tfo_other.go", "tfo_safe.go"):
     shutil.copy(here / f, src / "transport/internet" / f)
 
 # XHTTP packet-up over TFO: one upload per connection (splithttp_upload_once.go).
@@ -26,6 +26,10 @@ for name, text, old, new in [
     ("client.go", None,
      "\t\tc.uploadRawPool.Put(uploadConn)\n",
      "\t\tc.titanReleaseUpload(h1UploadConn, uploadConn)\n"),
+    # An upload's request is safe to repeat: it may go in the SYN whole (tfo_safe.go).
+    ("client.go", None,
+     "\t\t\t\tnewConn, err := c.dialUploadConn(context.WithoutCancel(ctx))\n",
+     "\t\t\t\tnewConn, err := c.dialUploadConn(titanUploadCtx(context.WithoutCancel(ctx)))\n"),
     ("dialer.go", dialer,
      "\t\tdialUploadConn: dialContext,\n\t}",
      "\t\tdialUploadConn: dialContext,\n\t\tuploadOnce:     streamSettings.SocketSettings != nil && streamSettings.SocketSettings.ParseTFOValue() > 0,\n\t}"),

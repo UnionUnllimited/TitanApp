@@ -18,7 +18,8 @@ python3 "$HERE/apply.py" "$XRAY"
 (cd "$XRAY" && go get "$TFO")
 python3 "$HERE/apply_libxray.py" "$LIBXRAY"
 
-# Check the patch on this machine (Apple's TCP stack when run on macOS).
-cp "$HERE/titan_tfo_test.go" "$XRAY/transport/internet/"
+# Check the patch on this machine (Apple's TCP stack when run on macOS): TFO dials, what
+# may go in a SYN, and that the kernel's record of a dial is readable.
+cp "$HERE/titan_tfo_test.go" "$HERE/tfo_safe_test.go" "$XRAY/transport/internet/"
 (cd "$XRAY" && go test -count=1 -v -run TestTitanTFO ./transport/internet/)
-rm "$XRAY/transport/internet/titan_tfo_test.go"
+rm "$XRAY/transport/internet/titan_tfo_test.go" "$XRAY/transport/internet/tfo_safe_test.go"

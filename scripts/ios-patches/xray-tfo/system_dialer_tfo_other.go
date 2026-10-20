@@ -14,3 +14,6 @@ func dialTFO(ctx context.Context, d *stdnet.Dialer, network, address string) (st
 
 // TitanTFOLog: nothing to report here.
 func TitanTFOLog() string { return "" }
+
+// TitanTFOStats: nothing counted here.
+func TitanTFOStats() string { return "{}" }

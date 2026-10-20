@@ -52,6 +52,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var pluginHandle: Int?
 
+    /// Технический режим asks what the tunnel's TCP Fast Open dials did: the kernel's record
+    /// of each one (data in the SYN, taken by the server or not), from the xray-tfo patch.
+    override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
+        guard String(decoding: messageData, as: UTF8.self) == "tfoStats" else {
+            completionHandler?(nil)
+            return
+        }
+        completionHandler?(Data(TitanInvoke("{\"method\":\"tfoStats\"}").utf8))
+    }
+
     // MARK: Network changes
 
     /// What runs now, to start again on a new network.

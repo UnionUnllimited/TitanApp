@@ -145,6 +145,20 @@ final class VPNController: ObservableObject {
         return true
     }
 
+    /// What the tunnel's TCP Fast Open dials did (its answer to "tfoStats"); nil while off.
+    func tunnelTFOStats() async -> [String: Any]? {
+        guard isOn, let session = manager?.connection as? NETunnelProviderSession else { return nil }
+        return await withCheckedContinuation { cont in
+            do {
+                try session.sendProviderMessage(Data("tfoStats".utf8)) { data in
+                    cont.resume(returning: data.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] })
+                }
+            } catch {
+                cont.resume(returning: nil)
+            }
+        }
+    }
+
     /// Reconnects on another server while on.
     func switchTo(_ server: Server) async {
         guard isOn else { return }

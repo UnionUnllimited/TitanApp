@@ -12,15 +12,23 @@ package internet
 // So the SYN gets the first part of the first write (tfoSynData, per system) and the rest
 // follows. A connection is never redialed for staying silent: some protocols (an XHTTP
 // upload) get no answer.
+//
+// Only data that is safe to repeat goes in a SYN (tfo_safe.go); other first writes dial
+// the usual way. On Apple systems each dial is checked with the kernel's own record of it
+// (TCP_CONNECTION_INFO): whether the data really went in the SYN and the server took it.
+// That is what the notes and TitanTFOStats report, not just that TFO was asked for.
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	stdnet "net"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/database64128/tfo-go/v2"
@@ -45,12 +53,72 @@ var (
 )
 
 func tfoNote(format string, args ...any) {
+	note := time.Now().Format("15:04:05 ") + fmt.Sprintf(format, args...)
 	tfoLogMu.Lock()
 	defer tfoLogMu.Unlock()
-	tfoLog = append(tfoLog, fmt.Sprintf(format, args...))
+	tfoLog = append(tfoLog, note)
 	if len(tfoLog) > 6 {
 		tfoLog = tfoLog[len(tfoLog)-6:]
 	}
+	tfoRecent = append(tfoRecent, note)
+	if len(tfoRecent) > 20 {
+		tfoRecent = tfoRecent[len(tfoRecent)-20:]
+	}
+}
+
+// The last notes, kept for TitanTFOStats (TitanTFOLog takes its own away).
+var tfoRecent []string
+
+// What the dials did since start, by the kernel's account where there is one.
+var tfoStat struct {
+	dials        atomic.Int64 // TFO dials that connected
+	synDataAcked atomic.Int64 // the data went in the SYN and the server took it: real TFO
+	synDataLost  atomic.Int64 // the data went in the SYN, the server didn't take it (sent again after the handshake)
+	cookieOnly   atomic.Int64 // no cookie for this host and network yet: the SYN asked for one, the data followed the handshake
+	kernelPlain  atomic.Int64 // the kernel sent a plain SYN
+	unchecked    atomic.Int64 // no kernel record (Windows)
+	plain        atomic.Int64 // dialed without TFO: a TFO dial to the host failed lately
+	notSafe      atomic.Int64 // dialed without TFO: the first write isn't safe to repeat
+	failed       atomic.Int64 // TFO dials that failed
+}
+
+// What the kernel did with a dialed connection (tfoKernel, per system).
+type tfoKernelInfo struct {
+	synDataSent, synDataAcked bool
+	cookieReq, cookieRcv      bool
+	forced                    bool // TCP_FASTOPEN_FORCE_ENABLE in place (Apple's TFO backoff off)
+	srttMs                    uint32
+	retransmit                uint64 // bytes sent again
+	extra                     []string
+}
+
+// verdict counts the dial and says what really went on the wire.
+func (k tfoKernelInfo) verdict() string {
+	var v string
+	switch {
+	case k.synDataSent && k.synDataAcked:
+		tfoStat.synDataAcked.Add(1)
+		v = "data in SYN, acked"
+	case k.synDataSent:
+		tfoStat.synDataLost.Add(1)
+		v = "data in SYN, NOT acked (resent after the handshake)"
+	case k.cookieReq:
+		tfoStat.cookieOnly.Add(1)
+		v = "no cookie yet, data after the handshake"
+		if k.cookieRcv {
+			v += " (cookie received)"
+		}
+	default:
+		tfoStat.kernelPlain.Add(1)
+		v = "plain SYN by the kernel"
+	}
+	if !k.forced {
+		v += ", heuristics not forced off"
+	}
+	if len(k.extra) > 0 {
+		v += ", " + strings.Join(k.extra, ", ")
+	}
+	return v + fmt.Sprintf(", rtt %d ms", k.srttMs)
 }
 
 // TFO connections still open, for the notes.
@@ -68,6 +136,34 @@ func TitanTFOLog() string {
 		return true
 	})
 	return strings.Join(notes, "; ")
+}
+
+// TitanTFOStats returns, as JSON, what the TFO dials did since start (kernel-checked where
+// the system keeps a record), the SYN data limits and the last notes.
+func TitanTFOStats() string {
+	tfoLogMu.Lock()
+	recent := append([]string(nil), tfoRecent...)
+	tfoLogMu.Unlock()
+	tfoLive.Range(func(k, _ any) bool {
+		recent = append(recent, "open: "+k.(*tfoConn).traffic())
+		return true
+	})
+	b, _ := json.Marshal(map[string]any{
+		"system":       runtime.GOOS,
+		"synLimitIPv4": tfoSynData4,
+		"synLimitIPv6": tfoSynData6,
+		"dials":        tfoStat.dials.Load(),
+		"synDataAcked": tfoStat.synDataAcked.Load(),
+		"synDataLost":  tfoStat.synDataLost.Load(),
+		"cookieOnly":   tfoStat.cookieOnly.Load(),
+		"kernelPlain":  tfoStat.kernelPlain.Load(),
+		"unchecked":    tfoStat.unchecked.Load(),
+		"plain":        tfoStat.plain.Load(),
+		"notSafe":      tfoStat.notSafe.Load(),
+		"failed":       tfoStat.failed.Load(),
+		"recent":       recent,
+	})
+	return string(b)
 }
 
 func dialTFO(ctx context.Context, d *stdnet.Dialer, network, address string) (stdnet.Conn, error) {
@@ -145,35 +241,52 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// open dials with TFO (the first part of b in the SYN), or the usual way for a host where
-// a TFO dial failed lately.
+// open dials with TFO (the first part of b in the SYN, as much of it as is safe to repeat),
+// or the usual way for a host where a TFO dial failed lately.
 func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
+	safe, kind := tfoSynPart(c.ctx, b)
+	if safe == 0 {
+		tfoStat.notSafe.Add(1)
+		return c.openPlain(b, "plain: "+kind+" first write kept out of the SYN (not safe to repeat)")
+	}
 	if since, broken := tfoBroken.Load(c.address); !broken || time.Since(since.(time.Time)) > tfoRetryAfter {
 		limit := tfoSynData4
 		if ap, err := netip.ParseAddrPort(c.address); err == nil && ap.Addr().Is6() && !ap.Addr().Is4In6() {
 			limit = tfoSynData6
 		}
-		first := b
-		if len(first) > limit {
-			first = first[:limit]
-		}
+		first := b[:min(safe, limit)]
 		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
 		conn, err := c.dialer.DialContext(ctx, c.network, c.address, first)
 		cancel()
 		if err == nil {
+			tfoStat.dials.Add(1)
+			// The kernel's record right after the handshake: what went in the SYN.
+			verdict := "no kernel record"
+			if k, ok := tfoKernel(conn); ok {
+				verdict = k.verdict()
+			} else {
+				tfoStat.unchecked.Add(1)
+			}
 			if rest := b[len(first):]; len(rest) > 0 {
 				if _, err = conn.Write(rest); err != nil {
 					conn.Close()
 					return nil, false, err
 				}
 			}
-			tfoNote("tfo %d+%d B in %d ms", len(first), len(b)-len(first), time.Since(c.start).Milliseconds())
+			tfoNote("tfo %s %d+%d B in %d ms: %s", kind, len(first), len(b)-len(first), time.Since(c.start).Milliseconds(), verdict)
 			return conn, true, nil
 		}
+		tfoStat.failed.Add(1)
 		tfoBroken.Store(c.address, time.Now())
 		tfoNote("tfo dial: %v", err)
 		errors.LogWarning(c.ctx, "TCP Fast Open to ", c.address, " failed, dialing without it: ", err)
 	}
+	tfoStat.plain.Add(1)
+	return c.openPlain(b, "plain (TFO to this host failed lately)")
+}
+
+// openPlain dials without TFO and sends b after the handshake.
+func (c *tfoConn) openPlain(b []byte, note string) (stdnet.Conn, bool, error) {
 	conn, err := c.dialer.Dialer.DialContext(c.ctx, c.network, c.address)
 	if err != nil {
 		tfoNote("plain dial: %v", err)
@@ -183,7 +296,7 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
 		conn.Close()
 		return nil, false, err
 	}
-	tfoNote("plain")
+	tfoNote("%s", note)
 	return conn, false, nil
 }
 
@@ -234,7 +347,11 @@ func (c *tfoConn) Close() error {
 	c.mu.Unlock()
 	<-c.ready
 	if _, live := tfoLive.LoadAndDelete(c); live {
-		tfoNote("closed: %s", c.traffic())
+		resent := ""
+		if k, ok := tfoKernel(c.conn); ok && k.retransmit > 0 {
+			resent = fmt.Sprintf(", resent %d B", k.retransmit)
+		}
+		tfoNote("closed: %s%s", c.traffic(), resent)
 	}
 	if c.conn != nil {
 		return c.conn.Close()

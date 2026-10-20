@@ -9,6 +9,10 @@
 //	{"method": "startMieru", "profile": "<ClientProfile JSON>", "port": p} -> {"handle": n}
 //	{"method": "stop", "handle": n}                                    -> {}
 //	{"method": "freePort"}                                             -> {"port": p}
+//	{"method": "tfoStats"}                                             -> {"dials": n, ...}
+//
+// tfoStats is what Xray's TCP Fast Open dials in this process did, by the kernel's own
+// record (the xray-tfo patch: internet.TitanTFOStats).
 //
 // Errors come back as {"error": "..."}.
 package titan
@@ -19,6 +23,8 @@ import (
 	"io"
 	"net"
 	"sync"
+
+	"github.com/xtls/xray-core/transport/internet"
 )
 
 type request struct {
@@ -65,6 +71,8 @@ func Invoke(requestJSON string) string {
 		port := ln.Addr().(*net.TCPAddr).Port
 		ln.Close()
 		return answer(map[string]any{"port": port}, nil)
+	case "tfoStats":
+		return internet.TitanTFOStats()
 	}
 	return answer(nil, errors.New("unknown method "+req.Method))
 }

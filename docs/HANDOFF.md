@@ -49,6 +49,44 @@
   Android `app/.../ui/TechModeScreen.kt`, Windows `desktop/.../TechMode.kt`.
   Открывается семью нажатиями на версию и вводом кода. Код в репозитории не хранится, только его SHA-256.
 
+## TCP Fast Open на iOS
+
+- Транспорт туннеля — Xray-core (Go, BSD-сокеты). Опции Network.framework
+  (`NWProtocolTCP.Options.enableFastOpen`, `NWParameters.allowFastOpen`) действуют только
+  на `NWConnection` и к сокетам Xray не относятся. Поэтому TFO включён в самом Xray-core
+  (`scripts/ios-patches/xray-tfo`): дайлер tfo-go открывает соединение на первой записи
+  через `connectx()` с `CONNECT_DATA_IDEMPOTENT` (то же делает Network.framework) и ставит
+  `TCP_FASTOPEN_FORCE_ENABLE`.
+- Что выяснено по исходникам XNU (`bsd/netinet/tcp_output.c`, `tcp_timer.c`, `tcp_cache.c`):
+  - в SYN идёт не больше `t_maxopd − 40` байт, а до SYN-ACK `t_maxopd` — MSS по умолчанию:
+    472 Б для IPv4, 984 Б для IPv6. Если в очереди больше, данных в SYN нет вовсе. Поэтому
+    первая запись режется (`tfoSynData4/6`), остальное уходит после рукопожатия;
+  - без `TCP_FASTOPEN_FORCE_ENABLE` ядро после двух потерь отключает TFO для всей сети
+    (ключ — сигнатура сети, не сервер) на 5 мин, 10, 20… и повторяет потерянный SYN без
+    данных. Опция это отключает, tfo-go ставит её на каждый сокет.
+- В SYN кладётся только то, что безопасно получить дважды (`tfo_safe.go`): TLS ClientHello,
+  заголовки HTTP, тело GET/HEAD/OPTIONS и загрузок XHTTP packet-up (сервер принимает каждую
+  один раз по номеру). Прочее (заголовок прокси-протокола с данными) — без TFO.
+- Каждое TFO-соединение сверяется с записью ядра (`TCP_CONNECTION_INFO`): ушли ли данные в
+  SYN и принял ли их сервер. Это видно:
+  - в «Техническом режиме», карточка «TCP Fast Open»: туннель (через `handleAppMessage`) и
+    пинг в приложении; «данные в SYN приняты сервером» — TFO действительно сработал;
+  - в ошибке пинга, в квадратных скобках (`tfo http 438+0 B in 71 ms: data in SYN, acked`).
+
+## Проверка TFO
+
+1. Телефон: «Технический режим» → «TCP Fast Open» → «Обновить» при включённом VPN на
+   TFO-сервере. Ждём «TFO работает», растущее «данные в SYN приняты сервером» и нули в
+   «не приняты» и «ядро отправило обычный SYN». «cookie ещё не было» — первое соединение
+   после смены сети, это нормально.
+2. Сервер: в SYN от клиента должны быть `tfo cookie` и `length > 0`, сразу за SYN-ACK —
+   ответ сервера, до третьего ACK (значит, данные из SYN приняты):
+
+```
+tcpdump -nr /root/t.pcap -vv 'src host <IP клиента> and tcp[tcpflags] & tcp-syn != 0' | paste - - | head
+nstat -az TcpExtTCPFastOpenPassive TcpExtTCPFastOpenPassiveFail TcpExtTCPFastOpenCookieReqd
+```
+
 ## Состояние на момент передачи
 
 - Android: серверы «Обход» с TFO работают.
@@ -56,6 +94,9 @@
   - TFO на iOS отправляет данные через `connectx`. По захватам с сервера в первом пакете при этом не больше ~470 байт.
   - На Windows TFO в `xray.exe` до сборки `windows-76` фактически не работал: tfo-go был собран без тега `tfogo_checklinkname0`.
   - Режим XHTTP берётся из настроек сервера. Сервер «Обход 6» работает в режиме stream-up и на packet-up отвечает `400 Bad Request`.
+    Дамп 20.10 13:43 UTC (сборка ios-56 и раньше, packet-up принудительно): TFO по TCP работал
+    (cookie и данные в каждом SYN, сервер отвечал сразу), а все загрузки получили 400. С ios-57
+    режим берётся с сервера.
 - Остальные серверы и протоколы (VLESS/Reality, XHTTP без TFO, Hysteria, TUIC, AnyTLS, ShadowTLS, SSH, Mieru, MASQUE, Naive) работают на всех трёх платформах.
 
 ## Диагностика на сервере

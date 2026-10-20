@@ -153,6 +153,50 @@ enum TechChecks {
     }
 }
 
+/// What Xray's TCP Fast Open dials did in one process (the tunnel's, or the app's own for
+/// pings), by the kernel's record of each connection (TCP_CONNECTION_INFO, xray-tfo patch).
+struct TFOStats {
+    private let n: [String: Int]
+    let recent: [String]
+
+    init?(_ obj: [String: Any]?) {
+        guard let obj, obj["dials"] != nil else { return nil }
+        n = obj.compactMapValues { $0 as? Int }
+        recent = obj["recent"] as? [String] ?? []
+    }
+
+    /// The SYN data limits of iOS's TCP (default MSS less options, before the handshake).
+    var limit: String {
+        "до \(n["synLimitIPv4"] ?? 0) Б (IPv4), \(n["synLimitIPv6"] ?? 0) Б (IPv6) данных в SYN — ограничение ядра iOS; остальное идёт после рукопожатия"
+    }
+
+    var summary: String {
+        let c = { (key: String) in n[key] ?? 0 }
+        let verdict: String
+        if c("synDataAcked") > 0 {
+            verdict = "TFO работает: данные ушли в SYN и сервер их принял"
+        } else if c("dials") > 0 {
+            verdict = "TFO запрошен, но ни разу данные в SYN не были приняты"
+        } else {
+            verdict = "TFO-подключений не было"
+        }
+        var lines = [
+            verdict,
+            "TFO-подключений: \(c("dials"))",
+            "  данные в SYN приняты сервером: \(c("synDataAcked"))",
+            "  данные в SYN не приняты (повторены после рукопожатия): \(c("synDataLost"))",
+            "  cookie ещё не было, данные после рукопожатия: \(c("cookieOnly"))",
+            "  ядро отправило обычный SYN: \(c("kernelPlain"))",
+            "Без TFO: \(c("plain")) (TFO к серверу недавно не прошёл), \(c("notSafe")) (данные нельзя повторять)",
+            "Ошибок TFO-подключения: \(c("failed"))",
+        ]
+        if c("unchecked") > 0 { lines.append("Без записи ядра: \(c("unchecked"))") }
+        return lines.joined(separator: "\n")
+    }
+
+    static func app() -> TFOStats? { TFOStats(try? Titan.invoke(["method": "tfoStats"])) }
+}
+
 @MainActor
 struct TechModeView: View {
     @EnvironmentObject var store: AppStore
@@ -170,6 +214,8 @@ struct TechModeView: View {
     @State private var checkingServers = false
     @State private var tcpNote: String?
     @State private var udp: Set<String> = []
+    @State private var tfoTunnel: TFOStats?
+    @State private var tfoApp: TFOStats?
     @State private var copied = false
 
     private static let stampFormat: DateFormatter = {
@@ -198,6 +244,11 @@ struct TechModeView: View {
                     Button { Task { await checkServers() } } label: { Text("Проверить серверы").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered).disabled(checkingServers)
                 }
+                card("TCP Fast Open", tfoRows,
+                     caption: "По записи ядра iOS о каждом соединении (TCP_CONNECTION_INFO), а не по настройкам: «приняты сервером» — данные действительно ушли в SYN. TFO включается для серверов с «tfo» в имени.") {
+                    Button { Task { await refreshTFO() } } label: { Text("Обновить").frame(maxWidth: .infinity) }
+                        .buttonStyle(.bordered)
+                }
                 journalCard
             }
             .padding(16)
@@ -210,6 +261,7 @@ struct TechModeView: View {
         .task(id: store.subscription?.fetchedAt) {
             udp = Set((store.subscription?.servers ?? []).filter(TechChecks.isUDP).map(\.id))
         }
+        .task { await refreshTFO() }
     }
 
     private var actions: some View {
@@ -329,6 +381,19 @@ struct TechModeView: View {
         }
     }
 
+    private var tfoRows: [(String, String)] {
+        var rows: [(String, String)] = [("Ограничение", (tfoTunnel ?? tfoApp)?.limit ?? "—")]
+        rows.append(("Туннель", tfoTunnel?.summary ?? (vpn.isOn ? "туннель не ответил" : "VPN выключен")))
+        if let recent = tfoTunnel?.recent, !recent.isEmpty {
+            rows.append(("Туннель: последние соединения", recent.joined(separator: "\n")))
+        }
+        rows.append(("Пинг (приложение)", tfoApp?.summary ?? "нет данных"))
+        if let recent = tfoApp?.recent, !recent.isEmpty {
+            rows.append(("Пинг: последние соединения", recent.joined(separator: "\n")))
+        }
+        return rows
+    }
+
     /// Why the last pings failed (Xray's errors; TCP Fast Open notes come in [brackets]) and the VPN's own error.
     private var journal: [String] {
         var lines: [String] = []
@@ -391,6 +456,7 @@ struct TechModeView: View {
         add("Обходы", bypassRows)
         add("Доступ (\(accessRoute ?? appRoute))", accessRows)
         add("Серверы" + (tcpNote.map { " (\($0))" } ?? ""), serverRows)
+        add("TCP Fast Open", tfoRows)
         out += "\n== Журнал ==\n" + (journal.isEmpty ? "пусто" : journal.joined(separator: "\n")) + "\n"
         return out
     }
@@ -423,7 +489,14 @@ struct TechModeView: View {
         let ipDone = Task { await checkIP() }
         await checkAccess()
         await ipDone.value
+        await refreshTFO()
         await checkServers()
+    }
+
+    /// The tunnel's TFO record (while the VPN is on) and the app's own, from its pings.
+    private func refreshTFO() async {
+        tfoTunnel = TFOStats(await vpn.tunnelTFOStats())
+        tfoApp = TFOStats.app()
     }
 
     private func checkIP() async {

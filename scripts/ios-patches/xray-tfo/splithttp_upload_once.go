@@ -6,10 +6,20 @@ package splithttp
 // where only TFO gets through the DPI box cuts the connection there.
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/xtls/xray-core/transport/internet"
 )
+
+// titanUploadCtx marks the dial of a packet-up upload connection as safe to repeat for TCP
+// Fast Open: the server takes each upload once by its sequence number and drops it if it
+// comes again, so the whole request may go in the SYN.
+func titanUploadCtx(ctx context.Context) context.Context {
+	return internet.TitanTFOReplaySafe(ctx)
+}
 
 func (c *DefaultDialerClient) titanReleaseUpload(h *H1Conn, conn any) {
 	if !c.uploadOnce {
