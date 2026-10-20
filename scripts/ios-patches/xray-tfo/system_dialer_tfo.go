@@ -28,11 +28,9 @@ import (
 )
 
 const (
-	// How long a TFO dial may take before the host is tried without TFO.
-	tfoDialTimeout = 2 * time.Second
-	// A TFO dial slower than this: the TFO SYN got lost on the way and the system sent it
-	// again (Windows after ~3 s). That host goes without TFO for a while, like a failed one.
-	tfoSlowDial = 1500 * time.Millisecond
+	// How long a TFO dial may take before the host is tried without TFO (a lost SYN-ACK
+	// is sent again after ~2.5 s on mobile networks; that must not count as a failure).
+	tfoDialTimeout = 4 * time.Second
 	// How long a host where a TFO dial failed is dialed without it.
 	tfoRetryAfter = 2 * time.Minute
 )
@@ -163,10 +161,6 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
 		conn, err := c.dialer.DialContext(ctx, c.network, c.address, first)
 		cancel()
 		if err == nil {
-			if took := time.Since(c.start); took > tfoSlowDial {
-				tfoBroken.Store(c.address, time.Now())
-				tfoNote("tfo slow: %d ms", took.Milliseconds())
-			}
 			if rest := b[len(first):]; len(rest) > 0 {
 				if _, err = conn.Write(rest); err != nil {
 					conn.Close()
