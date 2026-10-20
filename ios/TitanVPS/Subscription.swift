@@ -160,51 +160,11 @@ enum SubscriptionAPI {
     /// "tfo" dial with TFO.
     static func applyTfo(_ name: String, _ proxy: inout [String: Any]) {
         guard name.lowercased().contains("tfo") || ((proxy["titan"] as? String) ?? "").lowercased().contains("tfo") else { return }
-        // Stream-up (and "auto") XHTTP can't ride iOS's TFO: its upload is one long POST whose
-        // body — the inner VLESS header and TLS handshake — is sent after the handshake (a POST
-        // body isn't safe to repeat, so it stays out of the SYN), and on this mobile DPI the box
-        // drops client→server data that follows a TFO handshake. The same server over a plain
-        // dial is ordinary XHTTP (the body becomes normal segments after the 3-way handshake),
-        // which works everywhere. So leave TFO off for it: the one subscription config then works
-        // on iOS just as on Android, where these dial over the Linux kernel's TFO untouched.
-        // Only explicit packet-up stays on TFO — there each upload is its own request that fits a
-        // SYN whole (fitXhttpInSyn), the case iOS TFO actually helps.
-        if xhttpNeedsPlainDial(proxy) { return }
         var stream = proxy["streamSettings"] as? [String: Any] ?? [:]
         var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
         sockopt["tcpFastOpen"] = true
         stream["sockopt"] = sockopt
         proxy["streamSettings"] = stream
-    }
-
-    /// The subscription config can already carry tcpFastOpen (the panel sets it) on an XHTTP
-    /// server, so `applyTfo` only not *adding* it isn't enough — remove it here. On iOS a
-    /// stream-up / "auto" upload can't use TFO: its body (the inner VLESS header and TLS
-    /// handshake) follows the handshake, and this mobile DPI drops client→server data after a
-    /// TFO handshake, so the server is dialed plain (ordinary XHTTP, which the DPI lets through).
-    /// Android dials the very same config over the Linux kernel's TFO and is untouched — one
-    /// subscription config, both platforms. Only explicit packet-up keeps TFO (each upload is
-    /// one request that fits a SYN whole, see fitXhttpInSyn).
-    static func dropTfoFromStreamUpXhttp(_ outbound: inout [String: Any]) {
-        guard xhttpNeedsPlainDial(outbound),
-              var stream = outbound["streamSettings"] as? [String: Any],
-              var sockopt = stream["sockopt"] as? [String: Any],
-              sockopt["tcpFastOpen"] != nil else { return }
-        sockopt.removeValue(forKey: "tcpFastOpen")
-        stream["sockopt"] = sockopt
-        outbound["streamSettings"] = stream
-    }
-
-    /// True for an XHTTP/splithttp outbound that must not use iOS's manual TFO: anything but an
-    /// explicit packet-up upload (stream-up or "auto" send the request after the handshake).
-    private static func xhttpNeedsPlainDial(_ outbound: [String: Any]) -> Bool {
-        guard let stream = outbound["streamSettings"] as? [String: Any],
-              ["xhttp", "splithttp"].contains((stream["network"] as? String) ?? "") else { return false }
-        let key = stream["xhttpSettings"] != nil ? "xhttpSettings" : "splithttpSettings"
-        let xhttp = stream[key] as? [String: Any] ?? [:]
-        let extra = xhttp["extra"] as? [String: Any]
-        let mode = ((xhttp["mode"] as? String) ?? (extra?["mode"] as? String) ?? "auto").lowercased()
-        return mode != "packet-up"
     }
 
     /// iOS puts at most ~470 bytes in a TFO SYN (Android ~1400), and an XHTTP request with
@@ -276,10 +236,7 @@ enum SubscriptionAPI {
             if ((outbounds[proxyIndex]["tag"] as? String) ?? "").isEmpty { outbounds[proxyIndex]["tag"] = "proxy" }
             let name = ((cfg["remarks"] as? String)?.nilIfEmpty) ?? "Сервер \(i + 1)"
             applyTfo(name, &outbounds[proxyIndex])
-            for i in outbounds.indices {
-                dropTfoFromStreamUpXhttp(&outbounds[i])
-                fitXhttpInSyn(&outbounds[i])
-            }
+            for i in outbounds.indices { fitXhttpInSyn(&outbounds[i]) }
             cfg["outbounds"] = outbounds
             let proxy = outbounds[proxyIndex]
             let proxyTag = proxy["tag"] as? String ?? "proxy"
