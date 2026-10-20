@@ -1,0 +1,71 @@
+# Titan VPS: передача проекта
+
+Обзор репозитория для разработчика, который продолжит работу. Ветка с последними
+изменениями: `claude/exciting-ptolemy-oiy9r6`.
+
+## Безопасность
+
+Репозиторий публичный. В код, коммиты и issues не должны попадать домен и IP
+админки и бота, адрес и токен панели, ключи подписки, UUID, ключи шифрования.
+Секреты сборок (подпись iOS, App Store Connect) лежат в GitHub Secrets.
+
+## Структура
+
+| Путь | Что это |
+|---|---|
+| `app/` | Android: Kotlin, Jetpack Compose, ядро libXray (`.aar`), клиенты протоколов как исполняемые файлы |
+| `desktop/` | Windows: Compose Desktop, `xray.exe`, `sing-box.exe` (TUN), клиенты naive и mieru |
+| `ios/TitanVPS/` | iOS-приложение (SwiftUI) |
+| `ios/TitanTunnel/` | iOS Packet Tunnel Extension: запускает Xray и клиент протокола |
+| `ios/project.yml` | Проект Xcode (XcodeGen) |
+| `scripts/build-libxray.sh` | Сборка libXray для Android |
+| `scripts/build-libxray-ios.sh` | Сборка `LibXray.xcframework` для iOS (libXray v26.9.30 в режиме `local` с изменённым Xray-core) |
+| `scripts/ios-patches/xray-tfo/` | Патч Xray-core для TCP Fast Open на iOS и Windows (`apply.py` и Go-файлы) |
+| `scripts/ios-patches/titan/` | Go-пакет `titan` в xcframework: клиенты sing-box (TUIC, AnyTLS, ShadowTLS, SSH, Naive) и Mieru для iOS |
+| `server/` | Скрипты установки и удаления ноды (`install-node.sh`, `remove-node.sh`) |
+| `.github/workflows/` | CI: `android.yml`, `windows.yml`, `ios.yml` |
+
+## Сборки
+
+Каждый пуш в `claude/**` или `main` с изменениями в нужной папке запускает CI.
+Результат выкладывается в GitHub Releases:
+
+- Android: тег `android-N`, файлы `titan-vps-arm64.apk`, `titan-vps-armv7.apk`, `titan-vps-universal.apk`
+- Windows: тег `windows-N`, файлы `titan-vps-setup.exe`, `titan-vps.msi`. `xray.exe` собирается в CI из Xray-core v26.9.30 с патчем `scripts/ios-patches/xray-tfo` и тегом `tfogo_checklinkname0`
+- iOS: тег `ios-N`, файл `TitanVPS-unsigned.ipa` (без подписи, для сервисов подписи и Sideloadly)
+
+Ядро iOS долго собирается без кэша: кэш сбрасывается при изменении `scripts/ios-patches/**`.
+
+## Где что в коде
+
+- Разбор подписки и правка конфигов на iOS: `ios/TitanVPS/Subscription.swift`
+  (`applyTfo` включает TFO по имени сервера или полю `titan`; `fitXhttpInSyn` правит XHTTP для TFO-серверов).
+- То же на Android: `app/src/main/java/com/titanvps/app/core/XrayConfigs.kt`; на Windows: `desktop/src/main/kotlin/com/titanvps/desktop/XrayConfigs.kt`.
+- Пинг: iOS `ios/TitanVPS/XrayPing.swift`; Android `app/.../core/PingService.kt`; Windows `desktop/.../Repository.kt` (`PingEngine`).
+- VPN: iOS `ios/TitanVPS/VPNController.swift` и `ios/TitanTunnel/PacketTunnelProvider.swift`;
+  Android `app/.../vpn/TitanVpnService.kt`; Windows `desktop/.../AppState.kt`, `Tun.kt`.
+- Обновление Windows: `desktop/.../Updater.kt` (окно обновления на PowerShell).
+- Технический режим (диагностика, скрыт за кодом): iOS `ios/TitanVPS/TechModeView.swift`,
+  Android `app/.../ui/TechModeScreen.kt`, Windows `desktop/.../TechMode.kt`.
+  Открывается семью нажатиями на версию и вводом кода. Код в репозитории не хранится, только его SHA-256.
+
+## Состояние на момент передачи
+
+- Android: серверы «Обход» с TFO работают.
+- iOS (`ios-57`) и Windows (`windows-78`): серверы «Обход» с TFO по LTE не работают (таймаут пинга).
+  - TFO на iOS отправляет данные через `connectx`. По захватам с сервера в первом пакете при этом не больше ~470 байт.
+  - На Windows TFO в `xray.exe` до сборки `windows-76` фактически не работал: tfo-go был собран без тега `tfogo_checklinkname0`.
+  - Режим XHTTP берётся из настроек сервера. Сервер «Обход 6» работает в режиме stream-up и на packet-up отвечает `400 Bad Request`.
+- Остальные серверы и протоколы (VLESS/Reality, XHTTP без TFO, Hysteria, TUIC, AnyTLS, ShadowTLS, SSH, Mieru, MASQUE, Naive) работают на всех трёх платформах.
+
+## Диагностика на сервере
+
+Захват трафика на ноде для одного клиента:
+
+```
+timeout 90 tcpdump -Z root -ni any -w /root/t.pcap 'port <порт>'
+tcpdump -nr /root/t.pcap -vv 'src host <IP клиента> and tcp[tcpflags] & tcp-syn != 0' | paste - - | head
+tcpdump -nr /root/t.pcap -q 'host <IP клиента>' | head -100
+```
+
+Внешний IP устройства виден в техническом режиме, раздел «Сеть».
