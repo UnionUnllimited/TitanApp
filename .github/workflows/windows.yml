@@ -45,7 +45,10 @@ jobs:
           python scripts/ios-patches/xray-tfo/apply.py xray-src
           cd xray-src
           go get github.com/database64128/tfo-go/v2@v2.4.2
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -buildid=" -o "../$dest/xray.exe" ./main
+          # tfo-go's TFO dialing on Windows is behind this tag and needs the linkname check off;
+          # without them it quietly dials plain TCP.
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags tfogo_checklinkname0 -trimpath -ldflags "-s -w -buildid= -checklinkname=0" -o "../$dest/xray.exe" ./main
+          go version -m "../$dest/xray.exe" | grep -q 'tags=tfogo_checklinkname0' 
           ls -la "../$dest/xray.exe"
 
       # The same geo files as Android, the TUN core and protocol clients.
