@@ -101,47 +101,88 @@ object Updater {
                 """
                 ${'$'}ErrorActionPreference = 'SilentlyContinue'
                 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+                # Sharp at any display scale (else Windows stretches the window and blurs it), and
+                # Windows 11's rounded corners.
+                Add-Type @'
+                using System;
+                using System.Runtime.InteropServices;
+                public static class TitanWin {
+                    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+                    [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+                }
+                '@
+                [TitanWin]::SetProcessDPIAware() | Out-Null
                 [System.Windows.Forms.Application]::EnableVisualStyles()
+                ${'$'}g = [System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero); ${'$'}k = ${'$'}g.DpiX / 96; ${'$'}g.Dispose()
+                function S([double]${'$'}v) { [int][Math]::Round(${'$'}v * ${'$'}k) }
+                ${'$'}bg = [System.Drawing.Color]::FromArgb(14, 19, 29)
+                # Our own window: no system frame, the app's colours.
                 ${'$'}form = New-Object System.Windows.Forms.Form
                 ${'$'}form.Text = 'Titan VPS'
-                ${'$'}form.FormBorderStyle = 'FixedDialog'
-                ${'$'}form.ControlBox = ${'$'}false
+                ${'$'}form.FormBorderStyle = 'None'
                 ${'$'}form.StartPosition = 'CenterScreen'
                 ${'$'}form.TopMost = ${'$'}true
-                ${'$'}form.ClientSize = New-Object System.Drawing.Size(420, 140)
-                ${'$'}form.BackColor = [System.Drawing.Color]::FromArgb(14, 19, 29)
-                # Titan's icon on the window and in the taskbar, its logo inside.
-                ${'$'}logo = [System.Drawing.Image]::FromFile(${q(logo.absolutePath)})
+                ${'$'}form.ShowInTaskbar = ${'$'}true
+                ${'$'}form.BackColor = ${'$'}bg
+                ${'$'}form.ClientSize = New-Object System.Drawing.Size((S 440), (S 148))
+                ${'$'}form.Add_Load({ ${'$'}round = 2; [TitanWin]::DwmSetWindowAttribute(${'$'}form.Handle, 33, [ref]${'$'}round, 4) | Out-Null })
+                ${'$'}edge = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(40, 48, 64))
+                ${'$'}form.Add_Paint({ ${'$'}_.Graphics.DrawRectangle(${'$'}edge, 0, 0, ${'$'}form.ClientSize.Width - 1, ${'$'}form.ClientSize.Height - 1) })
+                # Titan's icon in the taskbar; the logo scaled smoothly to its exact size.
+                ${'$'}src = [System.Drawing.Image]::FromFile(${q(logo.absolutePath)})
                 ${'$'}appIcon = ${if (exe != null) "[System.Drawing.Icon]::ExtractAssociatedIcon(${q(exe)})" else "${'$'}null"}
-                if (-not ${'$'}appIcon -and ${'$'}logo) { ${'$'}appIcon = [System.Drawing.Icon]::FromHandle((New-Object System.Drawing.Bitmap(${'$'}logo, 64, 64)).GetHicon()) }
+                if (-not ${'$'}appIcon -and ${'$'}src) { ${'$'}appIcon = [System.Drawing.Icon]::FromHandle((New-Object System.Drawing.Bitmap(${'$'}src, 64, 64)).GetHicon()) }
                 if (${'$'}appIcon) { ${'$'}form.Icon = ${'$'}appIcon }
+                ${'$'}size = S 64
+                ${'$'}logo = New-Object System.Drawing.Bitmap(${'$'}size, ${'$'}size)
+                ${'$'}lg = [System.Drawing.Graphics]::FromImage(${'$'}logo)
+                ${'$'}lg.InterpolationMode = 'HighQualityBicubic'
+                ${'$'}lg.SmoothingMode = 'HighQuality'
+                ${'$'}lg.PixelOffsetMode = 'HighQuality'
+                if (${'$'}src) { ${'$'}lg.DrawImage(${'$'}src, 0, 0, ${'$'}size, ${'$'}size) }
+                ${'$'}lg.Dispose()
                 ${'$'}pic = New-Object System.Windows.Forms.PictureBox
                 ${'$'}pic.Image = ${'$'}logo
-                ${'$'}pic.SizeMode = 'Zoom'
-                ${'$'}pic.Location = New-Object System.Drawing.Point(24, 22)
-                ${'$'}pic.Size = New-Object System.Drawing.Size(60, 60)
+                ${'$'}pic.BackColor = ${'$'}bg
+                ${'$'}pic.Location = New-Object System.Drawing.Point((S 28), (S 30))
+                ${'$'}pic.Size = New-Object System.Drawing.Size(${'$'}size, ${'$'}size)
                 ${'$'}title = New-Object System.Windows.Forms.Label
-                ${'$'}title.Text = 'Обновляем Titan VPS…'
-                ${'$'}title.Font = New-Object System.Drawing.Font('Segoe UI', 15, [System.Drawing.FontStyle]::Bold)
+                ${'$'}title.Text = 'Обновляем Titan VPS'
+                ${'$'}title.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 15)
                 ${'$'}title.ForeColor = [System.Drawing.Color]::White
-                ${'$'}title.Location = New-Object System.Drawing.Point(96, 20)
-                ${'$'}title.Size = New-Object System.Drawing.Size(310, 34)
+                ${'$'}title.BackColor = ${'$'}bg
+                ${'$'}title.Location = New-Object System.Drawing.Point((S 108), (S 32))
+                ${'$'}title.Size = New-Object System.Drawing.Size((S 310), (S 34))
                 ${'$'}sub = New-Object System.Windows.Forms.Label
                 ${'$'}sub.Text = 'Подождите, приложение откроется само'
                 ${'$'}sub.Font = New-Object System.Drawing.Font('Segoe UI', 10)
-                ${'$'}sub.ForeColor = [System.Drawing.Color]::FromArgb(160, 170, 190)
-                ${'$'}sub.Location = New-Object System.Drawing.Point(96, 58)
-                ${'$'}sub.Size = New-Object System.Drawing.Size(310, 24)
-                ${'$'}bar = New-Object System.Windows.Forms.ProgressBar
-                ${'$'}bar.Style = 'Marquee'
-                ${'$'}bar.MarqueeAnimationSpeed = 30
-                ${'$'}bar.Location = New-Object System.Drawing.Point(24, 100)
-                ${'$'}bar.Size = New-Object System.Drawing.Size(372, 12)
-                ${'$'}form.Controls.AddRange(@(${'$'}pic, ${'$'}title, ${'$'}sub, ${'$'}bar))
+                ${'$'}sub.ForeColor = [System.Drawing.Color]::FromArgb(139, 149, 170)
+                ${'$'}sub.BackColor = ${'$'}bg
+                ${'$'}sub.Location = New-Object System.Drawing.Point((S 109), (S 68))
+                ${'$'}sub.Size = New-Object System.Drawing.Size((S 310), (S 24))
+                # Progress: a strip in the logo's colours running along a dark track.
+                ${'$'}track = New-Object System.Windows.Forms.Panel
+                ${'$'}track.BackColor = [System.Drawing.Color]::FromArgb(31, 38, 51)
+                ${'$'}track.Location = New-Object System.Drawing.Point((S 28), (S 118))
+                ${'$'}track.Size = New-Object System.Drawing.Size((S 384), (S 6))
+                ${'$'}script:pos = 0.0
+                ${'$'}track.Add_Paint({
+                    ${'$'}w = ${'$'}track.ClientSize.Width; ${'$'}h = ${'$'}track.ClientSize.Height
+                    ${'$'}seg = [int](${'$'}w * 0.35)
+                    ${'$'}r = New-Object System.Drawing.Rectangle([int]((${'$'}script:pos - 0.35) * ${'$'}w), 0, ${'$'}seg, ${'$'}h)
+                    ${'$'}brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(${'$'}r, [System.Drawing.Color]::FromArgb(34, 211, 238), [System.Drawing.Color]::FromArgb(168, 85, 247), [single]0)
+                    ${'$'}_.Graphics.FillRectangle(${'$'}brush, ${'$'}r)
+                    ${'$'}brush.Dispose()
+                })
+                ${'$'}timer = New-Object System.Windows.Forms.Timer
+                ${'$'}timer.Interval = 15
+                ${'$'}timer.Add_Tick({ ${'$'}script:pos = (${'$'}script:pos + 0.012) % 1.35; ${'$'}track.Invalidate() })
+                ${'$'}form.Controls.AddRange(@(${'$'}pic, ${'$'}title, ${'$'}sub, ${'$'}track))
                 ${'$'}form.Show()
+                ${'$'}timer.Start()
                 function Pump([double]${'$'}sec) {
                     ${'$'}end = (Get-Date).AddSeconds(${'$'}sec)
-                    do { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 } while ((Get-Date) -lt ${'$'}end)
+                    do { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 15 } while ((Get-Date) -lt ${'$'}end)
                 }
                 # Wait for the app to quit, then make sure none of our xray.exe keep files
                 # locked: a locked file makes the installer hang.
