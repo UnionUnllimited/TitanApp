@@ -113,7 +113,10 @@ fun main(args: Array<String>) {
             undecorated = true,
         ) {
             window.minimumSize = java.awt.Dimension(420, 600)
-            androidx.compose.runtime.LaunchedEffect(Unit) { WindowCorners.round(window) }
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                WindowCorners.round(window)
+                WindowCorners.keepTaskbar(window)
+            }
             // Shown again (tray, second start): restored and in front.
             androidx.compose.runtime.LaunchedEffect(visible, shown) {
                 if (visible) { window.isMinimized = false; window.toFront(); window.requestFocus() }
