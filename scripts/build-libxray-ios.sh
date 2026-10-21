@@ -18,6 +18,30 @@ grep -q '"ios/arm64",' "$WORK/build/app/apple_gomobile.py" || { echo "failed to 
 # subscription goes in one call instead (one Xray instance, every probe in parallel).
 sed -i '' 's|maxPingBatchConfigs = 5$|maxPingBatchConfigs = 256|' "$WORK/xray/ping_batch.go"
 grep -q 'maxPingBatchConfigs = 256' "$WORK/xray/ping_batch.go" || { echo "failed to patch pingBatch" >&2; exit 1; }
+# Calls may run side by side (each starts its own Xray instance): the lock only checks that
+# no managed instance runs. The app keeps a few servers in flight and shows each one's
+# result as soon as it's measured, instead of one huge burst that the network drops.
+python3 - "$WORK/xray/ping_batch.go" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = """	coreServerMu.Lock()
+	defer coreServerMu.Unlock()
+	if coreServer != nil {
+		return nil, errors.New("pingBatch requires an isolated process without a managed Xray instance")
+	}
+"""
+new = """	coreServerMu.Lock()
+	managed := coreServer != nil
+	coreServerMu.Unlock()
+	if managed {
+		return nil, errors.New("pingBatch requires an isolated process without a managed Xray instance")
+	}
+"""
+if s.count(old) != 1:
+    sys.exit("ping_batch.go: the lock in PingBatchWithLocation not found")
+open(p, "w").write(s.replace(old, new))
+PY
 # Real TCP Fast Open on iOS: Xray-core is patched (scripts/ios-patches/xray-tfo) to dial
 # tcpFastOpen hosts through tfo-go, which sends the first data in the SYN via connectx().
 "$ROOT/scripts/ios-patches/xray-tfo/vendor.sh" "$WORK"

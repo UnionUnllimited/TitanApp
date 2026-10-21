@@ -30,25 +30,35 @@ enum ConnectionCheck {
         req.httpMethod = "HEAD"
         req.setValue(Config.userAgent, forHTTPHeaderField: "User-Agent")
         let start = Date()
+        var why = "нет ответа"
         do {
             _ = try await session.data(for: req)
             let ms = Int(Date().timeIntervalSince(start) * 1000)
             let address = await exitInfo
             return .ok(Result(ms: ms, ip: address.ip, country: address.country))
         } catch {
-            return .failed(TechChecks.describe(error))
+            why = TechChecks.describe(error)
         }
+        // Google didn't answer but Cloudflare did: the VPN carries traffic (the panel's
+        // routing may send Google another way), so it isn't "no answer".
+        let address = await exitInfo
+        if let ms = address.ms, address.ip != nil {
+            return .ok(Result(ms: ms, ip: address.ip, country: address.country))
+        }
+        return .failed(why)
     }
 
-    /// The exit's address and country from Cloudflare's trace (ip= and loc=).
-    private static func exitAddress(_ session: URLSession) async -> (ip: String?, country: String?) {
+    /// The exit's address and country from Cloudflare's trace (ip= and loc=), and how long it took.
+    private static func exitAddress(_ session: URLSession) async -> (ip: String?, country: String?, ms: Int?) {
+        let start = Date()
         guard let url = URL(string: "https://1.1.1.1/cdn-cgi/trace"),
-              let answer = try? await session.data(for: URLRequest(url: url, timeoutInterval: 8)) else { return (nil, nil) }
+              let answer = try? await session.data(for: URLRequest(url: url, timeoutInterval: 8)) else { return (nil, nil, nil) }
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
         var fields: [String: String] = [:]
         for line in String(decoding: answer.0, as: UTF8.self).split(separator: "\n") {
             let kv = line.split(separator: "=", maxSplits: 1)
             if kv.count == 2 { fields[String(kv[0])] = String(kv[1]) }
         }
-        return (fields["ip"], fields["loc"])
+        return (fields["ip"], fields["loc"], ms)
     }
 }
