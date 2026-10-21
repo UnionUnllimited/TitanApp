@@ -39,6 +39,9 @@ targets:
             CFBundleURLSchemes: [titanvps]
         # The Live Activity while connected (TitanWidgets draws it).
         NSSupportsLiveActivities: true
+        # Built with the iOS 26 SDK (App Store Connect requires it): keeps the app's own look on
+        # iOS 26 instead of Liquid Glass bars and controls.
+        UIDesignRequiresCompatibility: true
         # Siri: how "Titan VPS" sounds in Russian.
         INAlternativeAppNames:
           - INAlternativeAppName: Титан ВПС

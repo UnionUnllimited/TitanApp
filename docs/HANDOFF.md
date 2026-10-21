@@ -37,6 +37,8 @@
 - iOS: тег `ios-N`, файл `TitanVPS-unsigned.ipa` (без подписи, для сервисов подписи и Sideloadly)
 - iOS в TestFlight: workflow `testflight.yml`, запускается вручную (Actions → TestFlight → Run workflow)
   или созданием ветки `testflight/*` либо тега `testflight-*` (версия 1.0.0).
+  App Store Connect принимает только сборки с iOS 26 SDK, поэтому обе iOS-сборки выбирают на раннере Xcode 26+;
+  `UIDesignRequiresCompatibility` оставляет на iOS 26 прежний вид (без Liquid Glass).
   Подпись автоматическая через ключ App Store Connect API; нужные секреты перечислены в начале файла.
   Bundle ID: `com.titanvps.ios` (туннель `com.titanvps.ios.tunnel`, виджеты `com.titanvps.ios.widgets`);
   прежний `su.titanvps.app` остался за сервисом подписи. Манифесты приватности: `PrivacyInfo.xcprivacy`

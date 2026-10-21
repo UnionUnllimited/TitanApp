@@ -49,6 +49,15 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      # App Store Connect takes only builds made with the iOS 26 SDK or later (Xcode 26+); the
+      # image's default Xcode may be older. The newest release Xcode on the runner, no betas.
+      - name: Select Xcode 26
+        run: |
+          x=$(ls -d /Applications/Xcode_*.app | grep -E 'Xcode_(2[6-9]|[3-9][0-9])' | grep -vi beta | sort -V | tail -1)
+          if [ -z "$x" ]; then echo "::error::На раннере нет Xcode 26"; ls -d /Applications/Xcode*; exit 1; fi
+          sudo xcode-select -s "$x/Contents/Developer"
+          xcodebuild -version
+
       - uses: actions/setup-go@v5
         with:
           go-version: stable
