@@ -52,6 +52,8 @@ struct RootView: View {
             } else {
                 store.resetCheck()
             }
+            // Пункт управления's toggle and the Live Activity follow the VPN.
+            LiveActivityController.vpnChanged(state, server: store.selected?.name, paused: store.vpnPaused)
         }
         // A tap on a reminder: Подписка.
         .onReceive(NotificationCenter.default.publisher(for: Reminders.openSubscription)) { _ in
@@ -64,6 +66,7 @@ struct RootView: View {
             Task { await store.refresh(quiet: true) }
         }
         .task {
+            LiveActivityController.endIfOff()
             try? await Task.sleep(nanoseconds: 900_000_000)
             withAnimation { splash = false }
             await store.refresh(quiet: true)
