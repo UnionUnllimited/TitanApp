@@ -521,6 +521,12 @@ struct ServerListRow: View, Equatable {
             Button(action: onFavorite) {
                 favorite ? Label("Убрать из избранного", systemImage: "star.slash") : Label("В избранное", systemImage: "star")
             }
+            // Технический режим: the ping's whole reason, for the support chat.
+            if let error, ping == -1 {
+                Button { UIPasteboard.general.string = "\(server.name): \(error)" } label: {
+                    Label("Скопировать ошибку", systemImage: "doc.on.doc")
+                }
+            }
         }
     }
 }
@@ -568,7 +574,8 @@ struct ServerRow: View {
                         .font(.scaled(11))
                         .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
                     if let error, ping == -1, !pending {
-                        Text(error).font(.scaled(10)).foregroundStyle(.red.opacity(0.8)).lineLimit(6)
+                        // The whole text: long press → Скопировать ошибку.
+                        Text(error).font(.scaled(10)).foregroundStyle(.red.opacity(0.8)).lineLimit(3)
                     }
                 }
                 Spacer()
@@ -594,6 +601,8 @@ struct ServerRow: View {
                 .frame(width: 26, height: 26)
             }
             .padding(.horizontal, 14)
+            // A tall row (tech mode's error) keeps clear of the card's edges.
+            .padding(.vertical, 8)
             .frame(minHeight: 60)
             .background(selected ? Palette.primary.opacity(0.08) : Palette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(selected ? Palette.primary : .clear, lineWidth: 1.5))
