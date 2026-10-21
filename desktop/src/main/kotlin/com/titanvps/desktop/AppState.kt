@@ -1,6 +1,7 @@
 package com.titanvps.desktop
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -63,8 +64,29 @@ class AppState {
     var connectStep by mutableStateOf(""); private set
     var busy by mutableStateOf(false); private set
     var pinging by mutableStateOf(false); private set
-    var message by mutableStateOf<String?>(null)
+    /** The note at the top of the window (Подписка обновлена, errors…). */
+    var toast by mutableStateOf<Toast?>(null); private set
     val pings = mutableStateMapOf<String, Long>()
+    /** Starred servers (by name): first in the list. */
+    var favorites by mutableStateOf<Set<String>>(emptySet()); private set
+    /** Напоминания (tray notifications): the subscription ends soon, bypass traffic runs out. */
+    var reminders by mutableStateOf(true); private set
+    private var reminded: Set<String> = emptySet()
+    /** Shows a notification by the tray icon (set by the window; reminders due are shown then). */
+    var notifier: ((title: String, text: String) -> Unit)? = null
+        set(value) {
+            field = value
+            remind()
+        }
+    /** Failed connects so far: a new one puts a just-moved Выкл | Вкл knob back with a shake. */
+    var failures by mutableIntStateOf(0); private set
+    /** Проверить соединение: a request through the running VPN. */
+    var check by mutableStateOf<ConnectionCheck.Status>(ConnectionCheck.Status.Idle); private set
+    private var checkJob: kotlinx.coroutines.Job? = null
+    /** Speed and traffic of the running core (read while Главная is on screen). */
+    val traffic = TrafficMonitor(scope)
+    /** The running core's metrics page (speed counters). */
+    private var metricsPort = 0
     /** Whitelist mode right now: true / false (normal internet) / null (not known, offline). */
     var whitelist by mutableStateOf<Boolean?>(null); private set
     var whitelistChecking by mutableStateOf(false); private set
@@ -93,6 +115,9 @@ class AppState {
         vpnApps = st.vpnApps
         autoConnect = st.autoConnect
         techMode = st.techMode
+        favorites = st.favorites
+        reminders = st.reminders
+        reminded = st.reminded
         scope.launch { autostart = withContext(Dispatchers.IO) { Autostart.isEnabled } }
         Runtime.getRuntime().addShutdownHook(Thread { shutdown() })
         scope.launch {
@@ -106,18 +131,51 @@ class AppState {
             loadAccount()
             if (autoConnect) connect()
         }
+        // Напоминания: checked again every half an hour (and after each subscription update).
+        scope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(REMIND_EVERY_MS)
+                remind()
+            }
+        }
     }
 
-    private fun persist() = Repository.save(Repository.State(subscription, selectedId, theme, mode, excludedApps, autoConnect, appsMode, vpnApps, techMode))
+    private fun persist() = Repository.save(
+        Repository.State(
+            subscription, selectedId, theme, mode, excludedApps, autoConnect, appsMode, vpnApps, techMode,
+            favorites, reminders, reminded,
+        )
+    )
 
+    fun showToast(text: String, kind: Toast.Kind = Toast.Kind.INFO) {
+        toast = Toast(text, kind)
+    }
+
+    fun dismissToast(id: Long) {
+        if (toast?.id == id) toast = null
+    }
+
+    /** Adds the key and connects right away (same as Android and iPhone); on another key while on, reconnects. */
     fun activate(text: String) {
-        val url = Links.find(text.trim()) ?: run { message = "Это не ключ Titan VPS"; return }
-        load(url, silent = false) { message = "Подписка подключена"; loadAccount() }
+        val url = Links.find(text.trim()) ?: run { showToast("Это не ключ Titan VPS", Toast.Kind.WARNING); return }
+        val previous = subscription?.url
+        load(url, silent = false) {
+            showToast("Подписка подключена", Toast.Kind.SUCCESS)
+            loadAccount()
+            when {
+                vpn is VpnState.Connected -> if (previous != url) connect()
+                vpn != VpnState.Connecting -> connect()
+            }
+        }
     }
 
+    /** Обновить подписку: says how it went in a note at the top (silent at start-up). */
     fun refresh(silent: Boolean = false) {
         val url = subscription?.url ?: return
-        load(url, silent) { if (!silent) message = "Подписка обновлена" }
+        load(url, silent) {
+            if (!silent) showToast("Подписка обновлена", Toast.Kind.SUCCESS)
+            loadAccount()
+        }
     }
 
     private fun load(url: String, silent: Boolean, onDone: () -> Unit = {}) {
@@ -130,12 +188,78 @@ class AppState {
                 if (sub.servers.none { it.id == selectedId }) selectedId = sub.servers.first().id
                 withContext(Dispatchers.IO) { persist() }
                 onDone()
+                remind()
             } catch (e: Exception) {
-                if (!silent) message = e.message ?: "Ошибка"
+                if (!silent) {
+                    val why = e.message ?: "сервер не ответил"
+                    showToast(if (subscription == null) why else "Не удалось обновить подписку: $why", Toast.Kind.WARNING)
+                }
             } finally {
                 busy = false
             }
         }
+    }
+
+    fun isFavorite(server: Server): Boolean = server.name in favorites
+
+    fun toggleFavorite(server: Server) {
+        favorites = if (server.name in favorites) favorites - server.name else favorites + server.name
+        scope.launch(Dispatchers.IO) { persist() }
+    }
+
+    fun changeReminders(value: Boolean) {
+        reminders = value
+        scope.launch(Dispatchers.IO) { persist() }
+        if (value) remind()
+    }
+
+    /**
+     * Напоминания (as on iPhone): the subscription ends in 3 days or less, then in a day or
+     * less; less than 10 % of the bypass traffic is left (once per paid amount).
+     */
+    private fun remind() {
+        val info = subscription?.info ?: return
+        if (!reminders) return
+        val notify = notifier ?: return
+        val now = System.currentTimeMillis() / 1000
+        val trafficKey = "traffic:${info.totalBytes}"
+        // Only what is about this subscription period and this paid amount is kept.
+        val shown = reminded.filterTo(mutableSetOf()) { it.startsWith("${info.expireAt}:") || it == trafficKey }
+        val left = info.expireAt - now
+        if (info.expireAt > 0 && left > 0) {
+            val days = if (left <= DAY) 1 else if (left <= 3 * DAY) 3 else 0
+            if (days > 0 && shown.add("${info.expireAt}:$days")) {
+                notify(
+                    "Подписка Titan VPS",
+                    if (days == 1) "Подписка закончится меньше чем через сутки. Продлите её в личном кабинете, чтобы VPN не отключился."
+                    else "Подписка закончится через ${Fmt.plural((left + DAY - 1) / DAY, "день", "дня", "дней")}. Продлите её заранее в личном кабинете.",
+                )
+            }
+        }
+        if (info.totalBytes > 0 && info.remainingBytes * 10 < info.totalBytes) {
+            if (shown.add(trafficKey)) {
+                notify(
+                    "Трафик на обходах заканчивается",
+                    "Осталось ${formatBytes(info.remainingBytes)} из ${formatBytes(info.totalBytes)}. Докупить ГБ можно в личном кабинете.",
+                )
+            }
+        } else {
+            shown.remove(trafficKey)
+        }
+        if (shown != reminded) {
+            reminded = shown
+            scope.launch(Dispatchers.IO) { persist() }
+        }
+    }
+
+    /** Theme, favourites, Автоподключение and the picked server back to the start; the key stays. */
+    fun resetSettings() {
+        theme = "system"
+        favorites = emptySet()
+        autoConnect = false
+        subscription?.servers?.firstOrNull()?.let { select(it.id) }
+        scope.launch(Dispatchers.IO) { persist() }
+        showToast("Настройки сброшены", Toast.Kind.SUCCESS)
     }
 
     /** Checks now whether the internet is in whitelist mode (bypass servers unlock then). */
@@ -157,7 +281,7 @@ class AppState {
     fun select(id: String) {
         if (id == selectedId) return
         if (bypassLocked && isBypass(id)) {
-            message = BYPASS_LOCKED_MESSAGE
+            showToast(BYPASS_LOCKED_MESSAGE, Toast.Kind.WARNING)
             checkWhitelist()
             return
         }
@@ -209,7 +333,7 @@ class AppState {
                 withContext(Dispatchers.IO) { shutdown() }
                 kotlin.system.exitProcess(0)
             } else {
-                message = "Без прав администратора режим TUN недоступен"
+                showToast("Без прав администратора режим TUN недоступен", Toast.Kind.WARNING)
             }
         }
     }
@@ -230,7 +354,7 @@ class AppState {
         scope.launch {
             val ok = withContext(Dispatchers.IO) { runCatching { Autostart.set(value, Admin.isAdmin) }.isSuccess }
             autostart = withContext(Dispatchers.IO) { Autostart.isEnabled }
-            if (!ok) message = "Не удалось изменить автозапуск"
+            if (!ok) showToast("Не удалось изменить автозапуск", Toast.Kind.WARNING)
         }
     }
 
@@ -268,9 +392,10 @@ class AppState {
             server = regular
             selectedId = regular.id
             scope.launch(Dispatchers.IO) { persist() }
-            message = "Интернет работает без белых списков — подключаем к обычному серверу ${regular.name}"
+            showToast("Интернет работает без белых списков — подключаем к обычному серверу ${ServerGroups.splitFlag(regular.name).second}")
         }
         if (mode == "tun" && !Admin.isAdmin) { needAdmin = true; return }
+        resetCheck()
         vpn = VpnState.Connecting
         connectStep = "Готовим настройки маршрутов…"
         fun step(text: String) { scope.launch { connectStep = text } }
@@ -279,7 +404,7 @@ class AppState {
                 withContext(Dispatchers.IO) {
                     val geo = GeoFiles.prepare(sub.servers.map { it.xrayJson })
                     step("Запускаем протокол сервера…")
-                    val (socks, http) = freePorts(2)
+                    val (socks, http, metrics) = freePorts(3)
                     val logDir = AppPaths.logDir.absolutePath.replace('\\', '/')
                     // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound
                     // points at it; MASQUE: Xray's own client.
@@ -290,7 +415,7 @@ class AppState {
                     val serverJson = prepared
                     if ("\"tcpFastOpen\":true" in serverJson) Admin.enableTcpFastOpen()
                     step("Подключаемся к серверу…")
-                    core.start(XrayConfigs.buildProxyConfig(serverJson, socks, http, logDir, server.proxyTag), geo)
+                    core.start(XrayConfigs.buildProxyConfig(serverJson, socks, http, logDir, server.proxyTag, metrics), geo)
                     if (mode == "tun") {
                         // The whole PC through the tunnel; no system proxy then.
                         runCatching { SystemProxy.restore() }
@@ -302,14 +427,17 @@ class AppState {
                         SystemProxy.enable(http)
                     }
                     proxyPort = http
+                    metricsPort = metrics
                 }
                 vpn = VpnState.Connected(System.currentTimeMillis())
                 watchUpdates()
+                checkConnection(auto = true)
             } catch (e: Exception) {
                 System.err.println("connect failed: $e")
                 withContext(Dispatchers.IO) { tun.stop(); core.stop(); plugin?.close(); plugin = null; runCatching { SystemProxy.restore() } }
                 // No technical details for clients.
                 vpn = VpnState.Error("Не удалось подключиться. Попробуйте другой сервер или ещё раз")
+                failures += 1
             }
         }
     }
@@ -317,10 +445,42 @@ class AppState {
     fun disconnect() {
         if (vpn !is VpnState.Connected && vpn != VpnState.Connecting) return
         vpn = VpnState.Disconnecting
+        resetCheck()
         scope.launch {
             withContext(Dispatchers.IO) { shutdown() }
             vpn = VpnState.Off
         }
+    }
+
+    /** Speed counters of the running core, 0 when off. */
+    val metricsPortNow: Int get() = if (vpn is VpnState.Connected) metricsPort else 0
+
+    /**
+     * Проверить соединение: a request through the VPN that is on now. [auto]: right after
+     * connecting, a few tries (the core may need a moment); by hand: one more try on a failure.
+     */
+    fun checkConnection(auto: Boolean = false) {
+        if (vpn !is VpnState.Connected || proxyPort == 0) return
+        checkJob?.cancel()
+        check = ConnectionCheck.Status.Checking
+        checkJob = scope.launch {
+            if (auto) kotlinx.coroutines.delay(1200)
+            var result: ConnectionCheck.Status = ConnectionCheck.Status.Failed("")
+            for (attempt in 0 until if (auto) 3 else 2) {
+                if (attempt > 0) kotlinx.coroutines.delay(1500)
+                val port = proxyPort.takeIf { it > 0 } ?: return@launch
+                result = ConnectionCheck.run(port)
+                if (result is ConnectionCheck.Status.Ok) break
+            }
+            check = result
+        }
+    }
+
+    /** The VPN went off or to another server: the old result says nothing any more. */
+    private fun resetCheck() {
+        checkJob?.cancel()
+        checkJob = null
+        check = ConnectionCheck.Status.Idle
     }
 
     // ------------------------------------------------------------ updates
@@ -426,6 +586,10 @@ class AppState {
 
     @Volatile private var pingStopped = false
     private var pingRun = 0
+    /** Servers in the running Пинг: how much of it is done (the ring on Стоп). */
+    private var pingTotal by mutableIntStateOf(0)
+    val pingProgress: Float
+        get() = if (pingTotal <= 0) 0f else 1f - measuring.size.coerceAtMost(pingTotal).toFloat() / pingTotal
 
     /**
      * Every server, [firstIds] (the tab on screen) first; old values stay until new ones arrive.
@@ -440,6 +604,7 @@ class AppState {
         stoppedIds.clear()
         // Spinners right away: getting the ping core ready can take a few seconds.
         measuring = measuring + ids
+        pingTotal = ids.size
         pinging = true
         val run = ++pingRun
         // A stopped run finishing late mustn't end a newer one.
@@ -492,7 +657,7 @@ class AppState {
                     )
                 }
             } catch (e: Exception) {
-                if (targets.size > 1) message = "Не удалось проверить пинг. Попробуйте ещё раз"
+                if (targets.size > 1) showToast("Не удалось проверить пинг. Попробуйте ещё раз", Toast.Kind.WARNING)
             } finally {
                 // Let queued results land first.
                 kotlinx.coroutines.yield()
@@ -508,6 +673,7 @@ class AppState {
 
     fun logout() {
         disconnect()
+        traffic.stop()
         subscription = null
         selectedId = null
         account = null
@@ -530,6 +696,8 @@ class AppState {
 
     private companion object {
         const val WHITELIST_EVERY_MS = 2 * 60_000L
+        const val REMIND_EVERY_MS = 30 * 60_000L
+        const val DAY = 86_400L
         const val BYPASS_LOCKED_MESSAGE =
             "Обходы нужны только когда интернет работает по белым спискам (открываются ya.ru и vk.com, а google.com — нет). " +
                 "Сейчас интернет обычный — выберите сервер во вкладке «Серверы»"

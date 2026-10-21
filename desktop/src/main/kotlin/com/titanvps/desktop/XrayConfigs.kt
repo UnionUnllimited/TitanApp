@@ -72,7 +72,9 @@ object XrayConfigs {
      * Config for "system proxy" mode: local SOCKS + HTTP inbounds on [socksPort]/[httpPort];
      * outbounds, routing (Russian sites → direct etc.) and DNS come from the panel.
      */
-    fun buildProxyConfig(serverJson: String, socksPort: Int, httpPort: Int, logDir: String, proxyTag: String? = null): String {
+    fun buildProxyConfig(
+        serverJson: String, socksPort: Int, httpPort: Int, logDir: String, proxyTag: String? = null, metricsPort: Int = 0,
+    ): String {
         val cfg = JSONObject(serverJson)
         val sniffing = (cfg.remove(SNIFFING_KEY) as? JSONObject)?.put("enabled", true)
             ?: JSONObject().put("enabled", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))
@@ -110,6 +112,15 @@ object XrayConfigs {
         }
         if (!cfg.has("dns")) cfg.put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8")))
         cfg.getJSONObject("dns").put("queryStrategy", "UseIPv4")
+        // Speed and traffic on Главная: byte counters of our inbounds, on a local metrics page.
+        if (metricsPort > 0) {
+            if (!cfg.has("stats")) cfg.put("stats", JSONObject())
+            val policy = cfg.optJSONObject("policy") ?: JSONObject().also { cfg.put("policy", it) }
+            val system = policy.optJSONObject("system") ?: JSONObject().also { policy.put("system", it) }
+            system.put("statsInboundUplink", true).put("statsInboundDownlink", true)
+            val metrics = cfg.optJSONObject("metrics") ?: JSONObject().put("tag", "titan-metrics").also { cfg.put("metrics", it) }
+            metrics.put("listen", "127.0.0.1:$metricsPort")
+        }
         return cfg.toString()
     }
 

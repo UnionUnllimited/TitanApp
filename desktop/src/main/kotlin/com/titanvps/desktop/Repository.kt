@@ -82,6 +82,12 @@ object Repository {
         val vpnApps: Set<String> = emptySet(),
         /** The hidden «Технический режим» was unlocked by its code (its row stays visible). */
         val techMode: Boolean = false,
+        /** Starred servers (by name, so they survive a subscription update): shown first. */
+        val favorites: Set<String> = emptySet(),
+        /** Напоминания: the subscription ends soon, the bypass traffic runs out. */
+        val reminders: Boolean = true,
+        /** Reminders already shown ("<expire>:<days>", "traffic:<total>"), each once. */
+        val reminded: Set<String> = emptySet(),
     )
 
     fun load(): State {
@@ -107,7 +113,7 @@ object Repository {
         return State(
             sub, o.optString("selected").ifEmpty { null }, o.optString("theme", "system"), o.optString("mode", "proxy"),
             names("excludedApps"), o.optBoolean("autoConnect", false), o.optString("appsMode", "exclude"), names("vpnApps"),
-            o.optBoolean("techMode", false),
+            o.optBoolean("techMode", false), names("favorites"), o.optBoolean("reminders", true), names("reminded"),
         )
     }
 
@@ -117,6 +123,8 @@ object Repository {
             .put("autoConnect", state.autoConnect)
             .put("appsMode", state.appsMode).put("vpnApps", JSONArray(state.vpnApps.sorted()))
             .put("techMode", state.techMode)
+            .put("favorites", JSONArray(state.favorites.sorted())).put("reminders", state.reminders)
+            .put("reminded", JSONArray(state.reminded.sorted()))
         state.subscription?.let { s ->
             o.put("subscription", JSONObject()
                 .put("url", s.url).put("fetchedAt", s.fetchedAt)

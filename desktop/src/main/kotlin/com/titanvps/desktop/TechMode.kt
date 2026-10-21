@@ -27,7 +27,9 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -435,27 +437,41 @@ private fun buildReport(state: AppState, c: TechChecks, logName: String?, log: S
 
 // ------------------------------------------------------------------ UI
 
-/** Version line in Настройки: 7 taps (≤ 3 s apart) ask for the code; afterwards a visible row. */
+/**
+ * Версия in Настройки: 7 clicks (≤ 3 s apart) ask for the code; a wrong one says so in red
+ * for a moment. Once unlocked, a Технический режим row under it.
+ */
 @Composable
-fun TechModeEntry(state: AppState, onOpen: () -> Unit) {
+fun TechModeRows(state: AppState, onOpen: () -> Unit) {
     var taps by remember { mutableIntStateOf(0) }
     var lastTap by remember { mutableLongStateOf(0L) }
     var askCode by remember { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(
-            "Версия ${System.getProperty("jpackage.app-version") ?: "dev"}",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                val now = System.currentTimeMillis()
-                taps = if (now - lastTap <= 3000) taps + 1 else 1
-                lastTap = now
-                if (taps >= 7) {
-                    taps = 0
-                    if (state.techMode) onOpen() else askCode = true
-                }
-            },
-        )
-        if (state.techMode) TextButton(onClick = onOpen) { Text("Технический режим", fontSize = 12.sp) }
+    var wrongCode by remember { mutableStateOf(false) }
+    LaunchedEffect(wrongCode) {
+        if (wrongCode) { kotlinx.coroutines.delay(2000); wrongCode = false }
+    }
+    Box(
+        Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+            val now = System.currentTimeMillis()
+            taps = if (now - lastTap <= 3000) taps + 1 else 1
+            lastTap = now
+            if (taps >= 7) {
+                taps = 0
+                if (state.techMode) onOpen() else askCode = true
+            }
+        },
+    ) {
+        SettingsRow(Icons.Outlined.Tag, androidx.compose.ui.graphics.Color.Gray, "Версия") {
+            Text(
+                if (wrongCode) "Неверный код" else System.getProperty("jpackage.app-version") ?: "dev",
+                fontSize = 15.sp, style = Tabular,
+                color = if (wrongCode) Red else Palette.colors.secondary,
+            )
+        }
+    }
+    if (state.techMode) {
+        RowDivider()
+        SettingsRow(Icons.Outlined.Build, Orange, "Технический режим", chevron = true, onClick = onOpen)
     }
     if (askCode) CodeDialog({ askCode = false }) { code ->
         askCode = false
@@ -463,7 +479,7 @@ fun TechModeEntry(state: AppState, onOpen: () -> Unit) {
             state.changeTechMode(true)
             onOpen()
         } else {
-            state.message = "Неверный код"
+            wrongCode = true
         }
     }
 }
@@ -471,21 +487,23 @@ fun TechModeEntry(state: AppState, onOpen: () -> Unit) {
 @Composable
 private fun CodeDialog(onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
     var code by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Код") },
-        text = {
-            OutlinedTextField(
-                code, { code = it },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onSubmit(code) }),
-            )
+    TitanDialog(
+        onDismiss, "Код", icon = Icons.Outlined.Lock, iconColor = Orange, width = 360.dp,
+        buttons = {
+            PrimaryButton("Открыть", { onSubmit(code) }, enabled = code.isNotBlank(), height = 48.dp)
+            SecondaryButton("Отмена", onDismiss, tint = Palette.colors.secondary)
         },
-        confirmButton = { Button(onClick = { onSubmit(code) }) { Text("OK") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
-    )
+    ) {
+        OutlinedTextField(
+            code, { code = it },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onSubmit(code) }),
+        )
+    }
 }
 
 @Composable
@@ -527,7 +545,7 @@ fun TechModePage(state: AppState, onBack: () -> Unit) {
                 Button(onClick = { checkAll() }) { Text("Проверить всё") }
                 OutlinedButton(onClick = {
                     clipboard.setText(AnnotatedString(buildReport(state, c, logFile?.name, log)))
-                    state.message = "Отчёт скопирован"
+                    state.showToast("Отчёт скопирован", Toast.Kind.SUCCESS)
                 }) { Text("Копировать отчёт") }
                 OutlinedButton(onClick = { state.changeTechMode(false); onBack() }) { Text("Выключить технический режим", color = Red) }
             }

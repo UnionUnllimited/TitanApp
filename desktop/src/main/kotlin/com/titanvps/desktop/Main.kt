@@ -28,6 +28,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,11 +48,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.FrameWindowScope
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
-import androidx.compose.ui.window.Notification
-import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
-import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 
 /** Anything that kills the app lands in logs\crash.log: a window that never opens says nothing. */
@@ -74,41 +73,36 @@ fun main(args: Array<String>) {
     application {
         val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
         var visible by remember { mutableStateOf(!startHidden) }
-        val trayState = rememberTrayState()
         var trayHintShown by remember { mutableStateOf(false) }
-        androidx.compose.runtime.LaunchedEffect(Unit) { instance.onShow { visible = true } }
+        /** Each request to show the window (tray, second start) brings it to the front, also when already open. */
+        var shown by remember { mutableStateOf(0) }
+        val show = { visible = true; shown++ }
+        androidx.compose.runtime.LaunchedEffect(Unit) { instance.onShow { show() } }
         val quit = {
             // Turn the system proxy off before quitting, or Windows loses internet.
             state.shutdown()
             exitApplication()
+        }
+        // The tray icon with our own menu (TrayMenu.kt); reminders come by it too.
+        val tray = remember { TitanTray(state, showWindow = { show() }, quit = quit) }
+        DisposableEffect(Unit) {
+            tray.install()
+            state.notifier = tray::notify
+            onDispose { tray.dispose() }
+        }
+        val connected = state.vpn is VpnState.Connected
+        val serverName = state.selected?.let { ServerGroups.splitFlag(it.name).second }
+        LaunchedEffect(connected, serverName) {
+            tray.tooltip(if (connected) "Titan VPS — подключено" + (serverName?.let { " · $it" } ?: "") else "Titan VPS — отключено")
         }
         // The close button keeps the app (and the VPN) running in the tray.
         val hide = {
             visible = false
             if (!trayHintShown) {
                 trayHintShown = true
-                trayState.sendNotification(
-                    Notification("Titan VPS работает в фоне", "VPN не отключается. Открыть или выйти — значок Titan VPS в трее."),
-                )
+                tray.notify("Titan VPS работает в фоне", "VPN не отключается. Открыть или выйти — значок Titan VPS в трее.")
             }
         }
-        val connected = state.vpn is VpnState.Connected
-        Tray(
-            icon = painterResource("logo.png"),
-            state = trayState,
-            tooltip = if (connected) "Titan VPS — подключено" else "Titan VPS — отключено",
-            onAction = { visible = true },
-            menu = {
-                Item("Открыть Titan VPS", onClick = { visible = true })
-                Item(
-                    if (connected) "Отключить VPN" else "Подключить VPN",
-                    enabled = state.vpn !is VpnState.Connecting && state.vpn !is VpnState.Disconnecting,
-                    onClick = { if (connected) state.disconnect() else state.connect() },
-                )
-                Separator()
-                Item("Выход", onClick = quit)
-            },
-        )
         Window(
             onCloseRequest = hide,
             visible = visible,
@@ -121,7 +115,7 @@ fun main(args: Array<String>) {
             window.minimumSize = java.awt.Dimension(420, 600)
             androidx.compose.runtime.LaunchedEffect(Unit) { WindowCorners.round(window) }
             // Shown again (tray, second start): restored and in front.
-            androidx.compose.runtime.LaunchedEffect(visible) {
+            androidx.compose.runtime.LaunchedEffect(visible, shown) {
                 if (visible) { window.isMinimized = false; window.toFront(); window.requestFocus() }
             }
             TitanTheme(state.theme) {

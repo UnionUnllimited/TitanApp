@@ -2,12 +2,26 @@
 
 package com.titanvps.desktop
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ContextMenuArea
+import androidx.compose.foundation.ContextMenuItem
+import androidx.compose.foundation.DefaultContextMenuRepresentation
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalContextMenuRepresentation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -21,334 +35,444 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.AppRegistration
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.DataUsage
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Loyalty
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PhoneIphone
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SettingsBrightness
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WorkspacePremium
-import androidx.compose.material.icons.outlined.AccountCircle
-import androidx.compose.material.icons.outlined.Autorenew
-import androidx.compose.material.icons.outlined.DarkMode
-import androidx.compose.material.icons.outlined.DataUsage
-import androidx.compose.material.icons.outlined.Devices
-import androidx.compose.material.icons.outlined.Dns
-import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material.icons.outlined.Loyalty
-import androidx.compose.material.icons.outlined.Shield
-import androidx.compose.material.icons.outlined.Storage
-import androidx.compose.material.icons.outlined.SupportAgent
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.NavigationRailItemDefaults
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.material.icons.outlined.PhoneIphone
-import androidx.compose.material.icons.outlined.PhoneAndroid
-import androidx.compose.material.icons.outlined.DevicesOther
-import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.titanvps.desktop.ServerGroups.Group
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 private enum class Tab(val title: String, val icon: ImageVector) {
     HOME("Главная", Icons.Default.Home),
     SUBSCRIPTION("Подписка", Icons.Default.WorkspacePremium),
-    SETTINGS("Настройки", Icons.Default.Settings),
+    PROFILE("Профиль", Icons.Default.Person),
 }
 
 @Composable
 fun App(state: AppState) {
-    val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(state.message) {
-        state.message?.let { snackbar.showSnackbar(it); state.message = null }
-    }
     var tab by remember { mutableStateOf(Tab.HOME) }
-    val dark = isDark(state.theme)
-    val bg = if (dark) Brush.linearGradient(listOf(Color(0xFF0A0F1E), Color(0xFF0E1630), Color(0xFF0B1226)))
-    else Brush.linearGradient(listOf(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.background))
-    Box(Modifier.fillMaxSize().background(bg)) {
-        val sub = state.subscription
-        if (sub == null) {
-            Welcome(state)
-        } else {
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val compact = maxWidth < 1000.dp
-                Row(Modifier.fillMaxSize()) {
-                    Sidebar(tab, compact, state) { tab = it }
-                    Box(Modifier.weight(1f).fillMaxHeight()) {
-                        when (tab) {
-                            Tab.HOME -> Home(state, sub) { tab = Tab.SUBSCRIPTION }
-                            Tab.SUBSCRIPTION -> SubscriptionPage(state, sub)
-                            Tab.SETTINGS -> SettingsPage(state)
+    val c = Palette.colors
+    // Right-click menus (servers, text fields) in the app's colours.
+    CompositionLocalProvider(LocalContextMenuRepresentation provides DefaultContextMenuRepresentation(c.surface, c.text, c.track)) {
+        Box(Modifier.fillMaxSize().background(c.background)) {
+            val sub = state.subscription
+            if (sub == null) {
+                Welcome(state)
+            } else {
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val compact = maxWidth < 1000.dp
+                    Row(Modifier.fillMaxSize()) {
+                        Sidebar(tab, compact, state) { tab = it }
+                        Box(Modifier.weight(1f).fillMaxHeight()) {
+                            when (tab) {
+                                Tab.HOME -> Home(state, sub) { tab = Tab.SUBSCRIPTION }
+                                Tab.SUBSCRIPTION -> SubscriptionPage(state, sub)
+                                Tab.PROFILE -> SettingsPage(state, openSubscription = { tab = Tab.SUBSCRIPTION }, openHome = { tab = Tab.HOME })
+                            }
                         }
                     }
                 }
             }
+            ToastHost(state.toast, state::dismissToast, Modifier.align(Alignment.TopCenter))
+            if (state.updateDialog) UpdateDialog(state)
+            if (state.needAdmin) AdminDialog(state)
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
-        if (state.updateDialog) UpdateDialog(state)
-        if (state.needAdmin) AdminDialog(state)
     }
 }
 
 @Composable
 private fun AdminDialog(state: AppState) {
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = { state.cancelAdmin() },
-        title = { Text("Нужны права администратора") },
-        text = {
-            Text(
-                "Режим «Весь компьютер» создаёт виртуальную сетевую карту — для этого Windows требует права администратора. " +
-                    "Приложение перезапустится, Windows покажет запрос — нажмите «Да»."
-            )
+    TitanDialog(
+        { state.cancelAdmin() }, "Нужны права администратора",
+        "Режим «Весь компьютер» создаёт виртуальную сетевую карту — для этого Windows требует права администратора. " +
+            "Приложение перезапустится, Windows покажет запрос — нажмите «Да».",
+        icon = Icons.Default.AdminPanelSettings, iconColor = Orange,
+        buttons = {
+            PrimaryButton("Перезапустить", { state.restartAsAdmin() }, icon = Icons.Default.RestartAlt, height = 48.dp)
+            SecondaryButton("Остаться на системном прокси", { state.cancelAdmin() })
         },
-        confirmButton = { androidx.compose.material3.Button(onClick = { state.restartAsAdmin() }) { Text("Перезапустить") } },
-        dismissButton = { androidx.compose.material3.TextButton(onClick = { state.cancelAdmin() }) { Text("Системный прокси") } },
     )
-}
-
-/** TUN mode: programs that bypass the VPN, or the only ones that use it; running ones + any .exe picked by hand. */
-@Composable
-private fun AppsPage(state: AppState, onBack: () -> Unit) {
-    var apps by remember { mutableStateOf<List<RunningApps.App>>(emptyList()) }
-    var query by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) { apps = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { RunningApps.list() } }
-    val excluded = state.pickedApps
-    val only = state.appsMode == "only"
-    // Picked ones first (also those not running now), then the running ones.
-    val rows = (excluded.sortedBy { it.lowercase() }.map { e -> apps.firstOrNull { it.exe.equals(e, true) } ?: RunningApps.App(e, "") } +
-        apps.filter { a -> excluded.none { it.equals(a.exe, true) } })
-        .filter { query.isBlank() || query.trim().lowercase() in it.exe.lowercase() }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        Column(Modifier.widthIn(max = 700.dp).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
-                Text("Раздельное туннелирование", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                androidx.compose.material3.FilterChip(
-                    selected = !only, onClick = { state.changeAppsMode("exclude") },
-                    label = { Text("Все через VPN, кроме выбранных") },
-                )
-                androidx.compose.material3.FilterChip(
-                    selected = only, onClick = { state.changeAppsMode("only") },
-                    label = { Text("Только выбранные через VPN") },
-                )
-            }
-            Text(
-                (if (only) "Через VPN идут только отмеченные программы. Остальные — напрямую, мимо VPN."
-                else "Отмеченные программы идут в интернет напрямую, мимо VPN. Остальные — через VPN.") +
-                    " Изменения применятся при выходе с этой страницы.",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                SearchField(query, { query = it }, Modifier.weight(1f))
-                OutlinedButton(onClick = {
-                    val fd = java.awt.FileDialog(null as java.awt.Frame?, "Выберите программу", java.awt.FileDialog.LOAD)
-                    fd.setFilenameFilter { _, name -> name.endsWith(".exe", true) }
-                    fd.file = "*.exe"
-                    fd.isVisible = true
-                    fd.file?.let { state.setAppPicked(it, true) }
-                }) { Text("Добавить .exe") }
-            }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(rows, key = { it.exe.lowercase() }) { app ->
-                    val on = excluded.any { it.equals(app.exe, true) }
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface)
-                            .clickable { state.setAppPicked(app.exe, !on) }.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(app.exe, fontWeight = FontWeight.Medium)
-                            if (app.path.isNotEmpty()) Text(app.path, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        androidx.compose.material3.Switch(checked = on, onCheckedChange = { state.setAppPicked(app.exe, it) })
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Logo + "Titan VPS", pill-shaped sections, support at the bottom (icons only when narrow). */
-@Composable
-private fun Sidebar(tab: Tab, compact: Boolean, state: AppState, onTab: (Tab) -> Unit) {
-    val uri = LocalUriHandler.current
-    Column(
-        Modifier.width(if (compact) 76.dp else 210.dp).fillMaxHeight()
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
-            .padding(horizontal = 12.dp, vertical = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Image(painterResource("logo.png"), null, Modifier.size(if (compact) 40.dp else 64.dp))
-        if (!compact) {
-            Spacer(Modifier.height(8.dp))
-            Text("Titan VPS", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.height(28.dp))
-        Tab.entries.forEach { t ->
-            SidebarItem(t.icon, t.title, t == tab, compact) { onTab(t) }
-            Spacer(Modifier.height(6.dp))
-        }
-        Spacer(Modifier.weight(1f))
-        SidebarItem(Icons.Outlined.SupportAgent, "Поддержка", false, compact) {
-            uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL)
-        }
-    }
-}
-
-@Composable
-private fun SidebarItem(icon: ImageVector, title: String, selected: Boolean, compact: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(14.dp)
-    val color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        Modifier.fillMaxWidth().clip(shape)
-            .background(if (selected) Brush.horizontalGradient(listOf(Brand, Color(0xFF2F7BFF))) else Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent)))
-            .clickable(onClick = onClick).heightIn(min = 48.dp).padding(horizontal = if (compact) 0.dp else 16.dp),
-        horizontalArrangement = if (compact) Arrangement.Center else Arrangement.Start,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, title, Modifier.size(22.dp), tint = color)
-        if (!compact) {
-            Spacer(Modifier.width(14.dp))
-            Text(title, fontSize = 15.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, color = color)
-        }
-    }
 }
 
 @Composable
 private fun UpdateDialog(state: AppState) {
     val u = state.update
     val busy = u == UpdateState.ConnectingVpn || u == UpdateState.Checking || u is UpdateState.Downloading || u == UpdateState.Installing
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = { if (!busy) state.dismissUpdate() },
-        title = { Text("Обновление приложения") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    when (u) {
-                        UpdateState.ConnectingVpn -> "Включаем VPN…"
-                        UpdateState.Checking -> "Проверяем…"
-                        UpdateState.UpToDate -> "У вас последняя версия"
-                        is UpdateState.Available -> "Доступна новая версия ${u.release.name}. Приложение закроется, установит её и откроется снова."
-                        is UpdateState.Downloading -> "Скачиваем обновление… ${(u.progress * 100).toInt()}%"
-                        UpdateState.Installing -> "Устанавливаем…"
-                        is UpdateState.Error -> u.message
-                        UpdateState.Idle -> ""
-                    }
-                )
-                if (u is UpdateState.Downloading) androidx.compose.material3.LinearProgressIndicator(progress = { u.progress }, modifier = Modifier.fillMaxWidth())
-                else if (busy) androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    TitanDialog(
+        { state.dismissUpdate() }, "Обновление приложения",
+        when (u) {
+            UpdateState.ConnectingVpn -> "Включаем VPN…"
+            UpdateState.Checking -> "Проверяем…"
+            UpdateState.UpToDate -> "У вас последняя версия"
+            is UpdateState.Available -> "Доступна новая версия ${u.release.name}. Приложение закроется, установит её и откроется снова."
+            is UpdateState.Downloading -> "Скачиваем обновление… ${(u.progress * 100).toInt()}%"
+            UpdateState.Installing -> "Устанавливаем…"
+            is UpdateState.Error -> u.message
+            UpdateState.Idle -> ""
+        },
+        icon = if (u is UpdateState.Error) Icons.Default.Warning else if (u == UpdateState.UpToDate) Icons.Default.CheckCircle else Icons.Default.SystemUpdate,
+        iconColor = when (u) {
+            is UpdateState.Error -> Orange
+            UpdateState.UpToDate -> Palette.colors.green
+            else -> Brand
+        },
+        dismissible = !busy,
+        content = if (!busy) null else {
+            {
+                if (u is UpdateState.Downloading) GradientBar(u.progress)
+                else Box(Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(Palette.colors.track).shimmer(true, Brand, 1200))
             }
         },
-        confirmButton = {
-            when (u) {
-                is UpdateState.Available -> androidx.compose.material3.Button(onClick = { state.installUpdate() }) { Text("Обновить") }
-                is UpdateState.Error -> androidx.compose.material3.TextButton(onClick = { state.checkUpdate() }) { Text("Повторить") }
-                else -> {}
-            }
-        },
-        dismissButton = {
-            if (!busy) androidx.compose.material3.TextButton(onClick = { state.dismissUpdate() }) {
-                Text(if (u is UpdateState.Available) "Позже" else "Закрыть")
+        buttons = if (busy) null else {
+            {
+                when (u) {
+                    is UpdateState.Available -> PrimaryButton("Обновить", { state.installUpdate() }, icon = Icons.Default.SystemUpdate, height = 48.dp)
+                    is UpdateState.Error -> PrimaryButton("Повторить", { state.checkUpdate() }, icon = Icons.Default.Refresh, height = 48.dp)
+                    else -> {}
+                }
+                SecondaryButton(if (u is UpdateState.Available) "Позже" else "Закрыть", { state.dismissUpdate() }, tint = Palette.colors.secondary)
             }
         },
     )
 }
 
-// ------------------------------------------------------------------ welcome
+// ------------------------------------------------------------------ sidebar
 
+/** Logo and title, the sections as pills (the picked one in the gradient), support and theme at the bottom. */
+@Composable
+private fun Sidebar(tab: Tab, compact: Boolean, state: AppState, onTab: (Tab) -> Unit) {
+    val uri = LocalUriHandler.current
+    val c = Palette.colors
+    Column(
+        Modifier.width(if (compact) 84.dp else 232.dp).fillMaxHeight().background(c.surface)
+            .drawBehind { drawLine(c.outline.copy(alpha = 0.5f), Offset(size.width, 0f), Offset(size.width, size.height), 1.dp.toPx()) }
+            .padding(horizontal = 14.dp, vertical = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (compact) {
+            Image(painterResource("logo.png"), null, Modifier.size(44.dp))
+        } else {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Image(painterResource("logo.png"), null, Modifier.size(42.dp))
+                Spacer(Modifier.width(10.dp))
+                LogoTitle(22.sp)
+            }
+        }
+        Spacer(Modifier.height(30.dp))
+        Tab.entries.forEach { t ->
+            SidebarItem(t.icon, t.title, t == tab, compact) { onTab(t) }
+            Spacer(Modifier.height(6.dp))
+        }
+        Spacer(Modifier.weight(1f))
+        val support: @Composable () -> Unit = {
+            SquareButton(Icons.Default.Headphones, "Поддержка") { uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL) }
+        }
+        val theme: @Composable () -> Unit = {
+            SquareButton(if (c.dark) Icons.Default.LightMode else Icons.Default.DarkMode, "Тема") {
+                state.changeTheme(if (c.dark) "light" else "dark")
+            }
+        }
+        if (compact) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { support(); theme() }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { support(); theme() }
+        }
+    }
+}
+
+@Composable
+private fun SidebarItem(icon: ImageVector, title: String, selected: Boolean, compact: Boolean, onClick: () -> Unit) {
+    val c = Palette.colors
+    val shape = RoundedCornerShape(14.dp)
+    var hovered by remember { mutableStateOf(false) }
+    val color by animateColorAsState(if (selected) Color.White else if (hovered) c.text else c.secondary)
+    Row(
+        Modifier.fillMaxWidth().height(48.dp)
+            .then(
+                if (selected) Modifier.shadow(8.dp, shape, ambientColor = Brand.copy(alpha = 0.35f), spotColor = Brand.copy(alpha = 0.4f))
+                    .clip(shape).background(Palette.accent)
+                else Modifier.clip(shape).background(if (hovered) c.track else Color.Transparent)
+            )
+            .press(scale = 0.97f, onHover = { hovered = it }, onClick = onClick)
+            .padding(horizontal = if (compact) 0.dp else 16.dp),
+        horizontalArrangement = if (compact) Arrangement.Center else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, title, Modifier.size(22.dp), tint = color)
+        if (!compact) {
+            Spacer(Modifier.width(14.dp))
+            Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = color)
+        }
+    }
+}
+
+/** Поддержка, Тема: a square on the background with the icon in the brand colour. */
+@Composable
+private fun SquareButton(icon: ImageVector, description: String, onClick: () -> Unit) {
+    val c = Palette.colors
+    val shape = RoundedCornerShape(14.dp)
+    var hovered by remember { mutableStateOf(false) }
+    Box(
+        Modifier.size(48.dp).clip(shape).background(if (hovered) c.track else c.background)
+            .border(1.dp, c.outline.copy(alpha = 0.6f), shape)
+            .press(scale = 0.9f, onHover = { hovered = it }, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, description, Modifier.size(21.dp), tint = Brand)
+    }
+}
+
+// ------------------------------------------------------------------ key entry
+
+/** As on iPhone: drifting light, the glowing logo, the key in a card, where to get one. */
 @Composable
 private fun Welcome(state: AppState) {
     val clipboard = LocalClipboardManager.current
-    val uri = LocalUriHandler.current
+    val c = Palette.colors
     var key by remember { mutableStateOf("") }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    var appeared by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { appeared = true }
+    val shown by animateFloatAsState(if (appeared) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 120f))
+    val valid = remember(key) { Links.find(key) != null }
+    fun connect() {
+        if (key.isNotBlank() && !state.busy) state.activate(key)
+    }
+    fun Modifier.entrance(rise: Float) = graphicsLayer { alpha = shown; translationY = (1 - shown) * rise * density }
+
+    Box(Modifier.fillMaxSize()) {
+        AuroraBackground()
         Column(
-            Modifier.widthIn(max = 460.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Image(painterResource("logo.png"), null, Modifier.size(110.dp))
-            Spacer(Modifier.height(12.dp))
-            Text("Titan VPS", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Text("Вставьте ключ подписки из бота или личного кабинета", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(20.dp))
-            OutlinedTextField(key, { key = it.trim() }, Modifier.fillMaxWidth(), singleLine = true,
-                placeholder = { Text("https://api1.titanvps.su/…") })
-            Spacer(Modifier.height(10.dp))
-            OutlinedButton({ clipboard.getText()?.text?.trim()?.let { key = it } }, Modifier.fillMaxWidth().height(46.dp)) {
-                Icon(Icons.Default.ContentPaste, null); Spacer(Modifier.width(8.dp)); Text("Вставить из буфера")
+            Column(Modifier.widthIn(max = 480.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.entrance(16f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    GlowingLogo(110.dp)
+                    LogoTitle(34.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Вставьте ключ подписки из бота или личного кабинета — и VPN включится сразу",
+                        fontSize = 15.sp, color = c.secondary, textAlign = TextAlign.Center, lineHeight = 20.sp,
+                    )
+                }
+                Spacer(Modifier.height(22.dp))
+                // The key in a frosted card.
+                Glass(Modifier.entrance(24f)) {
+                    Text("Ключ подписки", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.4.sp, color = c.secondary)
+                    Spacer(Modifier.height(12.dp))
+                    KeyField(key, { key = it }, valid, ::connect)
+                    AnimatedVisibility(key.isNotEmpty() && !valid) {
+                        Text(
+                            "Это не похоже на ключ Titan VPS. Скопируйте ссылку подписки из бота целиком.",
+                            fontSize = 12.sp, color = Orange, modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    SecondaryButton("Вставить из буфера", { clipboard.getText()?.text?.trim()?.let { key = it } }, icon = Icons.Default.ContentPaste, height = 50.dp)
+                    Spacer(Modifier.height(10.dp))
+                    PrimaryButton(
+                        "Подключить", ::connect, icon = Icons.Default.VerifiedUser,
+                        enabled = key.isNotBlank() && !state.busy, busy = state.busy, busyText = "Проверяем ключ…", height = 54.dp,
+                    )
+                }
+                Spacer(Modifier.height(22.dp))
+                Glass(Modifier.entrance(32f)) {
+                    Text("Где взять ключ", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(14.dp))
+                    Step(1, "Откройте нашего бота в Telegram")
+                    Spacer(Modifier.height(12.dp))
+                    Step(2, "Оформите подписку или продлите её")
+                    Spacer(Modifier.height(12.dp))
+                    Step(3, "Скопируйте ссылку-ключ и вставьте её выше")
+                    Spacer(Modifier.height(16.dp))
+                    val uri = LocalUriHandler.current
+                    SecondaryButton("Открыть бота", { uri.openUri(Config.TELEGRAM_URL) }, icon = Icons.AutoMirrored.Filled.Send, height = 48.dp)
+                }
             }
-            Spacer(Modifier.height(10.dp))
-            Button({ state.activate(key) }, Modifier.fillMaxWidth().height(48.dp), enabled = key.isNotBlank() && !state.busy) {
-                if (state.busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                else Text("Подключить", fontWeight = FontWeight.SemiBold)
-            }
-            TextButton({ uri.openUri(Config.TELEGRAM_URL) }) { Text("Нет ключа? Получить в боте") }
         }
+    }
+}
+
+/** A frosted card over the drifting light. */
+@Composable
+private fun Glass(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val c = Palette.colors
+    val shape = RoundedCornerShape(26.dp)
+    Column(
+        modifier.fillMaxWidth()
+            .shadow(20.dp, shape, ambientColor = Color.Black.copy(alpha = 0.15f), spotColor = Color.Black.copy(alpha = 0.2f))
+            .clip(shape).background(c.surface.copy(alpha = if (c.dark) 0.72f else 0.8f))
+            .border(1.dp, Color.White.copy(alpha = if (c.dark) 0.1f else 0.5f), shape)
+            .padding(18.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun KeyField(key: String, onChange: (String) -> Unit, valid: Boolean, onGo: () -> Unit) {
+    val c = Palette.colors
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(16.dp)
+    val border by animateColorAsState(
+        when {
+            key.isEmpty() -> if (focused) Brand else c.outline
+            valid -> c.green
+            else -> Orange
+        },
+    )
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(shape).background(c.background.copy(alpha = 0.7f))
+            .border(if (focused || key.isNotEmpty()) 1.5.dp else 1.dp, border, shape)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Key, null, Modifier.size(20.dp), tint = if (valid) c.green else Brand)
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f)) {
+            if (key.isEmpty()) Text("https://api1.titanvps.su/…", fontSize = 15.sp, color = c.tertiary, maxLines = 1)
+            BasicTextField(
+                key, { onChange(it.trim()) }, singleLine = true,
+                textStyle = TextStyle(fontSize = 15.sp, color = c.text),
+                cursorBrush = SolidColor(Brand),
+                modifier = Modifier.fillMaxWidth()
+                    .onFocusChanged { focused = it.isFocused }
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyDown && (e.key == Key.Enter || e.key == Key.NumPadEnter)) { onGo(); true } else false
+                    },
+            )
+        }
+        if (key.isNotEmpty()) {
+            Spacer(Modifier.width(8.dp))
+            Icon(if (valid) Icons.Default.CheckCircle else Icons.Default.Error, null, Modifier.size(20.dp), tint = if (valid) c.green else Orange)
+            Spacer(Modifier.width(8.dp))
+            Icon(Icons.Default.Close, "Очистить", Modifier.size(18.dp).clip(CircleShape).press(scale = 0.85f) { onChange("") }, tint = c.secondary)
+        }
+    }
+}
+
+@Composable
+private fun Step(n: Int, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(28.dp).clip(CircleShape).background(Palette.accent), contentAlignment = Alignment.Center) {
+            Text("$n", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(text, fontSize = 15.sp)
     }
 }
 
@@ -369,462 +493,672 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
         .filter { query.isBlank() || query.trim().lowercase() in it.name.lowercase() }
         .let { list ->
             when (sort) {
-                Sort.RECOMMENDED -> list
+                // Favourites first, in the subscription's order otherwise (as on iPhone).
+                Sort.RECOMMENDED -> list.filter(state::isFavorite) + list.filterNot(state::isFavorite)
                 Sort.PING -> list.sortedBy { s -> state.pings[s.id]?.takeIf { it >= 0 } ?: Long.MAX_VALUE }
                 Sort.NAME -> list.sortedBy { ServerGroups.splitFlag(it.name).second.lowercase() }
             }
         }
+    // Speed and traffic: read only while Главная is on screen and the VPN is on.
+    val metricsPort = state.metricsPortNow
+    DisposableEffect(metricsPort) {
+        if (metricsPort > 0) state.traffic.start(metricsPort)
+        onDispose { state.traffic.stop() }
+    }
 
-    val toolbar: @Composable () -> Unit = {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    groups.forEach { (g, items) -> GroupTab(g, items.size, g == page, Modifier.weight(1f)) { page = g } }
-                }
-                PingButton(state.pinging) { state.pingAll(servers.map { it.id }) }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SearchField(query, { query = it }, Modifier.weight(1f))
-                SortMenu(sort) { sort = it }
-            }
-            if (page == Group.BYPASS && state.bypassLocked) {
-                Row(Modifier.padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Обходы откроются, когда интернет заработает по белым спискам (ya.ru и vk.com открываются, google.com — нет). " +
-                            "Сейчас интернет обычный — используйте «Серверы».",
-                        fontSize = 12.sp, color = Yellow, modifier = Modifier.weight(1f),
-                    )
-                    TextButton({ state.checkWhitelist() }, enabled = !state.whitelistChecking) {
-                        Text(if (state.whitelistChecking) "Проверяем…" else "Проверить", fontSize = 12.sp)
-                    }
-                }
-            } else Text(
-                if (page == Group.SERVERS) "Безлимит на обычных серверах"
-                else "Серверы для мобильного интернета с белыми списками. Расходуют ГБ" +
-                    (if (sub.info.totalBytes > 0) " · осталось ${formatBytes(sub.info.remainingBytes)} из ${formatBytes(sub.info.totalBytes)}" else ""),
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp),
-            )
-        }
+    val header: @Composable () -> Unit = {
+        ListHeader(state, sub, groups, page, { page = it }, servers, query, { query = it }, sort, { sort = it }, openSubscription)
     }
     val row: @Composable (Server) -> Unit = { s ->
+        val bypass = ServerGroups.isBypass(s)
         ServerRow(
             server = s,
             ping = state.pings[s.id],
             measuring = s.id in state.measuring,
             selected = s.id == state.selected?.id,
-            connected = state.vpn is VpnState.Connected && s.id == state.selected?.id,
-            limited = groups[Group.BYPASS]?.any { it.id == s.id } == true && ServerGroups.isLimited(s),
-            locked = state.bypassLocked && groups[Group.BYPASS]?.any { it.id == s.id } == true,
+            limited = bypass && ServerGroups.isLimited(s),
+            locked = state.bypassLocked && bypass,
+            favorite = state.isFavorite(s),
             onPing = { state.pingOne(s.id) },
+            onFavorite = { state.toggleFavorite(s) },
         ) { state.select(s.id) }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val panelWidth = if (maxWidth >= 1050.dp) 440.dp else 380.dp
         if (maxWidth >= 820.dp) {
-            Row(Modifier.fillMaxSize().padding(18.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                ControlPanel(state, sub, openSubscription, Modifier.width(panelWidth).fillMaxHeight())
-                Column(Modifier.weight(1f).fillMaxHeight()) {
-                    toolbar()
+            val panelWidth = if (maxWidth >= 1050.dp) 420.dp else 370.dp
+            Row(Modifier.fillMaxSize()) {
+                Column(
+                    Modifier.width(panelWidth).fillMaxHeight().verticalScroll(rememberScrollState()).padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) { Controls(state, sub, openSubscription) }
+                Column(Modifier.weight(1f).fillMaxHeight().padding(top = 20.dp, end = 20.dp)) {
+                    header()
                     Spacer(Modifier.height(10.dp))
-                    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
+                    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
                         items(servers, key = { it.id }) { row(it) }
                     }
                 }
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                item { ControlPanel(state, sub, openSubscription, Modifier.fillMaxWidth(), scrollable = false) }
-                item { toolbar() }
-                items(servers, key = { it.id }) { row(it) }
+            LazyColumn(
+                Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                item { Column(Modifier.widthIn(max = 640.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) { Controls(state, sub, openSubscription) } }
+                item { Box(Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(top = 6.dp)) { header() } }
+                items(servers, key = { it.id }) { Box(Modifier.widthIn(max = 640.dp).fillMaxWidth()) { row(it) } }
             }
         }
     }
 }
 
-/** Title, subscription, the big power button with status, selected server, features. */
+/** No panel under them: the subscription card, the Выкл | Вкл slider and the status as text. */
 @Composable
-private fun ControlPanel(state: AppState, sub: Subscription, openSubscription: () -> Unit, modifier: Modifier, scrollable: Boolean = true) {
-    Surface(modifier, shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)) {
-        // Not scrollable inside the narrow layout's list: nested vertical scrolling crashes Compose.
-        Column(
-            (if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier).padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Column {
-                Text("Titan VPS", fontSize = 34.sp, fontWeight = FontWeight.Bold)
-                Text("Быстрый. Стабильный. Без ограничений.", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun ColumnScope.Controls(state: AppState, sub: Subscription, openSubscription: () -> Unit) {
+    AccountBanner(state)
+    HomeSubscriptionCard(state, sub, openSubscription)
+    Spacer(Modifier.height(2.dp))
+    PowerSlider(
+        phase = when (state.vpn) {
+            VpnState.Connecting -> Phase.CONNECTING
+            is VpnState.Connected -> Phase.ON
+            VpnState.Disconnecting -> Phase.DISCONNECTING
+            else -> Phase.OFF
+        },
+        failures = state.failures,
+    ) { on ->
+        if (on) {
+            when {
+                state.vpn is VpnState.Connected -> true
+                state.selected == null -> { state.showToast("Выберите сервер в списке", Toast.Kind.WARNING); false }
+                else -> { state.connect(); true }
             }
-            SubscriptionCard(sub, state.busy, { state.refresh() }, openSubscription)
-            AccountBanner(state)
-            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    BigPowerButton(state)
-                    Status(state)
-                    PowerSwitch(state)
+        } else {
+            state.disconnect()
+            true
+        }
+    }
+    StatusBlock(state)
+}
+
+/** Blocked account / maintenance, from the bot; click → support. */
+@Composable
+private fun AccountBanner(state: AppState) {
+    val uri = LocalUriHandler.current
+    val status = state.account?.status
+    val text = when (status) {
+        "BLOCKED" -> "Аккаунт заблокирован. Напишите в поддержку"
+        "MAINTENANCE" -> "Идут технические работы. Подключение может не работать"
+        else -> return
+    }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(if (status == "BLOCKED") Red else Orange)
+            .press(scale = 0.98f) { uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL) }.padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Warning, null, Modifier.size(20.dp), tint = Color.White)
+        Spacer(Modifier.width(10.dp))
+        Text(text, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+private fun isActive(info: SubscriptionInfo): Boolean = info.expireAt <= 0 || info.expireAt > System.currentTimeMillis() / 1000
+
+@Composable
+private fun HomeSubscriptionCard(state: AppState, sub: Subscription, openSubscription: () -> Unit) {
+    val c = Palette.colors
+    var expanded by remember { mutableStateOf(false) }
+    val info = sub.info
+    val active = isActive(info)
+    TitanCard {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).press(scale = 0.98f, onClick = openSubscription),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(44.dp).clip(CircleShape).background(if (active) Palette.accent else SolidColor(Red)),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Default.WorkspacePremium, null, Modifier.size(22.dp), tint = Color.White) }
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (active) "Подписка активна" else "Подписка истекла", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(18.dp), tint = c.tertiary)
+                    }
+                    Text(if (info.expireAt > 0) "До " + Fmt.date(info.expireAt) else "Бессрочно", fontSize = 14.sp, color = c.secondary)
                 }
             }
-            state.selected?.let { SelectedServer(it, ServerGroups.groupOf(it, sub.servers) == Group.BYPASS && ServerGroups.isLimited(it)) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                Feature(Icons.Default.Bolt, "Высокая\nскорость")
-                Feature(Icons.Outlined.Shield, "Стабильное\nсоединение")
-            }
+            CircleIconButton(Icons.Default.Refresh, "Обновить подписку", { state.refresh() }, spinning = state.busy, size = 44.dp)
         }
-    }
-}
-
-/** Round power button with a glow: blue when off, spinning while connecting, green when on. */
-@Composable
-private fun BigPowerButton(state: AppState) {
-    val vpn = state.vpn
-    val on = vpn is VpnState.Connected
-    val busy = vpn == VpnState.Connecting || vpn == VpnState.Disconnecting
-    val color by animateColorAsState(if (on) Green else Brand)
-    Box(Modifier.size(170.dp), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(170.dp).background(Brush.radialGradient(listOf(color.copy(alpha = 0.35f), Color.Transparent)), CircleShape))
-        Box(
-            Modifier.size(128.dp).clip(CircleShape)
-                .background(Brush.linearGradient(listOf(color.copy(alpha = 0.95f), color.copy(alpha = 0.55f))))
-                .border(3.dp, color.copy(alpha = 0.9f), CircleShape)
-                .clickable(enabled = !busy) { if (on) state.disconnect() else state.connect() },
-            contentAlignment = Alignment.Center,
+        HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = c.outline.copy(alpha = 0.6f))
+        val turn by animateFloatAsState(if (expanded) 180f else 0f)
+        Row(
+            Modifier.fillMaxWidth().rowClick { expanded = !expanded }.padding(vertical = 9.dp),
+            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (busy) CircularProgressIndicator(Modifier.size(54.dp), strokeWidth = 4.dp, color = Color.White)
-            else Icon(Icons.Default.PowerSettingsNew, if (on) "Выключить" else "Включить", Modifier.size(58.dp), tint = Color.White)
+            Text(if (expanded) "Скрыть" else "Подробнее", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = c.secondary)
+            Spacer(Modifier.width(4.dp))
+            Icon(Icons.Default.ExpandMore, null, Modifier.size(18.dp).rotate(turn), tint = c.secondary)
         }
-    }
-}
-
-@Composable
-private fun SelectedServer(server: Server, limited: Boolean) {
-    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Text("Выбранный сервер", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                FlagCircle(server, 28.dp)
-                Spacer(Modifier.width(10.dp))
-                MarqueeText(ServerGroups.splitFlag(server.name).second, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f, fill = false))
-                Spacer(Modifier.width(8.dp))
-                Badge(if (limited) "Лимитный" else "Безлимит", if (limited) Yellow else Green)
+        AnimatedVisibility(expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val now = System.currentTimeMillis() / 1000
+                if (info.expireAt > 0) Detail("Осталось", "${((info.expireAt - now) / 86400).coerceAtLeast(0)} дн.")
+                Detail("Обычные серверы", "Безлимит")
+                Detail("Трафик на обходах", if (info.totalBytes > 0) "${formatBytes(info.remainingBytes)} из ${formatBytes(info.totalBytes)}" else "Безлимит")
+                Detail("Обновлено", Fmt.ago(sub.fetchedAt))
             }
         }
     }
 }
 
 @Composable
-private fun Badge(text: String, color: Color) {
-    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(color.copy(alpha = 0.15f)).padding(horizontal = 7.dp, vertical = 2.dp)) {
-        Text(text, fontSize = 11.sp, color = color, fontWeight = FontWeight.Medium)
+private fun Detail(label: String, value: String) {
+    Row {
+        Text(label, fontSize = 14.sp, color = Palette.colors.secondary, modifier = Modifier.weight(1f))
+        Text(value, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+private enum class Phase { OFF, CONNECTING, ON, DISCONNECTING }
+
+/**
+ * Выкл | Вкл as one slider (as on iPhone): the knob is dragged across with the mouse, or a
+ * side clicked. [onToggle] false means it can't be done now: the knob goes back and shakes.
+ */
+@Composable
+private fun PowerSlider(phase: Phase, failures: Int, onToggle: (Boolean) -> Boolean) {
+    val c = Palette.colors
+    /** The side just picked, held until the VPN's state follows (or for a moment at most). */
+    var pending by remember { mutableStateOf<Boolean?>(null) }
+    var dragging by remember { mutableStateOf(false) }
+    var dragDx by remember { mutableFloatStateOf(0f) }
+    var shakes by remember { mutableIntStateOf(0) }
+    val isOn = pending ?: (phase == Phase.ON || phase == Phase.CONNECTING)
+    val busy = phase == Phase.CONNECTING || phase == Phase.DISCONNECTING
+    LaunchedEffect(phase) { pending = null }
+    LaunchedEffect(failures) {
+        if (pending != null) { pending = null; shakes++ }
+    }
+    LaunchedEffect(pending) {
+        if (pending != null) { delay(1500); pending = null }
+    }
+    fun commit(on: Boolean) {
+        if (onToggle(on)) pending = on else shakes++
+    }
+
+    val height = 68.dp
+    val inset = 5.dp
+    BoxWithConstraints(Modifier.fillMaxWidth().height(height).shake(shakes)) {
+        val density = LocalDensity.current
+        val knobWidth = (maxWidth - inset * 2) / 2
+        val maxX = with(density) { (maxWidth - inset * 2 - knobWidth).toPx() }.coerceAtLeast(1f)
+        val base = if (isOn) maxX else 0f
+        val target = if (dragging) (base + dragDx).coerceIn(0f, maxX) else base
+        val x by animateFloatAsState(target, if (dragging) snap() else spring(dampingRatio = 0.8f, stiffness = 380f))
+        val progress = (x / maxX).coerceIn(0f, 1f)
+        val insetPx = with(density) { inset.toPx() }
+        Box(
+            Modifier.fillMaxSize().pointerHoverIcon(PointerIcon.Hand)
+                .pointerInput(isOn) {
+                    detectTapGestures { p -> val right = p.x > size.width / 2; if (right != isOn) commit(right) }
+                }
+                .pointerInput(isOn, maxX) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragging = true; dragDx = 0f },
+                        onDragEnd = {
+                            val end = (base + dragDx).coerceIn(0f, maxX)
+                            dragging = false
+                            val to = end > maxX / 2
+                            if (to != isOn) commit(to)
+                        },
+                        onDragCancel = { dragging = false },
+                    ) { change, amount -> change.consume(); dragDx += amount }
+                },
+        ) {
+            // The track: greener as the knob goes right, a shine while connecting.
+            Box(
+                Modifier.fillMaxSize().clip(CircleShape).background(c.track)
+                    .drawBehind { drawRect(c.green.copy(alpha = 0.16f * progress)) }
+                    .shimmer(busy, Brand, 1200)
+                    .border(1.dp, c.outline.copy(alpha = 0.7f), CircleShape),
+            )
+            // What the free half says: where the knob would go.
+            Row(Modifier.fillMaxSize().padding(horizontal = inset), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f).graphicsLayer { alpha = progress }, horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.PowerSettingsNew, null, Modifier.size(19.dp), tint = c.secondary)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Выкл", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = c.secondary)
+                }
+                Row(
+                    Modifier.weight(1f).graphicsLayer { alpha = 1 - progress }.shimmer(phase == Phase.OFF, Brand, 2000),
+                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Вкл", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = c.secondary)
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(20.dp), tint = c.secondary)
+                }
+            }
+            // The knob.
+            val lit = progress > 0.5f
+            val glow = if (phase == Phase.CONNECTING) Brand else Green
+            Box(
+                Modifier.offset { IntOffset((insetPx + x).roundToInt(), insetPx.roundToInt()) }
+                    .width(knobWidth).height(height - inset * 2)
+                    .shadow(6.dp + 6.dp * progress, CircleShape, ambientColor = glow.copy(alpha = 0.3f * progress), spotColor = if (progress > 0.1f) glow.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.3f))
+                    .clip(CircleShape).background(c.knob)
+                    .drawWithContent {
+                        drawRect(if (phase == Phase.CONNECTING) Palette.accent else Palette.green, alpha = progress)
+                        drawContent()
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                val tint = if (lit) Color.White else c.text
+                Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val (icon, label) = when {
+                        busy -> null to if (phase == Phase.CONNECTING) "Подключение" else "Отключение"
+                        lit -> Icons.Default.VerifiedUser to "Вкл"
+                        else -> Icons.Default.PowerSettingsNew to "Выкл"
+                    }
+                    if (icon != null) Icon(icon, null, Modifier.size(20.dp), tint = tint) else Spinner(16.dp, if (lit) Color.White else Brand)
+                    Spacer(Modifier.width(8.dp))
+                    FitText(label, tint, 17.sp, 12.sp, FontWeight.Bold, Modifier.weight(1f, fill = false))
+                }
+            }
+        }
+    }
+}
+
+/** Under the slider: what the VPN is doing, the time on, the speed, the server, the check. */
+@Composable
+private fun StatusBlock(state: AppState) {
+    val c = Palette.colors
+    val vpn = state.vpn
+    val connected = vpn is VpnState.Connected
+    val (title, color) = when (vpn) {
+        is VpnState.Connected -> "Подключено" to c.green
+        VpnState.Connecting -> "Подключаемся…" to Brand
+        VpnState.Disconnecting -> "Отключаемся…" to c.text
+        else -> "Не подключено" to c.text
+    }
+    Box(Modifier.fillMaxWidth()) {
+        // Behind the status: the last minute of download as a faint curve, barely there.
+        if (connected) SpeedBackdrop(state.traffic, Modifier.matchParentSize())
+        Column(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            val titleColor by animateColorAsState(color)
+            Text(title, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = titleColor)
+            when (vpn) {
+                is VpnState.Connected -> {
+                    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                    LaunchedEffect(vpn.since) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
+                    val s = ((now - vpn.since) / 1000).coerceAtLeast(0)
+                    Text("%02d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.secondary, style = Tabular)
+                    // The speed now, quietly.
+                    Text(
+                        "↓ ${Fmt.speed(state.traffic.down)}     ↑ ${Fmt.speed(state.traffic.up)}",
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium, color = c.tertiary, style = Tabular,
+                    )
+                }
+                VpnState.Connecting -> Text(state.connectStep.ifEmpty { "Устанавливаем соединение" }, fontSize = 13.sp, color = c.secondary, textAlign = TextAlign.Center)
+                else -> {}
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val s = state.selected
+                if (s != null) {
+                    FlagCircle(s, 20.dp)
+                    Spacer(Modifier.width(7.dp))
+                    val ping = state.pings[s.id]?.takeIf { it >= 0 }
+                    Text(
+                        ServerGroups.splitFlag(s.name).second + (ping?.let { " · $it мс" } ?: ""),
+                        fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Text("Выберите сервер", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.secondary)
+                }
+            }
+            if (vpn is VpnState.Error) Text(vpn.message, fontSize = 13.sp, color = Red, textAlign = TextAlign.Center)
+            AnimatedVisibility(connected, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Spacer(Modifier.height(4.dp))
+                    ConnectionCheckView(state)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (state.mode == "tun") "Весь трафик компьютера идёт через VPN" else "Браузеры и большинство программ идут через VPN",
+                        fontSize = 11.sp, color = c.tertiary,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The last minute of download behind the status, a faint filled curve. */
+@Composable
+private fun SpeedBackdrop(monitor: TrafficMonitor, modifier: Modifier) {
+    val history = monitor.history
+    Canvas(modifier) {
+        if (history.size < 2) return@Canvas
+        val top = maxOf(history.maxOf { it.down }, 64.0 * 1024) * 1.5
+        val lastId = history.last().id
+        val firstId = lastId - TrafficMonitor.WINDOW + 1
+        fun px(id: Int) = (id - firstId).toFloat() / (TrafficMonitor.WINDOW - 1) * size.width
+        fun py(v: Double) = size.height - (v / top).toFloat() * size.height
+        val points = history.map { Offset(px(it.id), py(it.down)) }
+        val path = Path().apply {
+            moveTo(points.first().x, size.height)
+            lineTo(points.first().x, points.first().y)
+            for (i in 1 until points.size) {
+                val a = points[i - 1]
+                val b = points[i]
+                val mid = (a.x + b.x) / 2
+                cubicTo(mid, a.y, mid, b.y, b.x, b.y)
+            }
+            lineTo(points.last().x, size.height)
+            close()
+        }
+        drawPath(path, Brush.verticalGradient(listOf(Brand.copy(alpha = 0.10f), Brand.copy(alpha = 0f))))
+    }
+}
+
+/** Проверить соединение (as on iPhone): the result of a request through the VPN, click to repeat. */
+@Composable
+private fun ConnectionCheckView(state: AppState) {
+    val c = Palette.colors
+    val check = state.check
+    var hovered by remember { mutableStateOf(false) }
+    Row(
+        Modifier.height(40.dp).clip(CircleShape).background(if (hovered) c.track else c.surface)
+            .border(1.dp, c.outline.copy(alpha = 0.6f), CircleShape)
+            .press(check != ConnectionCheck.Status.Checking, onHover = { hovered = it }) { state.checkConnection() }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val text = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+        when (check) {
+            ConnectionCheck.Status.Idle -> {
+                Icon(Icons.Default.MonitorHeart, null, Modifier.size(18.dp), tint = Brand)
+                Spacer(Modifier.width(8.dp))
+                Text("Проверить соединение", style = text)
+            }
+            ConnectionCheck.Status.Checking -> {
+                Spinner(15.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("Проверяем соединение…", style = text)
+            }
+            is ConnectionCheck.Status.Ok -> {
+                Box(Modifier.size(9.dp).clip(CircleShape).background(pingColor(check.ms)))
+                Spacer(Modifier.width(8.dp))
+                Text("${check.ms} мс", style = text.merge(Tabular), color = pingColor(check.ms))
+                check.country?.let { code ->
+                    Text("  ·  ", style = text, color = c.secondary)
+                    FlagCircle(code.lowercase(), false, 18.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text(Fmt.country(code), style = text, maxLines = 1)
+                }
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Default.Refresh, "Проверить ещё раз", Modifier.size(15.dp), tint = c.secondary)
+            }
+            is ConnectionCheck.Status.Failed -> {
+                Icon(Icons.Default.Warning, null, Modifier.size(18.dp), tint = Orange)
+                Spacer(Modifier.width(8.dp))
+                Text("Нет ответа через VPN", style = text)
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Default.Refresh, "Проверить ещё раз", Modifier.size(15.dp), tint = c.secondary)
+            }
+        }
+    }
+    when (check) {
+        is ConnectionCheck.Status.Ok -> check.ip?.let { ip ->
+            SelectionContainer {
+                Text("IP: $ip", fontSize = 12.sp, color = c.secondary, style = Tabular, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+        is ConnectionCheck.Status.Failed -> Text(
+            if (check.why.isEmpty() || !state.techMode) "Попробуйте ещё раз или выберите другой сервер" else "${check.why}. Попробуйте другой сервер",
+            fontSize = 12.sp, color = Red.copy(alpha = 0.85f), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp),
+        )
+        else -> {}
     }
 }
 
 @Composable
-private fun Feature(icon: ImageVector, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, Modifier.size(22.dp), tint = Brand)
-        Spacer(Modifier.width(8.dp))
-        Text(text, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 15.sp)
+private fun ListHeader(
+    state: AppState, sub: Subscription, groups: Map<Group, List<Server>>, page: Group, onPage: (Group) -> Unit,
+    servers: List<Server>, query: String, onQuery: (String) -> Unit, sort: Sort, onSort: (Sort) -> Unit,
+    openSubscription: () -> Unit,
+) {
+    val c = Palette.colors
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(c.surface).padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                groups.forEach { (g, items) -> GroupTab(g, items.size, g == page, Modifier.weight(1f)) { onPage(g) } }
+            }
+            // In the order shown (favourites first): results fill the list from the top.
+            PingButton(state) { state.pingAll(servers.map { it.id }) }
+        }
+        val info = sub.info
+        Row(Modifier.padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            when {
+                page == Group.SERVERS -> Text("Безлимит на обычных серверах", fontSize = 13.sp, color = c.secondary)
+                state.bypassLocked -> {
+                    Text(
+                        "Обходы откроются, когда интернет заработает по белым спискам (ya.ru и vk.com открываются, google.com — нет). " +
+                            "Сейчас интернет обычный — используйте «Серверы».",
+                        fontSize = 13.sp, color = Orange, modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    LinkText(if (state.whitelistChecking) "Проверяем…" else "Проверить", !state.whitelistChecking) { state.checkWhitelist() }
+                }
+                info.totalBytes > 0 -> {
+                    Text("Трафик: ${formatBytes(info.remainingBytes)} из ${formatBytes(info.totalBytes)}", fontSize = 13.sp, color = c.secondary)
+                    Spacer(Modifier.width(8.dp))
+                    LinkText("Докупить ГБ", onClick = openSubscription)
+                }
+                else -> Text("Для ограничений мобильного интернета", fontSize = 13.sp, color = c.secondary)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SearchField(query, onQuery, Modifier.weight(1f))
+            SortMenu(sort, onSort)
+        }
+    }
+}
+
+@Composable
+private fun LinkText(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Text(
+        text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (enabled) Brand else Palette.colors.secondary,
+        modifier = Modifier.clip(RoundedCornerShape(6.dp)).press(enabled, 0.95f, onClick = onClick).padding(horizontal = 2.dp, vertical = 2.dp),
+    )
+}
+
+@Composable
+private fun GroupTab(group: Group, count: Int, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val c = Palette.colors
+    val shape = RoundedCornerShape(13.dp)
+    var hovered by remember { mutableStateOf(false) }
+    val color = if (selected) Brand else if (hovered) c.text else c.secondary
+    Row(
+        modifier.heightIn(min = 44.dp).clip(shape)
+            .background(if (selected) Brand.copy(alpha = 0.08f) else Color.Transparent)
+            .border(1.dp, if (selected) Brand.copy(alpha = 0.35f) else Color.Transparent, shape)
+            .press(scale = 0.97f, onHover = { hovered = it }, onClick = onClick).padding(horizontal = 6.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(if (group == Group.SERVERS) Icons.Default.Storage else Icons.Default.Shuffle, null, Modifier.size(16.dp), tint = color)
+        Spacer(Modifier.width(6.dp))
+        Text(group.title, color = color, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Spacer(Modifier.width(6.dp))
+        Box(Modifier.clip(RoundedCornerShape(10.dp)).background(if (selected) Brand else c.outline).padding(horizontal = 7.dp, vertical = 2.dp)) {
+            Text("$count", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = if (selected) Color.White else c.secondary)
+        }
+    }
+}
+
+/** Пинг for every server (the tab on screen first); Стоп with a progress ring while it runs. */
+@Composable
+private fun PingButton(state: AppState, onClick: () -> Unit) {
+    val c = Palette.colors
+    val pinging = state.pinging
+    val shape = RoundedCornerShape(16.dp)
+    var hovered by remember { mutableStateOf(false) }
+    Row(
+        Modifier.height(52.dp).clip(shape)
+            .background(if (pinging) Palette.accent else SolidColor(if (hovered) c.track else c.surface))
+            .press(onHover = { hovered = it }, onClick = onClick).padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (pinging) ProgressRing(state.pingProgress, Color.White) else Icon(Icons.Default.Speed, null, Modifier.size(19.dp), tint = c.text)
+        Spacer(Modifier.width(7.dp))
+        Text(if (pinging) "Стоп" else "Пинг", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (pinging) Color.White else c.text)
     }
 }
 
 @Composable
 private fun SearchField(value: String, onChange: (String) -> Unit, modifier: Modifier) {
+    val c = Palette.colors
     Row(
-        modifier.clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surface).heightIn(min = 44.dp).padding(horizontal = 14.dp),
+        modifier.clip(RoundedCornerShape(14.dp)).background(c.surface).heightIn(min = 42.dp).padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Default.Search, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(Icons.Default.Search, null, Modifier.size(18.dp), tint = c.secondary)
         Spacer(Modifier.width(10.dp))
         Box(Modifier.weight(1f)) {
-            if (value.isEmpty()) Text("Поиск сервера…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            androidx.compose.foundation.text.BasicTextField(
+            if (value.isEmpty()) Text("Поиск сервера…", fontSize = 14.sp, color = c.tertiary)
+            BasicTextField(
                 value, onChange, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(Brand),
+                textStyle = TextStyle(fontSize = 14.sp, color = c.text),
+                cursorBrush = SolidColor(Brand),
             )
         }
-        if (value.isNotEmpty()) Icon(Icons.Default.Close, "Очистить", Modifier.size(16.dp).clickable { onChange("") }, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (value.isNotEmpty()) Icon(Icons.Default.Close, "Очистить", Modifier.size(16.dp).press(scale = 0.85f) { onChange("") }, tint = c.secondary)
     }
 }
 
 @Composable
 private fun SortMenu(sort: Sort, onSort: (Sort) -> Unit) {
+    val c = Palette.colors
     var open by remember { mutableStateOf(false) }
+    var hovered by remember { mutableStateOf(false) }
     Box {
         Row(
-            Modifier.clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surface).clickable { open = true }
-                .heightIn(min = 44.dp).padding(horizontal = 14.dp),
+            Modifier.clip(RoundedCornerShape(14.dp)).background(if (hovered) c.track else c.surface)
+                .press(scale = 0.97f, onHover = { hovered = it }) { open = true }
+                .heightIn(min = 42.dp).padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Сортировка: ", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(sort.title, fontSize = 13.sp)
+            Text(sort.title, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.width(4.dp))
-            Icon(Icons.Default.KeyboardArrowDown, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.Default.ExpandMore, null, Modifier.size(18.dp), tint = c.secondary)
         }
-        androidx.compose.material3.DropdownMenu(open, { open = false }) {
+        DropdownMenu(open, { open = false }, shape = RoundedCornerShape(14.dp), containerColor = c.surface) {
             Sort.entries.forEach { s ->
-                androidx.compose.material3.DropdownMenuItem(text = { Text(s.title) }, onClick = { onSort(s); open = false })
-            }
-        }
-    }
-}
-
-@Composable
-private fun SquareButton(icon: ImageVector, description: String, spinning: Boolean = false, onClick: () -> Unit) {
-    Box(
-        Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface)
-            .clickable(enabled = !spinning, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (spinning) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-        else Icon(icon, description, Modifier.size(20.dp))
-    }
-}
-
-@Composable
-private fun SubscriptionCard(sub: Subscription, refreshing: Boolean, onRefresh: () -> Unit, onOpen: () -> Unit) {
-    val now = System.currentTimeMillis() / 1000
-    val active = sub.info.expireAt <= 0 || sub.info.expireAt > now
-    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.clickable(onClick = onOpen).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(40.dp).clip(CircleShape).background(Brand.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.WorkspacePremium, null, tint = if (active) Brand else Red, modifier = Modifier.size(20.dp))
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(if (active) "Подписка активна" else "Подписка истекла", fontWeight = FontWeight.SemiBold)
-                Text(expiryText(sub.info.expireAt), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            // Refresh the server list right here, without going to Settings.
-            Box(
-                Modifier.size(36.dp).clip(CircleShape).clickable(enabled = !refreshing, onClick = onRefresh),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (refreshing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                else Icon(Icons.Default.Refresh, "Обновить подписку", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.width(4.dp))
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-private fun expiryText(expireAt: Long): String =
-    if (expireAt <= 0) "Бессрочно" else "До " + SimpleDateFormat("d MMMM yyyy", Locale("ru")).format(Date(expireAt * 1000))
-
-/** Выкл (red while off) | Вкл (green while on), spinner knob while connecting. */
-@Composable
-private fun PowerSwitch(state: AppState) {
-    val vpn = state.vpn
-    val on = vpn is VpnState.Connected
-    val busy = vpn == VpnState.Connecting || vpn == VpnState.Disconnecting
-    val off = !on && !busy
-    val track = MaterialTheme.colorScheme.surfaceVariant
-    Box(
-        Modifier.fillMaxWidth().height(58.dp).clip(RoundedCornerShape(29.dp))
-            .background(if (busy) Brush.horizontalGradient(listOf(track, Brand.copy(alpha = 0.2f), track)) else Brush.horizontalGradient(listOf(track, track)))
-            .padding(5.dp),
-    ) {
-        Row(Modifier.fillMaxSize()) {
-            val offBg by animateColorAsState(if (off) Red.copy(alpha = 0.14f) else Color.Transparent)
-            val onBg by animateColorAsState(if (on) Green.copy(alpha = 0.16f) else Color.Transparent)
-            Half(Modifier.weight(1f), offBg, if (off) Red else null, "Выкл", Icons.Default.PowerSettingsNew,
-                if (off) Red else MaterialTheme.colorScheme.onSurface) { state.disconnect() }
-            Half(Modifier.weight(1f), onBg, if (on) Green else null, "Вкл", Icons.Outlined.Shield,
-                if (on) Green else if (busy) Brand else MaterialTheme.colorScheme.onSurface) { if (!on && !busy) state.connect() }
-        }
-        if (busy) {
-            Box(Modifier.align(Alignment.Center).size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp, color = Brand)
-            }
-        }
-    }
-}
-
-@Composable
-private fun Half(modifier: Modifier, bg: Color, border: Color?, text: String, icon: ImageVector, tint: Color, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(25.dp)
-    Row(
-        modifier.fillMaxHeight().clip(shape).background(bg)
-            .then(if (border != null) Modifier.border(1.5.dp, border, shape) else Modifier)
-            .clickable(onClick = onClick),
-        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, Modifier.size(20.dp), tint = tint)
-        Spacer(Modifier.width(8.dp))
-        Text(text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = tint)
-    }
-}
-
-@Composable
-private fun Status(state: AppState) {
-    val vpn = state.vpn
-    val server = state.selected
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        val (title, color) = when (vpn) {
-            is VpnState.Connected -> "Подключено" to Green
-            VpnState.Connecting -> "Подключаемся" to Brand
-            VpnState.Disconnecting -> "Отключаемся" to MaterialTheme.colorScheme.onSurface
-            else -> "Не подключено" to MaterialTheme.colorScheme.onSurface
-        }
-        Text(title, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = color)
-        val name = server?.let { ServerGroups.splitFlag(it.name).second }
-        when (vpn) {
-            is VpnState.Connected -> {
-                val ping = server?.let { state.pings[it.id] }?.takeIf { it >= 0 }
-                MarqueeText((name ?: "") + (ping?.let { " · $it мс" } ?: ""), fontSize = 14.sp, fontWeight = FontWeight.Normal)
-                var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-                LaunchedEffect(vpn.since) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
-                val s = (now - vpn.since) / 1000
-                Text("%02d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    if (state.mode == "tun") "Весь трафик компьютера идёт через VPN" else "Браузеры и большинство программ идут через VPN",
-                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                DropdownMenuItem(
+                    text = { Text(s.title, fontWeight = if (s == sort) FontWeight.SemiBold else FontWeight.Normal) },
+                    trailingIcon = { if (s == sort) Icon(Icons.Default.Check, null, Modifier.size(18.dp), tint = Brand) },
+                    onClick = { onSort(s); open = false },
                 )
             }
-            VpnState.Connecting -> Text(
-                state.connectStep.ifEmpty { "Устанавливаем соединение" },
-                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center,
-            )
-            is VpnState.Error -> Text(vpn.message, fontSize = 13.sp, color = Red, textAlign = TextAlign.Center)
-            else -> Text(name ?: "Выберите сервер", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-        }
-    }
-}
-
-@Composable
-private fun GroupTab(group: Group, count: Int, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(12.dp)
-    val color = if (selected) Brand else MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier.clip(shape).background(if (selected) Brand.copy(alpha = 0.08f) else Color.Transparent)
-            .then(if (selected) Modifier.border(1.dp, Brand.copy(alpha = 0.35f), shape) else Modifier)
-            .clickable(onClick = onClick).heightIn(min = 40.dp).padding(horizontal = 6.dp),
-        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(if (group == Group.SERVERS) Icons.Outlined.Storage else Icons.Default.Shuffle, null, Modifier.size(15.dp), tint = color)
-        Spacer(Modifier.width(4.dp))
-        Text(group.title, color = color, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Spacer(Modifier.width(4.dp))
-        Box(Modifier.clip(RoundedCornerShape(9.dp)).background(if (selected) Brand else MaterialTheme.colorScheme.outlineVariant).padding(horizontal = 5.dp, vertical = 1.dp)) {
-            Text("$count", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier.clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick).heightIn(min = 48.dp).padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (pinging) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Speed, null, Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(if (pinging) "Стоп" else "Пинг", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-/** Country code in a circle (Windows can't draw flag emoji); АВТО gets a bolt. */
-@Composable
-private fun FlagCircle(server: Server, size: Dp) {
-    val (flag, name) = remember(server.name) { ServerGroups.splitFlag(server.name) }
-    val code = ServerGroups.countryCode(flag)
-    Box(Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
-        // Windows can't draw flag emoji: real flag images (flag-icons, added in CI).
-        val flagRes = code?.lowercase()?.let { "flags/$it.svg" }
-            ?.takeIf { Thread.currentThread().contextClassLoader.getResource(it) != null }
-        when {
-            flagRes != null -> Image(painterResource(flagRes), null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-            code != null -> Text(code.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Brand)
-            "авто" in name.lowercase() -> Icon(Icons.Default.Bolt, null, Modifier.size(size * 0.55f), tint = Brand)
-            else -> Icon(Icons.Outlined.Dns, null, Modifier.size(size * 0.5f), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 @Composable
 private fun ServerRow(
-    server: Server, ping: Long?, measuring: Boolean, selected: Boolean, connected: Boolean, limited: Boolean,
-    locked: Boolean, onPing: () -> Unit, onClick: () -> Unit,
+    server: Server, ping: Long?, measuring: Boolean, selected: Boolean, limited: Boolean, locked: Boolean,
+    favorite: Boolean, onPing: () -> Unit, onFavorite: () -> Unit, onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(18.dp)
-    val accent = if (connected) Green else Brand
-    Row(
-        Modifier.fillMaxWidth().clip(shape)
-            .background(if (selected) accent.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
-            .then(if (selected) Modifier.border(1.5.dp, accent, shape) else Modifier)
-            .clickable(onClick = onClick).graphicsLayer { alpha = if (locked) 0.45f else 1f }
-            .heightIn(min = 60.dp).padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        FlagCircle(server, 34.dp)
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            MarqueeText(ServerGroups.splitFlag(server.name).second, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                if (limited) "Лимитный · расходует ГБ" else "Безлимит",
-                fontSize = 11.sp, color = if (limited) Yellow else Green,
-            )
-        }
-        Spacer(Modifier.width(10.dp))
-        // Click the ping to re-measure just this server (like Happ).
-        Box(
-            Modifier.heightIn(min = 36.dp).widthIn(min = 36.dp).clip(RoundedCornerShape(10.dp))
-                .clickable(onClick = onPing).padding(horizontal = 6.dp),
-            contentAlignment = Alignment.Center,
+    val c = Palette.colors
+    val shape = RoundedCornerShape(16.dp)
+    var hovered by remember { mutableStateOf(false) }
+    // Right click: the same as the long press on iPhone.
+    ContextMenuArea(items = {
+        listOf(
+            ContextMenuItem("Выбрать", onClick),
+            ContextMenuItem("Пинг", onPing),
+            ContextMenuItem(if (favorite) "Убрать из избранного" else "В избранное", onFavorite),
+        )
+    }) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 62.dp).clip(shape)
+                .background(if (selected) Brand.copy(alpha = 0.08f) else c.surface)
+                .border(if (selected) 1.5.dp else 1.dp, if (selected) Brand else if (hovered) c.outline else Color.Transparent, shape)
+                .graphicsLayer { alpha = if (locked) 0.45f else 1f }
+                .press(scale = 0.99f, onHover = { hovered = it }, onClick = onClick)
+                .padding(start = 14.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            when {
-                ping != null -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (measuring) { CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp); Spacer(Modifier.width(4.dp)) }
-                    Row(Modifier.graphicsLayer { alpha = if (measuring) 0.5f else 1f }, verticalAlignment = Alignment.CenterVertically) {
-                        SignalBars(ping)
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (ping >= 0) "$ping мс" else "таймаут", color = pingColor(ping), fontSize = 13.sp)
+            FlagCircle(server, 34.dp)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (favorite) {
+                        Icon(Icons.Default.Star, null, Modifier.size(14.dp), tint = Yellow)
+                        Spacer(Modifier.width(4.dp))
                     }
+                    MarqueeText(ServerGroups.splitFlag(server.name).second, 15.sp, FontWeight.SemiBold, Modifier.weight(1f, fill = false))
                 }
-                measuring -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                else -> Icon(Icons.Default.Speed, "Пинг", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                Text(
+                    if (limited) "Лимитный · расходует ГБ" else "Безлимит",
+                    fontSize = 11.sp, color = if (limited) Orange else c.green,
+                )
             }
-        }
-        Spacer(Modifier.width(10.dp))
-        when {
-            connected -> Box(Modifier.size(24.dp).clip(CircleShape).background(accent), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            // On hover: star it (or not any more), as the swipe on iPhone.
+            if (hovered) {
+                Box(Modifier.size(34.dp).clip(CircleShape).press(scale = 0.85f, onClick = onFavorite), contentAlignment = Alignment.Center) {
+                    Icon(
+                        if (favorite) Icons.Default.Star else Icons.Default.StarBorder,
+                        if (favorite) "Убрать из избранного" else "В избранное",
+                        Modifier.size(19.dp), tint = if (favorite) Yellow else c.tertiary,
+                    )
+                }
             }
-            selected -> Box(Modifier.size(24.dp).border(2.dp, accent, CircleShape), contentAlignment = Alignment.Center) {
-                Box(Modifier.size(12.dp).clip(CircleShape).background(accent))
+            // Click the ping to measure just this server (again to stop).
+            Row(
+                Modifier.heightIn(min = 44.dp).widthIn(min = 52.dp).clip(RoundedCornerShape(10.dp))
+                    .press(scale = 0.92f, onClick = onPing).padding(horizontal = 6.dp),
+                horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (measuring) {
+                    Spinner(13.dp, stroke = 1.5.dp)
+                    if (ping != null) Spacer(Modifier.width(5.dp))
+                }
+                when {
+                    ping != null -> Text(
+                        if (ping >= 0) "$ping мс" else "таймаут", fontSize = 14.sp, color = pingColor(ping), style = Tabular,
+                        modifier = Modifier.graphicsLayer { alpha = if (measuring) 0.5f else 1f },
+                    )
+                    !measuring -> Icon(Icons.Default.Speed, "Пинг", Modifier.size(18.dp), tint = c.tertiary)
+                }
             }
-            else -> Box(Modifier.size(24.dp).border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape))
-        }
-    }
-}
-
-/** Three bars coloured like the ping: 3 green, 2 yellow, 1 red. */
-@Composable
-private fun SignalBars(ping: Long) {
-    val color = pingColor(ping)
-    val level = when { ping < 0 -> 0; ping < 500 -> 3; ping < 1500 -> 2; else -> 1 }
-    Row(Modifier.height(14.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        listOf(6.dp, 10.dp, 14.dp).forEachIndexed { i, h ->
-            Box(Modifier.width(3.dp).height(h).clip(RoundedCornerShape(1.dp)).background(if (i < level) color else color.copy(alpha = 0.25f)))
+            Spacer(Modifier.width(6.dp))
+            Box(
+                Modifier.size(26.dp).border(if (selected) 2.dp else 1.5.dp, if (selected) Brand else c.outline, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (selected) Box(Modifier.size(13.dp).clip(CircleShape).background(Brand))
+            }
         }
     }
 }
 
 /** One line; only a name that doesn't fit scrolls (after a pause) with faded edges. */
 @Composable
-private fun MarqueeText(text: String, fontSize: androidx.compose.ui.unit.TextUnit, fontWeight: FontWeight, modifier: Modifier = Modifier) {
+private fun MarqueeText(text: String, fontSize: TextUnit, fontWeight: FontWeight, modifier: Modifier = Modifier) {
     var overflow by remember(text) { mutableStateOf(false) }
     Text(
         text,
         modifier.then(
             if (overflow) Modifier
-                .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .drawWithContent {
                     drawContent()
                     val fade = 12.dp.toPx().coerceAtMost(size.width / 4)
@@ -833,7 +1167,7 @@ private fun MarqueeText(text: String, fontSize: androidx.compose.ui.unit.TextUni
                             0f to Color.Transparent, fade / size.width to Color.Black,
                             1f - fade / size.width to Color.Black, 1f to Color.Transparent,
                         ),
-                        blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+                        blendMode = BlendMode.DstIn,
                     )
                 }
                 .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 2000, repeatDelayMillis = 2500)
@@ -846,286 +1180,467 @@ private fun MarqueeText(text: String, fontSize: androidx.compose.ui.unit.TextUni
 
 // ------------------------------------------------------------------ subscription
 
-/** Devices that used this key (from the bot), right on the subscription page. */
+/** A page's title with an action on the right (Подписка, Настройки). */
 @Composable
-private fun DevicesCard(state: AppState) {
-    LaunchedEffect(Unit) { state.loadAccount() }
-    val info = state.account
-    Card {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Мои устройства", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            if (info != null && info.devicesEnabled) {
-                Text(
-                    "${info.devices.size}" + if (info.deviceLimit > 0) " из ${info.deviceLimit}" else "",
-                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(8.dp))
-            }
-            if (state.accountLoading) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-            else Icon(Icons.Default.Refresh, "Обновить", Modifier.size(18.dp).clickable { state.loadAccount() }, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Spacer(Modifier.height(8.dp))
-        when {
-            info == null && !state.accountLoading -> Text("Не удалось загрузить список. Нажмите ↻, чтобы повторить", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            info == null -> {}
-            !info.devicesEnabled -> Text("Список устройств сейчас недоступен", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            info.devices.isEmpty() -> Text("Пока нет подключённых устройств", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else -> info.devices.forEach { d ->
-                val os = d.os.lowercase()
-                val icon = when {
-                    "ios" in os || "iphone" in d.model.lowercase() -> Icons.Outlined.PhoneIphone
-                    "android" in os -> Icons.Outlined.PhoneAndroid
-                    "windows" in os || "mac" in os || "linux" in os -> Icons.Outlined.Computer
-                    else -> Icons.Outlined.DevicesOther
-                }
-                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(36.dp).clip(CircleShape).background(Brand.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
-                        Icon(icon, null, Modifier.size(20.dp), tint = Brand)
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(d.model.ifEmpty { "Устройство" }, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            listOf(listOf(d.os, d.osVersion).filter { it.isNotEmpty() }.joinToString(" "), Account.appName(d.app))
-                                .filter { it.isNotEmpty() }.joinToString(" · "),
-                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Account.lastSeen(d.lastSeen)?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
-            }
-        }
-        if (info != null && info.devices.isNotEmpty()) {
-            Spacer(Modifier.height(4.dp))
-            Text("Чтобы отвязать лишнее устройство, напишите в поддержку.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+private fun PageTitle(title: String, action: (@Composable () -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        action?.invoke()
     }
 }
 
-/** Blocked account / maintenance, from the bot; click → support. */
+/** A scrolling page, 640 wide at most, in the middle. */
 @Composable
-private fun AccountBanner(state: AppState) {
-    val uri = LocalUriHandler.current
-    val text = when (state.account?.status) {
-        "BLOCKED" -> "Аккаунт заблокирован. Напишите в поддержку"
-        "MAINTENANCE" -> "Идут технические работы. Подключение может не работать"
-        else -> return
+private fun Page(content: @Composable ColumnScope.() -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(
+            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 16.dp),
+            content = content,
+        )
     }
-    Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Red.copy(alpha = 0.14f))
-            .clickable { uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL) }.padding(14.dp),
-    ) { Text(text, color = Red, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
 }
 
 @Composable
 private fun SubscriptionPage(state: AppState, sub: Subscription) {
     val uri = LocalUriHandler.current
+    val c = Palette.colors
     val info = sub.info
     // The cabinet in the app, signed in by the subscription's link (no email / Telegram login).
     var showCabinet by remember { mutableStateOf(false) }
+    var showDevices by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { state.loadAccount() }
     val cabinetLink = info.webPageUrl
     if (showCabinet && cabinetLink != null) {
         CabinetPage(cabinetLink, state.account?.let { it.devices.size to it.deviceLimit }) { showCabinet = false }
         return
     }
     val now = System.currentTimeMillis() / 1000
-    val active = info.expireAt <= 0 || info.expireAt > now
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        Column(
-            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("Подписка", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Card {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(9.dp).clip(CircleShape).background(if (active) Green else Red))
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (active) "Подписка активна" else "Подписка истекла", color = if (active) Green else Red, fontSize = 13.sp)
-                }
-                Text(expiryText(info.expireAt).replaceFirstChar { it.lowercase() }, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                if (info.expireAt > 0) Text("Осталось ${TimeUnit.SECONDS.toDays(info.expireAt - now).coerceAtLeast(0)} дн.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val active = isActive(info)
+    Page {
+        PageTitle("Подписка") {
+            CircleIconButton(Icons.Default.Refresh, "Обновить подписку", { state.refresh() }, spinning = state.busy, size = 42.dp)
+        }
+        Spacer(Modifier.height(8.dp))
+        TitanCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatusPill(if (active) "Подписка активна" else "Подписка истекла", if (active) c.green else Red)
+                Text(if (info.expireAt > 0) "до " + Fmt.date(info.expireAt) else "Бессрочно", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                if (info.expireAt > 0) Text("Осталось ${((info.expireAt - now) / 86400).coerceAtLeast(0)} дн.", color = c.secondary)
+                Text("Обновлено " + Fmt.ago(sub.fetchedAt), fontSize = 12.sp, color = c.tertiary)
             }
-            Card {
-                Text("Трафик на обходах", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(12.dp))
+        TitanCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Трафик на обходах", fontSize = 14.sp, color = c.secondary)
                 if (info.totalBytes > 0) {
-                    Text("${formatBytes(info.remainingBytes)} из ${formatBytes(info.totalBytes)}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { (info.remainingBytes.toFloat() / info.totalBytes).coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    Text("${formatBytes(info.remainingBytes)} из ${formatBytes(info.totalBytes)}", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    GradientBar(
+                        info.remainingBytes.toFloat() / info.totalBytes,
+                        if (info.remainingBytes * 10 < info.totalBytes) Brush.horizontalGradient(listOf(Orange, Red)) else Palette.accent,
                     )
-                } else Text("Безлимит", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(6.dp))
-                Text("На обычных серверах — безлимит", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(6.dp))
+                } else {
+                    Text("Безлимит", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                }
+                Text("На обычных серверах — безлимит", fontSize = 13.sp, color = c.secondary)
                 Text(
                     "Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты " +
                         "(белые списки) и обычные серверы не работают. Работают и по Wi‑Fi, например при раздаче интернета с телефона. " +
                         "Гигабайты списываются, пока вы подключены к обходу. Закончились ГБ — докупите в личном кабинете.",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp, color = c.secondary, lineHeight = 16.sp, modifier = Modifier.padding(top = 4.dp),
                 )
             }
-            DevicesCard(state)
-            Button(
-                { if (cabinetLink != null) showCabinet = true else uri.openUri(state.openCabinetUrl()) },
-                Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp),
-            ) {
-                Icon(Icons.Outlined.AccountCircle, null); Spacer(Modifier.width(8.dp)); Text("Личный кабинет", fontWeight = FontWeight.SemiBold)
-            }
-            Card {
-                Text("В личном кабинете", fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(6.dp))
-                listOf(
-                    Icons.Outlined.Autorenew to "Продление подписки",
-                    Icons.Outlined.DataUsage to "Докупка ГБ для обходов",
-                    Icons.Outlined.Loyalty to "Коды оплаты",
-                ).forEach { (icon, text) ->
-                    Row(Modifier.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(icon, null, Modifier.size(18.dp), tint = Brand); Spacer(Modifier.width(10.dp)); Text(text, fontSize = 14.sp)
-                    }
+        }
+        Spacer(Modifier.height(12.dp))
+        PrimaryButton(
+            "Личный кабинет",
+            { if (cabinetLink != null) showCabinet = true else uri.openUri(state.openCabinetUrl()) },
+            icon = Icons.Default.AccountCircle,
+        )
+        state.account?.takeIf { it.devicesEnabled }?.let { acc ->
+            Spacer(Modifier.height(12.dp))
+            TitanCard {
+                SettingsRow(Icons.Default.Devices, Brand, "Подключённые устройства", chevron = true, onClick = { showDevices = true }) {
+                    Text("${acc.devices.size}" + if (acc.deviceLimit > 0) " из ${acc.deviceLimit}" else "", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.secondary)
                 }
             }
-            // What the in-app cabinet can't do: the bot or the full cabinet on the site.
-            Card {
+        }
+        Spacer(Modifier.height(12.dp))
+        TitanCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("В личном кабинете", fontWeight = FontWeight.SemiBold)
+                Feature(Icons.Default.Autorenew, "Продление подписки")
+                Feature(Icons.Default.DataUsage, "Докупка ГБ для обходов")
+                Feature(Icons.Default.Loyalty, "Коды оплаты")
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        // What the in-app cabinet can't do: the bot or the full cabinet on the site.
+        TitanCard {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Расширенные функции", fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(6.dp))
                 Text(
                     "Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте " +
                         "или в полном кабинете на сайте (вход по почте или через Telegram).",
-                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp, color = c.secondary,
                 )
-                Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton({ uri.openUri(Config.TELEGRAM_URL) }, Modifier.weight(1f)) { Text("Открыть бота") }
+                    SecondaryButton("Открыть бота", { uri.openUri(Config.TELEGRAM_URL) }, Modifier.weight(1f), icon = Icons.AutoMirrored.Filled.Send)
                     cabinetLink?.let { runCatching { java.net.URI(it) }.getOrNull() }?.takeIf { it.host != null }?.let { site ->
-                        OutlinedButton({ uri.openUri("${site.scheme}://${site.host}/auth") }, Modifier.weight(1f)) { Text("Открыть сайт") }
+                        SecondaryButton("Открыть сайт", { uri.openUri("${site.scheme}://${site.host}/auth") }, Modifier.weight(1f), icon = Icons.Default.Language)
                     }
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
     }
+    if (showDevices) state.account?.let { DevicesDialog(it) { showDevices = false } }
 }
 
 @Composable
-private fun Card(content: @Composable ColumnScope.() -> Unit) {
-    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), content = content)
+private fun Feature(icon: ImageVector, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(20.dp), tint = Brand)
+        Spacer(Modifier.width(12.dp))
+        Text(text, fontSize = 15.sp)
+    }
+}
+
+/** The devices that used the key, and the limit (from the bot). */
+@Composable
+private fun DevicesDialog(account: Account.Info, onDismiss: () -> Unit) {
+    val uri = LocalUriHandler.current
+    val c = Palette.colors
+    TitanDialog(
+        onDismiss, "Устройства",
+        "Подключено ${account.devices.size}" + if (account.deviceLimit > 0) " из ${account.deviceLimit}" else "",
+        icon = Icons.Default.Devices, width = 480.dp,
+        buttons = {
+            SecondaryButton("Открыть бота", { uri.openUri(Config.TELEGRAM_URL) }, icon = Icons.AutoMirrored.Filled.Send)
+            SecondaryButton("Закрыть", onDismiss, tint = c.secondary)
+        },
+    ) {
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(c.background)) {
+            if (account.devices.isEmpty()) {
+                Text("Пока ни одного устройства", color = c.secondary, modifier = Modifier.padding(16.dp))
+            }
+            account.devices.forEachIndexed { i, d ->
+                if (i > 0) RowDivider(66.dp)
+                val os = d.os.lowercase()
+                val icon = when {
+                    "ios" in os || "iphone" in d.model.lowercase() -> Icons.Default.PhoneIphone
+                    "android" in os -> Icons.Default.PhoneAndroid
+                    else -> Icons.Default.Computer
+                }
+                val ours = Account.appName(d.app).startsWith("Titan VPS") && d.model.isNotEmpty() &&
+                    "windows" in os && Hwid.model().let { m -> m.isNotEmpty() && (d.model.contains(m, true) || m.contains(d.model, true)) }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconTile(icon, Brand, 38.dp)
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(d.model.ifEmpty { "Устройство" } + if (ours) " · это устройство" else "", fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOf(listOf(d.os, d.osVersion).filter { it.isNotEmpty() }.joinToString(" "), Account.appName(d.app))
+                                .filter { it.isNotEmpty() }.joinToString(" · "),
+                            fontSize = 12.sp, color = c.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        Account.lastSeen(d.lastSeen)?.let { Text("Активность: $it", fontSize = 12.sp, color = c.secondary) }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("Отвязать лишнее устройство или изменить лимит можно в боте.", fontSize = 12.sp, color = c.secondary, modifier = Modifier.padding(horizontal = 6.dp))
     }
 }
 
 // ------------------------------------------------------------------ settings
 
 @Composable
-private fun SettingsPage(state: AppState) {
+private fun SettingsPage(state: AppState, openSubscription: () -> Unit, openHome: () -> Unit) {
     val uri = LocalUriHandler.current
+    val c = Palette.colors
     var confirmLogout by remember { mutableStateOf(false) }
+    var confirmReset by remember { mutableStateOf(false) }
+    var about by remember { mutableStateOf(false) }
     var showApps by remember { mutableStateOf(false) }
     var showTech by remember { mutableStateOf(false) }
     if (showApps) { AppsPage(state) { showApps = false; state.applyExclusions() }; return }
     if (showTech) { TechModePage(state) { showTech = false }; return }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        Column(
-            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("Настройки", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Card {
-                Text("Оформление", fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(3.dp)) {
-                    listOf("system" to "Системная", "light" to "Светлая", "dark" to "Тёмная").forEach { (v, t) ->
-                        val sel = state.theme == v
-                        Box(
-                            Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(if (sel) Brand else Color.Transparent)
-                                .clickable { state.changeTheme(v) }.padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center,
-                        ) { Text(t, color = if (sel) Color.White else MaterialTheme.colorScheme.onSurface, fontSize = 13.sp) }
-                    }
-                }
-            }
-            Card {
-                Text("Режим подключения", fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(3.dp)) {
-                    listOf("tun" to "Весь компьютер (TUN)", "proxy" to "Системный прокси").forEach { (v, t) ->
-                        val sel = state.mode == v
-                        Box(
-                            Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(if (sel) Brand else Color.Transparent)
-                                .clickable { state.changeMode(v) }.padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center,
-                        ) { Text(t, color = if (sel) Color.White else MaterialTheme.colorScheme.onSurface, fontSize = 13.sp) }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
+    Page {
+        PageTitle("Настройки")
+        state.subscription?.let { AccountCard(state, it, openSubscription) }
+
+        SectionTitle("Оформление")
+        TitanCard {
+            OptionTiles(
+                listOf(
+                    Triple("system", "Системная", Icons.Default.SettingsBrightness),
+                    Triple("light", "Светлая", Icons.Default.LightMode),
+                    Triple("dark", "Тёмная", Icons.Default.DarkMode),
+                ),
+                state.theme, state::changeTheme,
+            )
+        }
+
+        SectionTitle("Подключение")
+        TitanCard {
+            SettingsRow(Icons.Default.Dns, Brand, "Сервер", chevron = true, onClick = openHome) {
                 Text(
-                    if (state.mode == "tun")
-                        "Через VPN идёт весь трафик компьютера: браузеры, игры, Discord, торренты. Нужны права администратора — " +
-                            "Windows спросит при включении. Отдельные программы можно пустить мимо VPN."
-                    else
-                        "Через VPN идут браузеры и программы, которые используют системный прокси. Игры и часть приложений " +
-                            "его не используют — для них выберите «Весь компьютер».",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    state.selected?.let { ServerGroups.splitFlag(it.name).second } ?: "Автоматически",
+                    fontSize = 15.sp, color = c.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp),
                 )
-                if (state.mode == "tun") {
-                    Spacer(Modifier.height(6.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    SettingsRow(
-                        "Раздельное туннелирование" +
-                            (if (state.appsMode == "only") " · только выбранные" else "") +
-                            (if (state.pickedApps.isNotEmpty()) " · ${state.pickedApps.size}" else ""),
-                    ) { showApps = true }
-                }
             }
-            Card {
-                Text("Запуск", fontWeight = FontWeight.SemiBold)
-                SettingsToggle(
-                    "Автоподключение",
-                    "VPN включится сам при запуске приложения",
-                    state.autoConnect,
-                ) { state.changeAutoConnect(it) }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                SettingsToggle(
-                    "Запускать вместе с Windows",
-                    if (state.mode == "tun") "С правами администратора, без запроса при входе — если включить из режима TUN" else "Приложение откроется при входе в Windows",
-                    state.autostart,
-                ) { state.changeAutostart(it) }
+            RowDivider()
+            ToggleRow(
+                Icons.Default.Bolt, c.green, "Автоподключение", "VPN включится сам при запуске приложения",
+                state.autoConnect, state::changeAutoConnect,
+            )
+            RowDivider()
+            ToggleRow(
+                Icons.Default.PowerSettingsNew, Violet, "Запускать вместе с Windows",
+                if (state.mode == "tun") "С правами администратора, без запроса при входе — если включить из режима TUN" else "Приложение откроется при входе в Windows",
+                state.autostart, state::changeAutostart,
+            )
+            RowDivider()
+            ToggleRow(
+                Icons.Default.NotificationsActive, Orange, "Напоминания",
+                "За 3 дня и за день до конца подписки и когда на обходах кончается трафик",
+                state.reminders, state::changeReminders,
+            )
+        }
+
+        SectionTitle("Режим подключения")
+        TitanCard {
+            OptionTiles(
+                listOf(
+                    Triple("tun", "Весь компьютер", Icons.Default.Computer),
+                    Triple("proxy", "Системный прокси", Icons.Default.Language),
+                ),
+                state.mode, state::changeMode,
+            )
+            Text(
+                if (state.mode == "tun")
+                    "Через VPN идёт весь трафик компьютера: браузеры, игры, Discord, торренты. Нужны права администратора — " +
+                        "Windows спросит при включении. Отдельные программы можно пустить мимо VPN."
+                else
+                    "Через VPN идут браузеры и программы, которые используют системный прокси. Игры и часть приложений " +
+                        "его не используют — для них выберите «Весь компьютер».",
+                fontSize = 12.sp, color = c.secondary, lineHeight = 16.sp,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+            )
+            if (state.mode == "tun") {
+                RowDivider(0.dp)
+                SettingsRow(
+                    Icons.Default.CallSplit, Brand, "Раздельное туннелирование",
+                    (if (state.appsMode == "only") "Только выбранные программы через VPN" else "Выбранные программы мимо VPN") +
+                        if (state.pickedApps.isNotEmpty()) " · ${state.pickedApps.size}" else "",
+                    chevron = true, onClick = { showApps = true },
+                )
             }
-            Card {
-                SettingsRow("Обновить подписку") { state.refresh() }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                SettingsRow("Обновление приложения") { state.checkUpdate() }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                SettingsRow("Папка с логами") { runCatching { java.awt.Desktop.getDesktop().open(AppPaths.logDir) } }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                SettingsRow("Поддержка") { uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL) }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                SettingsRow(if (confirmLogout) "Точно выйти? Нажмите ещё раз" else "Выйти из аккаунта", danger = true) {
-                    if (confirmLogout) state.logout() else confirmLogout = true
-                }
+        }
+
+        SectionTitle("Приложение")
+        TitanCard {
+            SettingsRow(Icons.Default.Headphones, Brand, "Поддержка", "Ответим в Telegram", onClick = {
+                uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL)
+            }) { Icon(Icons.AutoMirrored.Filled.OpenInNew, null, Modifier.size(16.dp), tint = c.tertiary) }
+            RowDivider()
+            SettingsRow(
+                Icons.Default.Refresh, c.green, "Обновить подписку", state.subscription?.let { "Обновлено " + Fmt.ago(it.fetchedAt) },
+                onClick = { if (!state.busy) state.refresh() },
+            ) { if (state.busy) Spinner(18.dp) }
+            RowDivider()
+            SettingsRow(Icons.Default.SystemUpdate, Brand, "Обновление приложения", "Новая версия скачивается через VPN", chevron = true, onClick = { state.checkUpdate() })
+            RowDivider()
+            SettingsRow(Icons.Default.Folder, Color.Gray, "Папка с логами", chevron = true, onClick = {
+                runCatching { java.awt.Desktop.getDesktop().open(AppPaths.logDir) }
+            })
+            RowDivider()
+            SettingsRow(Icons.Default.Info, Violet, "О приложении", chevron = true, onClick = { about = true })
+            RowDivider()
+            // 7 clicks on the version open the hidden «Технический режим» (TechMode.kt).
+            TechModeRows(state) { showTech = true }
+        }
+
+        Spacer(Modifier.height(18.dp))
+        TitanCard {
+            SettingsRow(Icons.Default.RestartAlt, Orange, "Сброс настроек", onClick = { confirmReset = true })
+            RowDivider()
+            SettingsRow(Icons.AutoMirrored.Filled.Logout, Red, "Выйти из аккаунта", titleColor = Red, onClick = { confirmLogout = true })
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+    if (about) AboutDialog(state) { about = false }
+    if (confirmReset) TitanDialog(
+        { confirmReset = false }, "Сбросить настройки?",
+        "Тема, избранное, автоподключение и выбранный сервер вернутся к исходным. Ключ останется.",
+        icon = Icons.Default.RestartAlt, iconColor = Orange,
+        buttons = {
+            PrimaryButton("Сбросить", { confirmReset = false; state.resetSettings() }, height = 48.dp)
+            SecondaryButton("Отмена", { confirmReset = false }, tint = c.secondary)
+        },
+    )
+    if (confirmLogout) TitanDialog(
+        { confirmLogout = false }, "Выйти из аккаунта?",
+        "VPN отключится, ключ нужно будет вставить заново.",
+        icon = Icons.AutoMirrored.Filled.Logout, iconColor = Red,
+        buttons = {
+            SecondaryButton("Выйти", { confirmLogout = false; state.logout() }, tint = Red, height = 48.dp)
+            SecondaryButton("Отмена", { confirmLogout = false }, tint = c.secondary)
+        },
+    )
+}
+
+/** Who this is: the subscription's state and devices; a click opens Подписка. */
+@Composable
+private fun AccountCard(state: AppState, sub: Subscription, openSubscription: () -> Unit) {
+    val c = Palette.colors
+    val active = isActive(sub.info)
+    val shape = RoundedCornerShape(20.dp)
+    var hovered by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp).clip(shape).background(c.surface)
+            .border(1.dp, Brand.copy(alpha = if (hovered) 0.45f else 0.25f), shape)
+            .press(scale = 0.98f, onHover = { hovered = it }, onClick = openSubscription).padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(60.dp).clip(RoundedCornerShape(16.dp)).background(c.track), contentAlignment = Alignment.Center) {
+            Image(painterResource("logo.png"), null, Modifier.size(44.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Titan VPS", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(if (active) c.green else Red))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (!active) "Подписка истекла" else if (sub.info.expireAt > 0) "Активна до " + Fmt.date(sub.info.expireAt) else "Подписка бессрочная",
+                    fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (active) c.text else Red,
+                )
             }
-            // 7 taps open the hidden «Технический режим» (TechMode.kt).
-            TechModeEntry(state) { showTech = true }
+            state.account?.takeIf { it.devicesEnabled }?.let { acc ->
+                Text("Устройства: ${acc.devices.size}" + if (acc.deviceLimit > 0) " из ${acc.deviceLimit}" else "", fontSize = 13.sp, color = c.secondary)
+            }
+        }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(22.dp), tint = c.tertiary)
+    }
+}
+
+/** Системная / Светлая / Тёмная (or the connection modes) as tiles; the picked one in the gradient. */
+@Composable
+private fun OptionTiles(options: List<Triple<String, String, ImageVector>>, selected: String, onSelect: (String) -> Unit) {
+    val c = Palette.colors
+    Row(Modifier.fillMaxWidth().padding(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEach { (id, title, icon) ->
+            val on = id == selected
+            val shape = RoundedCornerShape(14.dp)
+            var hovered by remember { mutableStateOf(false) }
+            val color by animateColorAsState(if (on) Color.White else if (hovered) c.text else c.secondary)
+            Column(
+                Modifier.weight(1f).heightIn(min = 66.dp)
+                    .then(
+                        if (on) Modifier.shadow(4.dp, shape, ambientColor = Brand.copy(alpha = 0.35f), spotColor = Brand.copy(alpha = 0.4f)).clip(shape).background(Palette.accent)
+                        else Modifier.clip(shape).background(if (hovered) c.track else Color.Transparent)
+                    )
+                    .press(scale = 0.95f, onHover = { hovered = it }) { if (!on) onSelect(id) }
+                    .padding(vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+            ) {
+                Icon(icon, null, Modifier.size(20.dp), tint = color)
+                Spacer(Modifier.height(6.dp))
+                Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = color, maxLines = 1)
+            }
         }
     }
 }
 
+/** О приложении: the logo, the version and where to write. */
 @Composable
-private fun SettingsToggle(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(title)
-            Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun AboutDialog(state: AppState, onDismiss: () -> Unit) {
+    val uri = LocalUriHandler.current
+    TitanDialog(
+        onDismiss, "Titan VPS", "Версия ${System.getProperty("jpackage.app-version") ?: "dev"}",
+        width = 380.dp,
+        header = { GlowingLogo(84.dp) },
+        buttons = {
+            PrimaryButton("Telegram-бот", { uri.openUri(Config.TELEGRAM_URL) }, icon = Icons.AutoMirrored.Filled.Send)
+            SecondaryButton("Поддержка", { uri.openUri(state.subscription?.info?.supportUrl ?: Config.TELEGRAM_URL) }, icon = Icons.Default.Headphones)
+            SecondaryButton("Закрыть", onDismiss, tint = Palette.colors.secondary)
+        },
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            Row(
+                Modifier.clip(CircleShape).background(Brand.copy(alpha = 0.12f)).padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Memory, null, Modifier.size(16.dp), tint = Brand)
+                Spacer(Modifier.width(6.dp))
+                Text("Ядро Xray", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Brand)
+            }
         }
-        Spacer(Modifier.width(12.dp))
-        androidx.compose.material3.Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 
+/** TUN mode: programs that bypass the VPN, or the only ones that use it; running ones + any .exe picked by hand. */
 @Composable
-private fun SettingsRow(title: String, danger: Boolean = false, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, Modifier.weight(1f), color = if (danger) Red else MaterialTheme.colorScheme.onSurface)
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun AppsPage(state: AppState, onBack: () -> Unit) {
+    val c = Palette.colors
+    var apps by remember { mutableStateOf<List<RunningApps.App>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { apps = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { RunningApps.list() } }
+    val excluded = state.pickedApps
+    val only = state.appsMode == "only"
+    // Picked ones first (also those not running now), then the running ones.
+    val rows = (excluded.sortedBy { it.lowercase() }.map { e -> apps.firstOrNull { it.exe.equals(e, true) } ?: RunningApps.App(e, "") } +
+        apps.filter { a -> excluded.none { it.equals(a.exe, true) } })
+        .filter { query.isBlank() || query.trim().lowercase() in it.exe.lowercase() }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(Modifier.widthIn(max = 700.dp).fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircleIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Назад", onBack, size = 40.dp)
+                Spacer(Modifier.width(12.dp))
+                Text("Раздельное туннелирование", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            }
+            SegmentedTabs(
+                listOf("Все, кроме выбранных" to Icons.Default.CallSplit, "Только выбранные" to Icons.Default.AppRegistration),
+                if (only) 1 else 0,
+                { state.changeAppsMode(if (it == 1) "only" else "exclude") },
+            )
+            Text(
+                (if (only) "Через VPN идут только отмеченные программы. Остальные — напрямую, мимо VPN."
+                else "Отмеченные программы идут в интернет напрямую, мимо VPN. Остальные — через VPN.") +
+                    " Изменения применятся при выходе с этой страницы.",
+                fontSize = 12.sp, color = c.secondary, modifier = Modifier.padding(horizontal = 6.dp),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                SearchField(query, { query = it }, Modifier.weight(1f))
+                SecondaryButton("Добавить .exe", {
+                    val fd = java.awt.FileDialog(null as java.awt.Frame?, "Выберите программу", java.awt.FileDialog.LOAD)
+                    fd.setFilenameFilter { _, name -> name.endsWith(".exe", true) }
+                    fd.file = "*.exe"
+                    fd.isVisible = true
+                    fd.file?.let { state.setAppPicked(it, true) }
+                }, Modifier.width(170.dp), icon = Icons.Default.Add, height = 42.dp)
+            }
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
+                items(rows, key = { it.exe.lowercase() }) { app ->
+                    val on = excluded.any { it.equals(app.exe, true) }
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(c.surface)
+                            .rowClick { state.setAppPicked(app.exe, !on) }.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconTile(Icons.Default.AppRegistration, if (on) Brand else Color.Gray, 34.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(app.exe, fontWeight = FontWeight.Medium)
+                            if (app.path.isNotEmpty()) Text(app.path, fontSize = 11.sp, color = c.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        TitanSwitch(on, { state.setAppPicked(app.exe, it) })
+                    }
+                }
+            }
+        }
     }
 }
