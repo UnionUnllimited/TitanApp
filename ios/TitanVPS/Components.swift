@@ -64,6 +64,15 @@ struct SecondaryButtonStyle: ButtonStyle {
     }
 }
 
+/// A button that acts on a tap only: one in a swipeable row isn't pressed by the swipe.
+struct TapOnlyButtonStyle: PrimitiveButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .onTapGesture { configuration.trigger() }
+    }
+}
+
 /// A row in a card: highlighted while pressed, like a list row.
 struct RowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -553,6 +562,7 @@ struct SwipeActions<Content: View>: View {
     @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.32, dampingFraction: 0.8)))
     private var dragging: DragState? = nil
     @State private var axis: AxisLock?
+    @State private var held = false
     private let mark: CGFloat = 84
 
     private var offset: CGFloat {
@@ -578,7 +588,11 @@ struct SwipeActions<Content: View>: View {
             .onChange(of: abs(dx) >= mark) { armed in
                 if armed, dragging != nil { Haptics.tap(.medium) }
             }
-            .onChange(of: dragging?.horizontal == true) { onHold($0) }
+            .onChange(of: dragging?.horizontal == true) { holding in
+                held = holding
+                onHold(holding)
+            }
+            .onDisappear { if held { held = false; onHold(false) } }
             .accessibilityActions {
                 if let right { Button(right.title, action: right.perform) }
                 if let left { Button(left.title, action: left.perform) }

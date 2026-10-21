@@ -22,7 +22,7 @@ final class TrafficMonitor: ObservableObject {
     /// The last [window] seconds, for the chart.
     @Published private(set) var history: [Sample] = []
 
-    static let tunnelAddress = "172.19.0.1"
+    nonisolated static let tunnelAddress = "172.19.0.1"
     static let window = 60
 
     private var last: (name: String, down: UInt32, up: UInt32, at: Date)?
@@ -45,6 +45,8 @@ final class TrafficMonitor: ObservableObject {
         last = nil
         down = 0
         up = 0
+        // Back on Главная later: the curve starts fresh, not with a minute from before.
+        history = []
     }
 
     /// A new connection: the chart and the totals start over.
@@ -61,7 +63,9 @@ final class TrafficMonitor: ObservableObject {
         guard let now = Self.counters() else { return }
         let date = Date()
         defer { last = (now.name, now.down, now.up, date) }
-        guard let prev = last, prev.name == now.name else {
+        // A new tunnel interface, or a long gap (the app was in the background): start over.
+        guard let prev = last, prev.name == now.name, date.timeIntervalSince(prev.at) < 3 else {
+            if last != nil { history = [] }
             // First look (or a new tunnel interface): what it counted so far is this session.
             sessionDown = UInt64(now.down)
             sessionUp = UInt64(now.up)
@@ -139,7 +143,7 @@ struct SpeedBackdrop: View {
         }
         .chartXAxis(.hidden)
         .chartYAxis(.hidden)
-        .chartXScale(domain: (lastId - TrafficMonitor.window + 1)...max(lastId, TrafficMonitor.window))
+        .chartXScale(domain: (lastId - TrafficMonitor.window + 1)...lastId)
         .chartYScale(domain: 0...(top * 1.2))
         .animation(.easeOut(duration: 0.35), value: monitor.history.last?.id)
         .allowsHitTesting(false)

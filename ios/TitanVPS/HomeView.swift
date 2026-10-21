@@ -12,8 +12,9 @@ struct HomeView: View {
     @State private var wifiInfo = false
     /// The Выкл | Вкл knob or a server row is being dragged sideways: the page stays still.
     @State private var holdingDrag = false
-    /// Speed and traffic while connected (read only while Главная is on screen).
-    @StateObject private var traffic = TrafficMonitor()
+    /// Speed while connected (read only while Главная is on screen). Held without observing it:
+    /// only the speed line and the curve redraw each second, not all of Главная.
+    @State private var traffic = TrafficMonitor()
     @Environment(\.openURL) private var openURL
     var openSubscription: () -> Void
     var openSettings: () -> Void
@@ -31,7 +32,9 @@ struct HomeView: View {
                                 .padding(16)
                         }
                         .scrollDisabled(holdingDrag)
-                        ScrollView { VStack(spacing: 10) { list }.padding(16) }.refreshable { await store.refreshFromPull() }
+                        ScrollView { VStack(spacing: 10) { list }.padding(16) }
+                            .scrollDisabled(holdingDrag)
+                            .refreshable { await store.refreshFromPull() }
                     }
                 } else {
                     ScrollView {
@@ -55,12 +58,7 @@ struct HomeView: View {
         .onAppear { if vpn.isConnected { traffic.start() } }
         .onDisappear { traffic.stop() }
         .onChange(of: vpn.isConnected) { connected in
-            if connected {
-                traffic.reset()
-                traffic.start()
-            } else {
-                traffic.stop()
-            }
+            if connected { traffic.start() } else { traffic.stop() }
         }
         .alert("Недоступно на Wi-Fi", isPresented: $wifiInfo) {
             Button("Понятно", role: .cancel) {}
@@ -552,7 +550,7 @@ struct ServerRow: View {
                     .frame(minWidth: 44, minHeight: 44)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TapOnlyButtonStyle())
                 ZStack {
                     Circle().stroke(selected ? Palette.primary : Palette.outline, lineWidth: selected ? 2 : 1.5)
                     if selected { Circle().fill(Palette.primary).frame(width: 13, height: 13) }
@@ -566,7 +564,7 @@ struct ServerRow: View {
             .opacity(unsupported || locked ? 0.45 : 1)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TapOnlyButtonStyle())
     }
 
     static func color(_ ms: Int) -> Color {

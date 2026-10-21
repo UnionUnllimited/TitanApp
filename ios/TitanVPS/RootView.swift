@@ -10,6 +10,7 @@ struct RootView: View {
     @State private var splash = true
     /// The phone's text size: the screens are built again when it changes (Font.scaled).
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -45,7 +46,22 @@ struct RootView: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: store.toast)
         // Проверить соединение: once right after connecting; the old result goes with the connection.
         .onChange(of: vpn.state) { state in
-            if case .connected = state { store.checkConnection(auto: true) } else { store.resetCheck() }
+            if case .connected = state {
+                store.checkConnection(auto: true)
+                Task { await Reminders.askOnce(for: store.subscription?.info) }
+            } else {
+                store.resetCheck()
+            }
+        }
+        // A tap on a reminder: Подписка.
+        .onReceive(NotificationCenter.default.publisher(for: Reminders.openSubscription)) { _ in
+            if store.subscription != nil { tab = .subscription }
+        }
+        // Back in the app after a while: the subscription again (renewed in the bot meanwhile?),
+        // which also moves the reminders.
+        .onChange(of: scenePhase) { phase in
+            guard phase == .active, let sub = store.subscription, Date().timeIntervalSince(sub.fetchedAt) > 1800 else { return }
+            Task { await store.refresh(quiet: true) }
         }
         .task {
             try? await Task.sleep(nanoseconds: 900_000_000)
@@ -96,6 +112,8 @@ struct SplashView: View {
 struct WelcomeView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var vpn: VPNController
+    /// Read so that a text size change redraws it (Font.scaled).
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var key = ""
     @State private var appeared = false
     @FocusState private var editing: Bool

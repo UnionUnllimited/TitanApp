@@ -9,8 +9,27 @@ enum Reminders {
     private static let expiryIds = ["titan.expiry.3d", "titan.expiry.1d"]
     /// The traffic total the "running out" note was shown for (once per paid amount).
     private static let warnedKey = "titan.trafficWarned"
+    private static let askedKey = "titan.remindersAsked"
+    /// A tap on a reminder opens Подписка (RootView listens).
+    static let openSubscription = Notification.Name("titan.openSubscription")
 
     static var enabled: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+
+    /// May notify now (without asking).
+    static func authorized() async -> Bool {
+        switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
+        case .authorized, .provisional, .ephemeral: return true
+        default: return false
+        }
+    }
+
+    /// Asked once, after the first connection (not during the key entry, next to the VPN prompt).
+    static func askOnce(for info: SubscriptionInfo?) async {
+        let defaults = UserDefaults.standard
+        guard enabled, !defaults.bool(forKey: askedKey) else { return }
+        defaults.set(true, forKey: askedKey)
+        if await allowed(), let info { await update(for: info) }
+    }
 
     /// Asks the first time; false when notifications are off for the app.
     static func allowed() async -> Bool {
@@ -25,7 +44,7 @@ enum Reminders {
     static func update(for info: SubscriptionInfo) async {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: expiryIds)
-        guard enabled, await allowed() else { return }
+        guard enabled, await authorized() else { return }
         if info.expire > 0 {
             let end = Date(timeIntervalSince1970: TimeInterval(info.expire))
             for (id, days) in zip(expiryIds, [3, 1]) {
@@ -35,9 +54,7 @@ enum Reminders {
                 guard let fire = Calendar.current.date(from: when), fire > Date(), fire < end else { continue }
                 let content = UNMutableNotificationContent()
                 content.title = "Подписка Titan VPS"
-                content.body = days == 1
-                    ? "Подписка заканчивается завтра. Продлите её в личном кабинете, чтобы VPN не отключился."
-                    : "Подписка закончится через 3 дня. Продлите её заранее в личном кабинете."
+                content.body = "Подписка закончится \(endText(end)). Если ещё не продлили — продлите в личном кабинете, чтобы VPN не отключился."
                 content.sound = .default
                 let request = UNNotificationRequest(identifier: id, content: content,
                                                     trigger: UNCalendarNotificationTrigger(dateMatching: when, repeats: false))
@@ -60,9 +77,23 @@ enum Reminders {
         }
     }
 
+    /// "13 июля в 00:30" in the phone's time zone.
+    private static func endText(_ end: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "d MMMM 'в' HH:mm"
+        return f.string(from: end)
+    }
+
     /// The switch turned off: nothing more comes.
     static func cancelAll() {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: expiryIds + ["titan.traffic"])
+    }
+
+    /// Signed out: no reminders for a subscription that isn't here any more.
+    static func reset() {
+        cancelAll()
+        UserDefaults.standard.removeObject(forKey: warnedKey)
     }
 }
 
@@ -73,5 +104,11 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        DispatchQueue.main.async { NotificationCenter.default.post(name: Reminders.openSubscription, object: nil) }
+        completionHandler()
     }
 }

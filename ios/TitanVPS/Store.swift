@@ -194,6 +194,7 @@ final class AppStore: ObservableObject {
     }
 
     func logout() {
+        Reminders.reset()
         subscription = nil
         account = nil
         pings = [:]
