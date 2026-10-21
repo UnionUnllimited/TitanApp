@@ -396,37 +396,22 @@ struct HomeView: View {
                     .font(.scaled(13)).foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
             }
+            // Read once for the list, not per row.
+            let selectedId = store.selected?.id
+            let wifiLock = store.bypassLockedOnWifi
             // Favourites first, in the subscription's order otherwise.
             let items = groups[page] ?? groups[.servers] ?? []
             ForEach(ServerGroup.ordered(items, favorites: store.favorites)) { s in
-                let locked = store.blockedOnWifi(s)
-                let favorite = store.isFavorite(s)
-                // Swipe right: favourite (or not any more); swipe left: ping this one.
-                SwipeActions(
-                    right: SwipeAction(icon: favorite ? "star.slash.fill" : "star.fill",
-                                       title: favorite ? "Убрать" : "В избранное", color: .orange) {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { store.toggleFavorite(s) }
-                    },
-                    left: SwipeAction(icon: "speedometer", title: "Пинг", color: Palette.primary) { store.pingOne(s) },
-                    onHold: { holdingDrag = $0 }
-                ) {
-                    ServerRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
-                              unsupported: Plugins.endpoint(s).map { !$0.kind.supportedOnIOS } ?? false,
-                              onPing: { store.pingOne(s) }, error: techMode ? store.pingErrors[s.id] : nil, limited: page == .bypass && ServerGroup.isLimited(s),
-                              favorite: favorite, locked: locked,
-                              selected: s.id == store.selected?.id) {
-                        if locked { Haptics.warning(); wifiInfo = true; return }
-                        pick(s)
-                    }
-                }
-                .contextMenu {
-                    Button { pick(s) } label: { Label("Выбрать", systemImage: "checkmark.circle") }
-                        .disabled(locked)
-                    Button { store.pingOne(s) } label: { Label("Пинг", systemImage: "speedometer") }
-                    Button { store.toggleFavorite(s) } label: {
-                        store.isFavorite(s) ? Label("Убрать из избранного", systemImage: "star.slash") : Label("В избранное", systemImage: "star")
-                    }
-                }
+                // As store.blockedOnWifi(s).
+                let locked = wifiLock && ServerGroup.isBypass(s)
+                ServerListRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
+                              unsupported: store.unsupported.contains(s.id), error: techMode ? store.pingErrors[s.id] : nil,
+                              limited: page == .bypass && ServerGroup.isLimited(s), favorite: store.isFavorite(s),
+                              locked: locked, selected: s.id == selectedId,
+                              onPick: { pick(s) }, onLocked: { Haptics.warning(); wifiInfo = true },
+                              onPing: { store.pingOne(s) }, onFavorite: { store.toggleFavorite(s) },
+                              onHold: { holdingDrag = $0 })
+                    .equatable()
             }
         }
     }
@@ -485,6 +470,57 @@ struct HomeView: View {
             .overlay(RoundedRectangle(cornerRadius: 13).stroke(selected ? Palette.primary.opacity(0.35) : .clear))
         }
         .buttonStyle(PressableStyle(scale: 0.97))
+    }
+}
+
+/// One server's row in Главная's list: a ping result redraws only its own row (Equatable on
+/// what it shows; the actions are left out). Nothing here observes the store, or every change
+/// would redraw it anyway.
+struct ServerListRow: View, Equatable {
+    let server: Server
+    let ping: Int?
+    let pending, unsupported: Bool
+    let error: String?
+    let limited, favorite, locked, selected: Bool
+    let onPick: () -> Void
+    let onLocked: () -> Void
+    let onPing: () -> Void
+    let onFavorite: () -> Void
+    let onHold: (Bool) -> Void
+
+    // An older row's actions do the same: they capture only the store and the VPN, the server
+    // (compared here) and HomeView's @State, which all its copies share.
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.server == b.server && a.ping == b.ping && a.pending == b.pending && a.unsupported == b.unsupported
+            && a.error == b.error && a.limited == b.limited && a.favorite == b.favorite
+            && a.locked == b.locked && a.selected == b.selected
+    }
+
+    var body: some View {
+        // Swipe right: favourite (or not any more); swipe left: ping this one.
+        SwipeActions(
+            right: SwipeAction(icon: favorite ? "star.slash.fill" : "star.fill",
+                               title: favorite ? "Убрать" : "В избранное", color: .orange) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { onFavorite() }
+            },
+            left: SwipeAction(icon: "speedometer", title: "Пинг", color: Palette.primary, perform: onPing),
+            onHold: onHold
+        ) {
+            ServerRow(server: server, ping: ping, pending: pending, unsupported: unsupported,
+                      onPing: onPing, error: error, limited: limited, favorite: favorite, locked: locked,
+                      selected: selected) {
+                if locked { onLocked(); return }
+                onPick()
+            }
+        }
+        .contextMenu {
+            Button(action: onPick) { Label("Выбрать", systemImage: "checkmark.circle") }
+                .disabled(locked)
+            Button(action: onPing) { Label("Пинг", systemImage: "speedometer") }
+            Button(action: onFavorite) {
+                favorite ? Label("Убрать из избранного", systemImage: "star.slash") : Label("В избранное", systemImage: "star")
+            }
+        }
     }
 }
 

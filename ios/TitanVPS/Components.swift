@@ -385,22 +385,31 @@ enum Fmt {
         formatBytes(Int64(clamping: count))
     }
 
-    /// "13 июля 2027"; "Бессрочно" for no expiry.
-    static func date(_ unix: Int64) -> String {
-        guard unix > 0 else { return "Бессрочно" }
+    // Made once: the screens call these on every redraw (on the main thread).
+    private static let dayFormat: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ru_RU")
         f.dateFormat = "d MMMM yyyy"
-        return f.string(from: Date(timeIntervalSince1970: TimeInterval(unix)))
+        return f
+    }()
+
+    private static let relative: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.unitsStyle = .full
+        return f
+    }()
+
+    /// "13 июля 2027"; "Бессрочно" for no expiry.
+    static func date(_ unix: Int64) -> String {
+        guard unix > 0 else { return "Бессрочно" }
+        return dayFormat.string(from: Date(timeIntervalSince1970: TimeInterval(unix)))
     }
 
     /// "только что", "5 минут назад".
     static func ago(_ date: Date, now: Date = Date()) -> String {
         guard now.timeIntervalSince(date) >= 60 else { return "только что" }
-        let f = RelativeDateTimeFormatter()
-        f.locale = Locale(identifier: "ru_RU")
-        f.unitsStyle = .full
-        return f.localizedString(for: date, relativeTo: now)
+        return relative.localizedString(for: date, relativeTo: now)
     }
 
     /// 🇫🇮 from "FI".

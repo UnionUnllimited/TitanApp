@@ -143,10 +143,7 @@ struct SubscriptionView: View {
 
     private func expiry(_ expire: Int64) -> String {
         guard expire > 0 else { return "Бессрочно" }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ru_RU")
-        f.dateFormat = "d MMMM yyyy"
-        return "до " + f.string(from: Date(timeIntervalSince1970: TimeInterval(expire)))
+        return "до " + Fmt.date(expire)
     }
 }
 

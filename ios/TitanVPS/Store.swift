@@ -5,7 +5,7 @@ import UserNotifications
 
 @MainActor
 final class AppStore: ObservableObject {
-    @Published var subscription: Subscription?
+    @Published var subscription: Subscription? { didSet { indexServers() } }
     @Published var selectedId: String?
     @Published var busy = false
     @Published var message: String?
@@ -30,6 +30,10 @@ final class AppStore: ObservableObject {
     @Published private(set) var favorites: Set<String> = []
     /// On Wi-Fi: bypass servers (Обходы) work only over mobile internet.
     @Published private(set) var onWifi = false
+    /// Servers the iPhone app can't run yet, by id: worked out once per subscription (it parses
+    /// each server's whole config), not on every redraw of Главная. Changes only with
+    /// `subscription`, which publishes it.
+    private(set) var unsupported: Set<String> = []
 
     /// Set by the app: pings turn the VPN off while they run and back on after.
     weak var vpn: VPNController?
@@ -56,6 +60,8 @@ final class AppStore: ObservableObject {
            let sub = try? JSONDecoder().decode(Subscription.self, from: data) {
             subscription = sub
         }
+        // A class's own init doesn't run didSet.
+        indexServers()
         selectedId = UserDefaults.standard.string(forKey: selKey)
         favorites = Set(UserDefaults.standard.stringArray(forKey: favKey) ?? [])
         pathMonitor.pathUpdateHandler = { [weak self] path in
@@ -71,6 +77,12 @@ final class AppStore: ObservableObject {
     /// Support: the subscription's support-url, else the bot.
     var supportURL: URL {
         subscription?.info.supportUrl.flatMap { URL(string: $0) }.flatMap { $0.scheme == nil ? nil : $0 } ?? Config.telegram
+    }
+
+    private func indexServers() {
+        unsupported = Set((subscription?.servers ?? []).filter { s in
+            Plugins.endpoint(s).map { !$0.kind.supportedOnIOS } ?? false
+        }.map(\.id))
     }
 
     func isFavorite(_ s: Server) -> Bool { favorites.contains(s.name) }

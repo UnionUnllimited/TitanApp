@@ -74,14 +74,14 @@ final class VPNController: ObservableObject {
     }
 
     private func update() {
-        guard let connection = manager?.connection else { state = .off; return }
+        guard let connection = manager?.connection else { set(.off); return }
         let wasConnecting = state == .connecting
         switch connection.status {
-        case .connected: state = .connected(since: connection.connectedDate ?? Date())
-        case .connecting, .reasserting: state = .connecting
-        case .disconnecting: state = .disconnecting
+        case .connected: set(.connected(since: connection.connectedDate ?? Date()))
+        case .connecting, .reasserting: set(.connecting)
+        case .disconnecting: set(.disconnecting)
         default:
-            if case .error = state {} else { state = .off }
+            if case .error = state {} else { set(.off) }
             // It fell while starting: show the tunnel's reason instead of a plain "Не подключено".
             if wasConnecting {
                 connection.fetchLastDisconnectError { [weak self] error in
@@ -95,6 +95,12 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /// Status notifications come for any VPN and again for the same status (a ping's pause and
+    /// its resume send many): the same state again doesn't redraw every screen.
+    private func set(_ new: State) {
+        if state != new { state = new }
+    }
+
     func connect(_ server: Server) async {
         wantOn = true
         connectsInFlight += 1
@@ -106,8 +112,12 @@ final class VPNController: ObservableObject {
         do {
             // MASQUE rewritten for Xray's own client; TUIC / AnyTLS / ShadowTLS / SSH / Mieru
             // pointed at their client, which the tunnel starts first; Naive says it can't.
-            let prepared = try Plugins.prepare(server, forTunnel: true)
-            let config = try XrayRunConfig.build(serverJson: prepared.json)
+            // Off the main actor: the config's parsing (and a plugin server's DNS lookup) froze
+            // the screen as a ping ended.
+            let (prepared, config) = try await Task.detached(priority: .userInitiated) { () throws -> (PreparedServer, String) in
+                let p = try Plugins.prepare(server, forTunnel: true)
+                return (p, try XrayRunConfig.build(serverJson: p.json))
+            }.value
             let m = manager ?? NETunnelProviderManager()
             // Пункт управления, Siri or iOS Settings may have changed the profile since it was
             // loaded: saving over the old copy would fail.
