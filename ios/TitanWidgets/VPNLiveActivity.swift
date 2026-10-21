@@ -15,15 +15,14 @@ struct VPNLiveActivity: Widget {
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             let state = context.state
-            let label = ServerLabel(state)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    ServerTile(icon: label.icon, size: 46)
+                    ServerCircle(state: state, size: 44)
                         .padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(label.name)
+                        Text(state.server)
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(.white)
                             .lineLimit(2)
@@ -43,11 +42,11 @@ struct VPNLiveActivity: Widget {
                     .padding(.top, 6)
                 }
             } compactLeading: {
-                ServerIcon(icon: label.icon, size: 16)
+                ServerCircle(state: state, size: 20)
             } compactTrailing: {
                 StatusDot(connected: state.connected)
             } minimal: {
-                ServerIcon(icon: label.icon, size: 15)
+                ServerCircle(state: state, size: 20)
             }
             .keylineTint(Brand.green)
         }
@@ -59,9 +58,8 @@ private struct ActivityBanner: View {
     let state: VPNActivityAttributes.ContentState
 
     var body: some View {
-        let label = ServerLabel(state)
         HStack(spacing: 12) {
-            ServerTile(icon: label.icon, size: 48)
+            ServerCircle(state: state, size: 46)
             VStack(alignment: .leading, spacing: 3) {
                 Text("TITAN VPS")
                     .font(.system(size: 11, weight: .bold))
@@ -69,7 +67,7 @@ private struct ActivityBanner: View {
                     .foregroundStyle(Color.white.opacity(0.5))
                 // Whole: on two lines, a little smaller if need be, rather than cut with "…"
                 // (a Live Activity can't scroll it).
-                Text(label.name)
+                Text(state.server)
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
@@ -95,60 +93,15 @@ private struct ActivityBanner: View {
     }
 }
 
-/// The tile's emoji and the name beside it: the flag, else an emoji the name starts with
-/// ("⚡ АВТО"), which the name then goes without.
-private struct ServerLabel {
-    let icon: String?
-    let name: String
-
-    init(_ state: VPNActivityAttributes.ContentState) {
-        let rest = String(state.server.dropFirst()).trimmingCharacters(in: .whitespaces)
-        if let flag = state.flag {
-            icon = flag
-            name = state.server
-        } else if let first = state.server.first, Self.isEmoji(first), !rest.isEmpty {
-            icon = String(first)
-            name = rest
-        } else {
-            icon = nil
-            name = state.server
-        }
-    }
-
-    /// A picture emoji (⚡, 🌍), not a letter or a digit.
-    private static func isEmoji(_ c: Character) -> Bool {
-        guard let scalar = c.unicodeScalars.first else { return false }
-        return scalar.properties.isEmojiPresentation || (scalar.properties.isEmoji && c.unicodeScalars.count > 1)
-    }
-}
-
-/// The flag (or the name's own emoji); a globe without one.
-private struct ServerIcon: View {
-    let icon: String?
+/// The server's flag filled into a circle (FlagCircle in ios/Shared), as in the app; АВТО's
+/// bolt or a server without one. The name beside it keeps its own ⚡ or 🚀.
+private struct ServerCircle: View {
+    let state: VPNActivityAttributes.ContentState
     let size: CGFloat
 
     var body: some View {
-        if let icon {
-            Text(icon).font(.system(size: size))
-        } else {
-            Image(systemName: "globe")
-                .font(.system(size: size * 0.85, weight: .semibold))
-                .foregroundStyle(Brand.sky)
-        }
-    }
-}
-
-/// The flag on a soft square.
-private struct ServerTile: View {
-    let icon: String?
-    let size: CGFloat
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-        ServerIcon(icon: icon, size: size * 0.56)
-            .frame(width: size, height: size)
-            .background(Color.white.opacity(0.1), in: shape)
-            .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        FlagCircle(flag: state.flag, name: state.server, size: size, fill: Color.white.opacity(0.1),
+                   stroke: Color.white.opacity(0.15), bolt: .yellow, symbol: Brand.sky)
     }
 }
 

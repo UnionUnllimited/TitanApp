@@ -282,8 +282,11 @@ struct ProfileView: View {
                             openHome()
                         } label: {
                             SettingsRow(icon: "server.rack", color: Palette.primary, title: "Сервер", chevron: true) {
-                                Text(serverName).font(.scaled(15)).foregroundStyle(.secondary).lineLimit(1)
-                                    .frame(maxWidth: 170, alignment: .trailing)
+                                HStack(spacing: 6) {
+                                    if let s = store.selected { FlagCircle(server: s.name, size: 20) }
+                                    Text(serverName).font(.scaled(15)).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                .frame(maxWidth: 170, alignment: .trailing)
                             }
                         }
                         .buttonStyle(RowButtonStyle())
@@ -466,10 +469,9 @@ struct ProfileView: View {
         }
     }
 
+    /// Without the flag: its circle is beside it.
     private var serverName: String {
-        guard let s = store.selected else { return "Автоматически" }
-        let parts = s.name.splitFlag
-        return [parts.0, parts.1].compactMap { $0 }.joined(separator: " ")
+        store.selected?.name.splitFlag.1 ?? "Автоматически"
     }
 
     /// Who this is: the subscription's state and devices, a tap opens Подписка.

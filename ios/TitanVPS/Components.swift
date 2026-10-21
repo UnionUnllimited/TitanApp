@@ -174,6 +174,14 @@ struct IconTile: View {
     }
 }
 
+extension FlagCircle {
+    /// A server's round flag (ios/Shared) in the app's colours, from its whole name.
+    init(server name: String, size: CGFloat) {
+        let parts = name.splitFlag
+        self.init(flag: parts.0, name: parts.1, size: size, fill: Palette.track, stroke: Palette.outline, bolt: Palette.primary)
+    }
+}
+
 struct SettingsRow<Trailing: View>: View {
     let icon: String
     let color: Color

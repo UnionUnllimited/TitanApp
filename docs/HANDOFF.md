@@ -18,10 +18,11 @@
 | `ios/TitanVPS/` | iOS-приложение (SwiftUI) |
 | `ios/TitanTunnel/` | iOS Packet Tunnel Extension: запускает Xray и клиент протокола |
 | `ios/TitanWidgets/` | iOS 18 WidgetKit Extension: переключатель VPN для Пункта управления и Live Activity |
-| `ios/Shared/` | Код, общий для приложения и расширений (включение VPN, интенты переключателя и кнопок Live Activity, данные Live Activity) |
+| `ios/Shared/` | Код, общий для приложения и расширений (включение VPN, интенты переключателя и кнопок Live Activity, данные Live Activity, круглые флаги) |
 | `ios/project.yml` | Проект Xcode (XcodeGen) |
 | `scripts/build-libxray.sh` | Сборка libXray для Android |
 | `scripts/build-libxray-ios.sh` | Сборка `LibXray.xcframework` для iOS (libXray v26.9.30 в режиме `local` с изменённым Xray-core) |
+| `scripts/download-flags-ios.sh` | Флаги для iOS: SVG из npm-пакета `flag-icons` → `ios/Shared/Flags.xcassets` (создаётся в CI, в репозитории его нет) |
 | `scripts/ios-patches/xray-tfo/` | Патч Xray-core для TCP Fast Open на iOS и Windows (`apply.py` и Go-файлы) |
 | `scripts/ios-patches/titan/` | Go-пакет `titan` в xcframework: клиенты sing-box (TUIC, AnyTLS, ShadowTLS, SSH, Naive) и Mieru для iOS |
 | `server/` | Скрипты установки и удаления ноды (`install-node.sh`, `remove-node.sh`) |
@@ -62,6 +63,10 @@
   ползунок «Выкл | Вкл» (перетаскивание, блокировка на время пинга) — `PowerSlider.swift`;
   «Проверить соединение» (запрос через работающий VPN: задержка, страна и IP выхода) — `ConnectionCheck.swift`.
 - Оплата тарифа из «Личного кабинета» iOS открывается внутри приложения (WKWebView, не Safari) — `ios/TitanVPS/PaymentView.swift`.
+- Круглые флаги на iOS, как на Windows (список серверов, строка под статусом, Настройки, «Проверить соединение»,
+  Live Activity и Dynamic Island) — `FlagCircle` в `ios/Shared/FlagCircle.swift`: векторный флаг из `flag-icons`,
+  залитый в круг. Каталог `Flags.xcassets` собирает шаг CI «Download flag images» (`ios.yml`, `testflight.yml`)
+  перед xcodegen; в локальной сборке без него в круге эмодзи флага.
 - Виджеты iOS (расширение `ios/TitanWidgets/`, только iOS 18; на iOS 16–17 приложение ставится без него):
   - переключатель «Titan VPS» для Пункта управления, экрана блокировки и кнопки действия — `VPNToggleControl.swift`.
     Его интент `SetVPNIntent` (`ios/Shared/VPNToggleIntent.swift`) — `LiveActivityIntent`, поэтому iOS выполняет
@@ -78,7 +83,7 @@
     (туннель упал, выключили в Настройках iOS), переключатель покажет это после открытия приложения
     или нажатия на него;
   - Live Activity и Dynamic Island при включённом VPN — `VPNLiveActivity.swift`, данные — `ios/Shared/VPNActivity.swift`.
-    На экране блокировки: плитка с флагом сервера, полное название (до двух строк, без обрезки: бегущую строку
+    На экране блокировки: круглый флаг сервера, полное название (до двух строк, без обрезки: бегущую строку
     Live Activity показать не может), «Подключено» или «Переключаемся…» и кнопки ‹ › — предыдущий и следующий
     сервер. В развёрнутом Dynamic Island то же с кнопками «Предыдущий» / «Следующий» и ⏻ между ними (выключает VPN:
     `StopVPNIntent` там же → `VPNIntents.turnOff`, как «Выключить» в Siri), в компактном — флаг

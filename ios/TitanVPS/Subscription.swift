@@ -376,17 +376,23 @@ enum SubscriptionErrors {
 extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 
-    /// Leading flag emoji and the rest of the name.
+    /// Leading flag emoji and the rest of the name: a country's, or England's, Scotland's and
+    /// Wales' (🏴, tag letters, the cancel tag).
     var splitFlag: (String?, String) {
         let t = trimmingCharacters(in: .whitespaces)
         let scalars = Array(t.unicodeScalars)
         let regional: ClosedRange<UInt32> = 0x1F1E6...0x1F1FF
+        var end = 0
         if scalars.count >= 2, regional.contains(scalars[0].value), regional.contains(scalars[1].value) {
-            let flag = String(String.UnicodeScalarView(scalars[0..<2]))
-            let rest = String(String.UnicodeScalarView(scalars[2...])).trimmingCharacters(in: .whitespaces)
-            return (flag, rest)
+            end = 2
+        } else if scalars.first?.value == 0x1F3F4, let cancel = scalars.firstIndex(where: { $0.value == 0xE007F }),
+                  cancel > 1, scalars[1..<cancel].allSatisfy({ (0xE0020...0xE007E).contains($0.value) }) {
+            end = cancel + 1
         }
-        return (nil, t)
+        guard end > 0 else { return (nil, t) }
+        let flag = String(String.UnicodeScalarView(scalars[0..<end]))
+        let rest = String(String.UnicodeScalarView(scalars[end...])).trimmingCharacters(in: .whitespaces)
+        return (flag, rest)
     }
 }
 

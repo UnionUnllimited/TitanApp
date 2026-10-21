@@ -202,13 +202,8 @@ struct HomeView: View {
             }
             HStack(spacing: 6) {
                 if let s = store.selected {
-                    let parts = s.name.splitFlag
-                    if let flag = parts.0 {
-                        Text(flag)
-                    } else if parts.1.lowercased().contains("авто") {
-                        Image(systemName: "bolt.fill").foregroundStyle(.yellow)
-                    }
-                    Text(parts.1 + (store.pings[s.id].flatMap { $0 >= 0 ? " · \($0) мс" : nil } ?? ""))
+                    FlagCircle(server: s.name, size: 20)
+                    Text(s.name.splitFlag.1 + (store.pings[s.id].flatMap { $0 >= 0 ? " · \($0) мс" : nil } ?? ""))
                         .lineLimit(1)
                 } else {
                     Text("Выберите сервер")
@@ -249,8 +244,10 @@ struct HomeView: View {
                         Text("\(r.ms) мс").monospacedDigit().foregroundStyle(ServerRow.color(r.ms))
                         if let code = r.country {
                             Text("·").foregroundStyle(.secondary)
-                            Text([Fmt.flag(code), Fmt.country(code) ?? code].compactMap { $0 }.joined(separator: " "))
-                                .lineLimit(1)
+                            if let flag = Fmt.flag(code) {
+                                FlagCircle(flag: flag, size: 18, fill: Palette.track, stroke: Palette.outline)
+                            }
+                            Text(Fmt.country(code) ?? code).lineLimit(1)
                         }
                         Image(systemName: "arrow.clockwise").font(.scaled(12, weight: .bold)).foregroundStyle(.secondary)
                     case .failed:
@@ -548,23 +545,10 @@ struct ServerRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        let parts = server.name.splitFlag
-        let flag = parts.0
-        let name = parts.1
+        let name = server.name.splitFlag.1
         Button(action: onTap) {
             HStack(spacing: 14) {
-                ZStack {
-                    Circle().fill(Palette.track)
-                    if let flag {
-                        Text(flag).font(.scaled(30))
-                    } else if name.lowercased().contains("авто") {
-                        Image(systemName: "bolt.fill").foregroundStyle(Palette.primary)
-                    } else {
-                        Image(systemName: "server.rack").foregroundStyle(.secondary)
-                    }
-                }
-                .frame(width: 34, height: 34)
-                .clipShape(Circle())
+                FlagCircle(server: server.name, size: 34)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
                         if favorite { Image(systemName: "star.fill").font(.scaled(11)).foregroundStyle(.yellow) }

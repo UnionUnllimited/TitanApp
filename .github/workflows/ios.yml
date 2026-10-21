@@ -3,7 +3,7 @@ name: iOS
 on:
   push:
     branches: [main, "claude/**"]
-    paths: ["ios/**", ".github/workflows/ios.yml", "scripts/build-libxray-ios.sh", "scripts/ios-patches/**"]
+    paths: ["ios/**", ".github/workflows/ios.yml", "scripts/build-libxray-ios.sh", "scripts/download-flags-ios.sh", "scripts/ios-patches/**"]
   workflow_dispatch:
     inputs:
       libxray_ref:
@@ -49,6 +49,12 @@ jobs:
         env:
           LIBXRAY_REF: ${{ github.event.inputs.libxray_ref || 'v26.9.30' }}
         run: ./scripts/build-libxray-ios.sh
+
+      # Round flags (FlagCircle): flag-icons' square SVGs, as on Windows, into an asset catalog
+      # for the app and the widgets (ios/Shared/Flags.xcassets). Fails if npm does: no build
+      # goes out with the emoji instead unnoticed.
+      - name: Download flag images
+        run: ./scripts/download-flags-ios.sh
 
       - name: Generate Xcode project
         working-directory: ios

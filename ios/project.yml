@@ -15,7 +15,9 @@ targets:
     type: application
     platform: iOS
     # Shared: what the app and TitanWidgets both use (VPN on/off, the toggle's and the Live
-    # Activity buttons' intents, the Live Activity's data).
+    # Activity buttons' intents, the Live Activity's data, the round flags). Its Flags.xcassets
+    # is made in CI (scripts/download-flags-ios.sh): the Live Activity draws only images of
+    # the widgets' own bundle, so both targets build it.
     sources: [TitanVPS, Shared]
     dependencies:
       - target: TitanTunnel
