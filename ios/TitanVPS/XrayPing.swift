@@ -37,18 +37,21 @@ enum XrayPing {
     private static let perServer = 6
     /// A balancer whose members all failed is tried again on this many of them only.
     private static let retryPerServer = 6
+    /// The retry: few at a time, as a ping by hand (alone, it answers when it's alive).
+    private static let retryCalls = 2
     /// What failed gets a second, slower try after the rest (as on Android).
-    private static let retryTimeout = 8
+    private static let retryTimeout = 6
     /// A server that answered is asked once more on the spot: DNS, the TLS session and the
     /// TFO cookie are known by then (as Android's PingService does); the better one counts.
     private static let warmTimeout = 3
 
     private struct Item: Sendable { let json: String; let tag: String }
 
-    /// One probe: a server's own proxy, or one member of its balancer.
+    /// One probe: a server's own proxy, or one member of its balancer, and the host it dials.
     private struct Unit: Sendable {
         let server: Int
         let item: Item
+        let host: String
     }
 
     private enum Event: Sendable {
@@ -81,11 +84,13 @@ enum XrayPing {
                 continue
             }
             prepared[index] = p
-            units += tags(cfg, proxyTag: tag).map { Unit(server: index, item: Item(json: p.json, tag: $0)) }
+            units += tags(cfg, proxyTag: tag).map {
+                Unit(server: index, item: Item(json: p.json, tag: $0), host: host(cfg, tag: $0) ?? "server \(index) \($0)")
+            }
         }
 
         var failed: [Int: String] = [:]
-        await measure(units, timeout: timeout) { server, ms, why in
+        await measure(units, timeout: timeout, maxCalls: maxCalls) { server, ms, why in
             if ms >= 0 { await onResult(servers[server].id, ms, nil) } else { failed[server] = why ?? "" }
         }
         if Task.isCancelled || failed.isEmpty { return }
@@ -95,7 +100,7 @@ enum XrayPing {
             retried[u.server, default: 0] += 1
             return true
         }
-        await measure(again, timeout: retryTimeout) { server, ms, why in
+        await measure(again, timeout: retryTimeout, maxCalls: retryCalls) { server, ms, why in
             // A failed protocol client says why in its own log.
             let clientLog = ms < 0 && prepared[server]?.log != nil ? prepared[server]?.logTail() : nil
             let reason = why ?? failed[server].flatMap { $0.isEmpty ? nil : $0 }
@@ -104,11 +109,22 @@ enum XrayPing {
         }
     }
 
+    /// Where an outbound dials first (its server's address, lower case); nil when not found.
+    static func host(_ cfg: [String: Any], tag: String) -> String? {
+        guard let ob = (cfg["outbounds"] as? [[String: Any]])?.first(where: { $0["tag"] as? String == tag }) else { return nil }
+        let s = ob["settings"] as? [String: Any] ?? [:]
+        let first = (s["vnext"] as? [[String: Any]])?.first ?? (s["servers"] as? [[String: Any]])?.first ?? s
+        guard let address = first["address"] as? String, !address.isEmpty else { return nil }
+        return address.lowercased()
+    }
+
     /// Starts [units] in order, one every [startSpacing], at most [maxCalls] at once and
-    /// [perServer] of one server. [each] gets a server's result once: its first member that
-    /// answers, or its first failure reason when none did. Members of a server already shown
-    /// aren't started. Stopped: nothing new starts.
-    private static func measure(_ units: [Unit], timeout: Int,
+    /// [perServer] of one server. One host gets one probe at a time until it's found dead:
+    /// servers behind one entry (a bridge) all timed out pinged together, yet answered one by
+    /// one. [each] gets a server's result once: its first member that answers, or its first
+    /// failure reason when none did. Members of a server already shown aren't started.
+    /// Stopped: nothing new starts.
+    private static func measure(_ units: [Unit], timeout: Int, maxCalls: Int,
                                 each: (Int, Int, String?) async -> Void) async {
         var left: [Int: Int] = [:]
         for u in units { left[u.server, default: 0] += 1 }
@@ -117,14 +133,22 @@ enum XrayPing {
         await withTaskGroup(of: Event.self) { group in
             var pending = Array(units.indices)
             var busy: [Int: Int] = [:]
+            var hostBusy: [String: Int] = [:]
+            var hostAlive = Set<String>()
+            var hostFails: [String: Int] = [:]
+            var hostDead = Set<String>()
             var running = 0
             var ticking = false
             while true {
                 if !ticking, running < maxCalls, !Task.isCancelled,
-                   let at = pending.firstIndex(where: { busy[units[$0].server, default: 0] < perServer }) {
+                   let at = pending.firstIndex(where: { i in
+                       busy[units[i].server, default: 0] < perServer
+                           && (hostDead.contains(units[i].host) || hostBusy[units[i].host, default: 0] == 0)
+                   }) {
                     let index = pending.remove(at: at)
                     let item = units[index].item
                     busy[units[index].server, default: 0] += 1
+                    hostBusy[units[index].host, default: 0] += 1
                     running += 1
                     ticking = true
                     group.addTask {
@@ -148,8 +172,19 @@ enum XrayPing {
                 case let .done(unit, ms, why):
                     running -= 1
                     let server = units[unit].server
+                    let host = units[unit].host
                     busy[server, default: 1] -= 1
+                    hostBusy[host, default: 1] -= 1
                     left[server, default: 1] -= 1
+                    // A host that failed twice and never answered is likely down: its other probes
+                    // needn't wait in line (one dead server behind a live entry isn't enough).
+                    if ms >= 0 {
+                        hostAlive.insert(host)
+                        hostDead.remove(host)
+                    } else if !hostAlive.contains(host) {
+                        hostFails[host, default: 0] += 1
+                        if hostFails[host, default: 0] >= 2 { hostDead.insert(host) }
+                    }
                     if shown.contains(server) || Task.isCancelled { continue }
                     if ms >= 0 {
                         shown.insert(server)

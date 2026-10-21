@@ -5,6 +5,8 @@ struct HomeView: View {
     @EnvironmentObject var vpn: VPNController
     @Environment(\.colorScheme) private var scheme
     @AppStorage("theme") private var theme = "system"
+    /// Why a ping or a check failed is shown in Технический режим only.
+    @AppStorage(TechMode.key) private var techMode = false
     @State private var page: ServerGroup = .servers
     @State private var expanded = false
     @State private var wifiInfo = false
@@ -254,7 +256,7 @@ struct HomeView: View {
                         .textSelection(.enabled)
                 }
             case .failed(let why):
-                Text(why.isEmpty ? "Попробуйте ещё раз или выберите другой сервер" : "\(why). Попробуйте другой сервер")
+                Text(why.isEmpty || !techMode ? "Попробуйте ещё раз или выберите другой сервер" : "\(why). Попробуйте другой сервер")
                     .font(.system(size: 12)).foregroundStyle(.red.opacity(0.85)).multilineTextAlignment(.center)
             default:
                 EmptyView()
@@ -380,7 +382,7 @@ struct HomeView: View {
                 let locked = store.blockedOnWifi(s)
                 ServerRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
                           unsupported: Plugins.endpoint(s).map { !$0.kind.supportedOnIOS } ?? false,
-                          onPing: { store.pingOne(s) }, error: store.pingErrors[s.id], limited: page == .bypass && ServerGroup.isLimited(s),
+                          onPing: { store.pingOne(s) }, error: techMode ? store.pingErrors[s.id] : nil, limited: page == .bypass && ServerGroup.isLimited(s),
                           favorite: store.isFavorite(s), locked: locked,
                           selected: s.id == store.selected?.id) {
                     if locked { Haptics.warning(); wifiInfo = true; return }
