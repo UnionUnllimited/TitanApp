@@ -402,7 +402,9 @@ struct HomeView: View {
     private func pingButton(_ groups: [ServerGroup: [Server]]) -> some View {
         Button {
             Haptics.tap()
-            store.pingAll(first: (groups[page] ?? []).map(\.id))
+            // In the order shown (favourites first): results fill the list from the top.
+            let tab = groups[page] ?? []
+            store.pingAll(first: (tab.filter(store.isFavorite) + tab.filter { !store.isFavorite($0) }).map(\.id))
         } label: {
             HStack(spacing: 7) {
                 if store.pinging {

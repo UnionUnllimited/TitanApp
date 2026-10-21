@@ -40,4 +40,36 @@ for name, text, old, new in [
         sys.exit(name + ": anchor not found: " + old.strip())
     target.write_text(code.replace(old, new))
 shutil.copy(here / "splithttp_upload_once.go", split / "titan_upload_once.go")
+
+# dialerProxy found in the dialing instance's own outbounds, not the process-wide manager
+# the last core.New installed: the app runs several ping instances side by side (each with
+# its own tags), and a chained server's next hop must come from its own instance.
+for rel, edits in [
+    ("transport/internet/dialer.go", [
+        ("\tif len(sockopt.DialerProxy) > 0 {\n\t\tif obm == nil {\n",
+         "\tif len(sockopt.DialerProxy) > 0 {\n\t\tobm := obm\n"
+         "\t\tif m, ok := ctx.Value(titanOutboundManagerKey{}).(outbound.Manager); ok && m != nil {\n"
+         "\t\t\tobm = m\n\t\t}\n\t\tif obm == nil {\n"),
+        ("func InitSystemDialer(dc dns.Client, om outbound.Manager) {\n",
+         "type titanOutboundManagerKey struct{}\n\n"
+         "// TitanWithOutboundManager: DialSystem takes dialerProxy from this manager (Titan patch).\n"
+         "func TitanWithOutboundManager(ctx context.Context, m outbound.Manager) context.Context {\n"
+         "\treturn context.WithValue(ctx, titanOutboundManagerKey{}, m)\n}\n\n"
+         "func InitSystemDialer(dc dns.Client, om outbound.Manager) {\n"),
+    ]),
+    ("app/proxyman/outbound/handler.go", [
+        ("\tconn, err := internet.Dial(ctx, dest, h.streamSettings)\n\tconn = h.getStatCouterConnection(conn)\n",
+         "\tif v := core.FromContext(ctx); v != nil {\n"
+         "\t\tif m, ok := v.GetFeature(outbound.ManagerType()).(outbound.Manager); ok {\n"
+         "\t\t\tctx = internet.TitanWithOutboundManager(ctx, m)\n\t\t}\n\t}\n"
+         "\tconn, err := internet.Dial(ctx, dest, h.streamSettings)\n\tconn = h.getStatCouterConnection(conn)\n"),
+    ]),
+]:
+    target = src / rel
+    code = target.read_text()
+    for old, new in edits:
+        if code.count(old) != 1:
+            sys.exit(rel + ": anchor not found: " + old.strip())
+        code = code.replace(old, new)
+    target.write_text(code)
 print("xray-core TFO patch applied")

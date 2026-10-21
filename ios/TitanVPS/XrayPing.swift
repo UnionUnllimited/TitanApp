@@ -7,8 +7,8 @@ import LibXray
 enum XrayPing {
     static let url = "https://www.gstatic.com/generate_204"
     private static let services: Set<String> = ["freedom", "blackhole", "dns", "loopback"]
-    /// Balancer members measured per server (in one call, so they count toward [inFlight]).
-    private static let maxMembers = 12
+    /// Balancer members measured per server (each its own call; the first that answers counts).
+    private static let maxMembers = 30
 
     /// Outbound tags worth measuring: the proxy, or the members of the catch-all balancer.
     static func tags(_ cfg: [String: Any], proxyTag: String) -> [String] {
@@ -26,105 +26,142 @@ enum XrayPing {
         return members.isEmpty ? [proxyTag] : Array(members.prefix(maxMembers))
     }
 
-    /// Probes in flight at once, over all calls (libXray is patched so its calls run side by
-    /// side, each with its own Xray instance). The whole list in one burst made a busy network
-    /// drop handshakes: live servers read as timeouts and their result came only with the slowest.
-    private static let inFlight = 8
-    /// What failed gets a second, slower try (as on Android), fewer at a time.
-    private static let retryInFlight = 4
+    /// Calls start one after another this far apart (libXray is patched so its calls run side
+    /// by side, each with its own Xray instance). The whole list in one burst made a busy
+    /// network drop handshakes: live servers read as timeouts. A call that only waits out a
+    /// dead server's timeout adds no load, so it doesn't hold the others back.
+    private static let startSpacing: UInt64 = 100_000_000
+    /// Calls running at once at most (each is an Xray instance in memory).
+    private static let maxCalls = 24
+    /// What failed gets a second, slower try after the rest (as on Android).
     private static let retryTimeout = 8
+    /// A server that answered is asked once more on the spot: DNS, the TLS session and the
+    /// TFO cookie are known by then (as Android's PingService does); the better one counts.
+    private static let warmTimeout = 3
 
-    private struct Item { let server: String; let json: String; let tag: String }
+    private struct Item: Sendable { let json: String; let tag: String }
 
-    /// One server: the probes of its call (its members, for a balancer) and its client's log.
-    private struct Work {
-        let id: String
-        let items: [Item]
-        let prepared: PreparedServer
+    /// One probe: a server's own proxy, or one member of its balancer.
+    private struct Unit: Sendable {
+        let server: Int
+        let item: Item
     }
 
-    private struct Outcome {
-        let index: Int
-        let weight: Int
-        let ms: Int
-        let why: String?
+    private enum Event: Sendable {
+        case tick
+        case done(unit: Int, ms: Int, why: String?)
     }
 
-    /// Measures [servers] a few at a time in the order given, reporting each one's best ms
-    /// (-1: nothing answered) as soon as it's known, as Happ does. One that fails is tried
-    /// again, slower, after the rest; its result comes then.
+    /// Measures [servers] in the order given, reporting each one's ms (-1: nothing answered)
+    /// as soon as it's known, as Happ does. A balancer (АВТО) is measured on its members and
+    /// shown with the first that answers. What fails is tried again, slower, after the rest.
     static func pingMany(_ servers: [Server], timeout: Int = 5, onResult: @escaping @MainActor (String, Int, String?) -> Void) async {
         // Our protocol clients (sing-box, mieru) run here for the time of the ping.
         var clients: [Int] = []
         defer { clients.forEach(Titan.stop) }
-        var work: [Work] = []
-        for server in servers {
-            let prepared: PreparedServer
+        var prepared: [Int: PreparedServer] = [:]
+        var units: [Unit] = []
+        for (index, server) in servers.enumerated() {
+            if Task.isCancelled { return }
+            let p: PreparedServer
             do {
-                prepared = try Plugins.prepare(server)
-                if let plugin = prepared.plugin { clients.append(try Titan.start(plugin)) }
+                p = try Plugins.prepare(server)
+                if let plugin = p.plugin { clients.append(try Titan.start(plugin)) }
             } catch {
                 await onResult(server.id, -1, error.localizedDescription)
                 continue
             }
             guard let tag = server.proxyTag,
-                  let cfg = (try? JSONSerialization.jsonObject(with: Data(prepared.json.utf8))) as? [String: Any] else {
+                  let cfg = (try? JSONSerialization.jsonObject(with: Data(p.json.utf8))) as? [String: Any] else {
                 await onResult(server.id, -1, "Не удалось разобрать конфиг сервера")
                 continue
             }
-            let items = tags(cfg, proxyTag: tag).map { Item(server: server.id, json: prepared.json, tag: $0) }
-            work.append(Work(id: server.id, items: items, prepared: prepared))
+            prepared[index] = p
+            units += tags(cfg, proxyTag: tag).map { Unit(server: index, item: Item(json: p.json, tag: $0)) }
         }
-        var failed: [Work] = []
-        await measureAll(work, timeout: timeout, inFlight: inFlight) { w, ms, _ in
-            if ms >= 0 { await onResult(w.id, ms, nil) } else { failed.append(w) }
+
+        var failed: [Int: String] = [:]
+        await measure(units, timeout: timeout) { server, ms, why in
+            if ms >= 0 { await onResult(servers[server].id, ms, nil) } else { failed[server] = why ?? "" }
         }
         if Task.isCancelled || failed.isEmpty { return }
-        await measureAll(failed, timeout: retryTimeout, inFlight: retryInFlight) { w, ms, why in
+        let again = units.filter { failed[$0.server] != nil }
+        await measure(again, timeout: retryTimeout) { server, ms, why in
             // A failed protocol client says why in its own log.
-            let clientLog = ms < 0 && w.prepared.log != nil ? w.prepared.logTail() : nil
-            let text = [why, clientLog.map { "[\($0)]" }].compactMap { $0 }.joined(separator: " ")
-            await onResult(w.id, ms, ms < 0 && !text.isEmpty ? text : nil)
+            let clientLog = ms < 0 && prepared[server]?.log != nil ? prepared[server]?.logTail() : nil
+            let reason = why ?? failed[server].flatMap { $0.isEmpty ? nil : $0 }
+            let text = [reason, clientLog.map { "[\($0)]" }].compactMap { $0 }.joined(separator: " ")
+            await onResult(servers[server].id, ms, ms < 0 && !text.isEmpty ? text : nil)
         }
     }
 
-    /// One call per server, started in order while their probes fit in [inFlight]; [each]
-    /// gets a server's outcome as soon as its call is done. Stopped: nothing new starts.
-    private static func measureAll(_ work: [Work], timeout: Int, inFlight: Int,
-                                   each: (Work, Int, String?) async -> Void) async {
-        await withTaskGroup(of: Outcome.self) { group in
-            var free = inFlight
+    /// Starts [units] in order, one every [startSpacing], at most [maxCalls] at once. [each]
+    /// gets a server's result once: its first member that answers, or its first failure
+    /// reason when none did. Members of a server already shown aren't started. Stopped:
+    /// nothing new starts.
+    private static func measure(_ units: [Unit], timeout: Int,
+                                each: (Int, Int, String?) async -> Void) async {
+        var left: [Int: Int] = [:]
+        for u in units { left[u.server, default: 0] += 1 }
+        var shown = Set<Int>()
+        var reason: [Int: String] = [:]
+        await withTaskGroup(of: Event.self) { group in
+            var running = 0
             var next = 0
+            var ticking = false
             while true {
-                while next < work.count, !Task.isCancelled {
-                    let weight = min(max(work[next].items.count, 1), inFlight)
-                    guard weight <= free else { break }
-                    free -= weight
-                    let index = next
-                    let items = work[next].items
-                    group.addTask {
-                        let (ms, why) = await best(items, timeout: timeout)
-                        return Outcome(index: index, weight: weight, ms: ms, why: why)
-                    }
+                while next < units.count, shown.contains(units[next].server) {
+                    left[units[next].server, default: 1] -= 1
                     next += 1
                 }
-                guard let outcome = await group.next() else { break }
-                free += outcome.weight
-                if !Task.isCancelled { await each(work[outcome.index], outcome.ms, outcome.why) }
+                if !ticking, next < units.count, running < maxCalls, !Task.isCancelled {
+                    let index = next
+                    let item = units[next].item
+                    next += 1
+                    running += 1
+                    ticking = true
+                    group.addTask {
+                        let first = await probe(item, timeout: timeout)
+                        var ms = first.0
+                        if ms >= 0 {
+                            let warm = await probe(item, timeout: warmTimeout).0
+                            if warm >= 0 { ms = min(ms, warm) }
+                        }
+                        return .done(unit: index, ms: ms, why: first.1)
+                    }
+                    group.addTask {
+                        try? await Task.sleep(nanoseconds: startSpacing)
+                        return .tick
+                    }
+                }
+                guard let event = await group.next() else { break }
+                switch event {
+                case .tick:
+                    ticking = false
+                case let .done(unit, ms, why):
+                    running -= 1
+                    let server = units[unit].server
+                    left[server, default: 1] -= 1
+                    if shown.contains(server) || Task.isCancelled { continue }
+                    if ms >= 0 {
+                        shown.insert(server)
+                        await each(server, ms, nil)
+                    } else {
+                        if reason[server] == nil, let why, !why.isEmpty { reason[server] = why }
+                        if left[server, default: 0] <= 0 {
+                            shown.insert(server)
+                            await each(server, -1, reason[server])
+                        }
+                    }
+                }
             }
         }
     }
 
-    /// One call: the server's best ms (-1: nothing answered) with the reason of a failure.
-    private static func best(_ items: [Item], timeout: Int) async -> (Int, String?) {
-        let results = await run(items.map { ($0.json, $0.tag) }, timeout: timeout)
-        var top = -1
-        var reason: String?
-        for (ms, error) in results {
-            if ms >= 0 && (top < 0 || ms < top) { top = ms }
-            if ms < 0, reason == nil, let e = error, !e.isEmpty { reason = shortReason(e) }
-        }
-        return (top, top >= 0 ? nil : reason)
+    /// One call with one probe: its ms (-1: no answer) and the reason of a failure.
+    private static func probe(_ item: Item, timeout: Int) async -> (Int, String?) {
+        let result = await run([(item.json, item.tag)], timeout: timeout).first ?? (-1, nil)
+        return (result.0, result.0 >= 0 ? nil : result.1.map(shortReason))
     }
 
     /// Go's `Head "<url>": <reason>` without the URL part (the reason is what matters).
