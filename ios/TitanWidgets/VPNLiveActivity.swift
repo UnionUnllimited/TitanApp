@@ -36,6 +36,7 @@ struct VPNLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 10) {
                         SwitchButton(forward: false, titled: true)
+                        StopButton()
                         SwitchButton(forward: true, titled: true)
                     }
                     .padding(.horizontal, 4)
@@ -195,7 +196,7 @@ private struct SwitchButton: View {
                 if titled {
                     HStack(spacing: 5) {
                         if !forward { Image(systemName: "chevron.left") }
-                        Text(forward ? "Следующий" : "Предыдущий").lineLimit(1)
+                        Text(forward ? "Следующий" : "Предыдущий").lineLimit(1).minimumScaleFactor(0.8)
                         if forward { Image(systemName: "chevron.right") }
                     }
                     .font(.system(size: 14, weight: .semibold))
@@ -212,5 +213,20 @@ private struct SwitchButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(forward ? "Следующий сервер" : "Предыдущий сервер")
+    }
+}
+
+/// The expanded island's ⏻ between ‹ and ›: the VPN off (StopVPNIntent, run in the app).
+private struct StopButton: View {
+    var body: some View {
+        Button(intent: StopVPNIntent()) {
+            Image(systemName: "power")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 36)
+                .background(Color.red.opacity(0.75), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Выключить VPN")
     }
 }
