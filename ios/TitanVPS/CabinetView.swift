@@ -1,9 +1,8 @@
-import SafariServices
 import SwiftUI
 
 /// Personal cabinet in the app (same as Android's CabinetActivity): the site's limited cabinet,
-/// signed in by the subscription's link, shown natively. Only the payment page itself opens
-/// (in an in-app Safari sheet; bank apps for SBP open from there).
+/// signed in by the subscription's link, shown natively. Only the payment itself is the
+/// provider's web page (PaymentView, inside the app; bank apps for SBP open from there).
 struct CabinetView: View {
     let link: String
     /// Connected devices and the limit from the subscription's account info, if known.
@@ -16,7 +15,9 @@ struct CabinetView: View {
     @State private var loading = true
     @State private var tab = 0
     @State private var note: String?
-    @State private var payURL: URL?
+    @State private var payment: Payment?
+    /// Bumped when a payment closes: the cabinet is read again a few seconds later too.
+    @State private var recheck = 0
     @State private var copied = false
 
     var body: some View {
@@ -82,10 +83,28 @@ struct CabinetView: View {
                     .accessibilityLabel("Обновить")
                 }
             }
-            .sheet(item: $payURL, onDismiss: { Task { await load() } }) { url in SafariView(url: url).ignoresSafeArea() }
+            // Closed by hand or by itself on the return to the site: the cabinet shows the result.
+            .sheet(item: $payment, onDismiss: {
+                Task { await load() }
+                recheck += 1
+            }) { p in
+                PaymentView(url: p.url, subtitle: p.title, home: p.home) { note = Self.checking }
+            }
         }
         .task { await load() }
+        // After a payment: the provider may tell the site a moment after the user is back.
+        .task(id: recheck) {
+            guard recheck > 0 else { return }
+            for s: UInt64 in [4, 12] {
+                try? await Task.sleep(nanoseconds: s * 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                await load()
+            }
+            if note == Self.checking { note = nil }
+        }
     }
+
+    private static let checking = "Проверяем оплату: кабинет обновится через несколько секунд"
 
     private func load() async {
         loading = true
@@ -106,7 +125,13 @@ struct CabinetView: View {
 
     private func pay(_ tariff: CabinetAPI.Tariff, _ method: String) async {
         guard let api else { return }
-        do { payURL = try await api.pay(tariff, method: method) } catch { note = message(error) }
+        do {
+            let url = try await api.pay(tariff, method: method)
+            let title = [tariff.name, price(tariff.price)].filter { !$0.isEmpty }.joined(separator: " · ")
+            payment = Payment(url: url, title: title, home: api.host)
+        } catch {
+            note = message(error)
+        }
     }
 
     private func applyCode(_ code: String) async -> Bool {
@@ -487,13 +512,10 @@ private func devicesWord(_ n: Int) -> String {
     return "\(n) \(word)"
 }
 
-/// The payment page inside the app.
-struct SafariView: UIViewControllerRepresentable {
+/// A payment open in PaymentView.
+private struct Payment: Identifiable {
+    let id = UUID()
     let url: URL
-    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
-    func updateUIViewController(_ vc: SFSafariViewController, context: Context) {}
-}
-
-extension URL: Identifiable {
-    public var id: String { absoluteString }
+    let title: String
+    let home: String?
 }

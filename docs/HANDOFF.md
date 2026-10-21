@@ -61,6 +61,7 @@
 - Интерфейс iOS: общие кнопки, переключатели, строки настроек, тосты и хаптика — `ios/TitanVPS/Components.swift`;
   ползунок «Выкл | Вкл» (перетаскивание, блокировка на время пинга) — `PowerSlider.swift`;
   «Проверить соединение» (запрос через работающий VPN: задержка, страна и IP выхода) — `ConnectionCheck.swift`.
+- Оплата тарифа из «Личного кабинета» iOS открывается внутри приложения (WKWebView, не Safari) — `ios/TitanVPS/PaymentView.swift`.
 - Виджеты iOS (расширение `ios/TitanWidgets/`, только iOS 18; на iOS 16–17 приложение ставится без него):
   - переключатель «Titan VPS» для Пункта управления, экрана блокировки и кнопки действия — `VPNToggleControl.swift`.
     Его интент `SetVPNIntent` (`ios/Shared/VPNToggleIntent.swift`) — `LiveActivityIntent`, поэтому iOS выполняет
@@ -79,7 +80,8 @@
   - Live Activity и Dynamic Island при включённом VPN — `VPNLiveActivity.swift`, данные — `ios/Shared/VPNActivity.swift`.
     На экране блокировки: плитка с флагом сервера, полное название (до двух строк, без обрезки: бегущую строку
     Live Activity показать не может), «Подключено» или «Переключаемся…» и кнопки ‹ › — предыдущий и следующий
-    сервер. В развёрнутом Dynamic Island то же с кнопками «Предыдущий» / «Следующий», в компактном — флаг
+    сервер. В развёрнутом Dynamic Island то же с кнопками «Предыдущий» / «Следующий» и ⏻ между ними (выключает VPN:
+    `StopVPNIntent` там же → `VPNIntents.turnOff`, как «Выключить» в Siri), в компактном — флаг
     и точка состояния. Таймера нет. Кнопки запускают `SwitchServerIntent` (`ios/Shared/SwitchServerIntent.swift`,
     `LiveActivityIntent`, выполняется в процессе приложения) → `VPNIntents.switchServer`: следующий сервер
     той же вкладки («Серверы» или «Обходы») в порядке Главной (`ServerGroup.ordered`: избранные первыми),

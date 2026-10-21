@@ -74,12 +74,16 @@ final class CabinetAPI {
         return (api, try await api.page(url))
     }
 
+    /// The site's host: PaymentView ends a payment when the provider sends it back here.
+    var host: String? { base.host }
+
     func load() async throws -> Snapshot { try await page(base.appendingPathComponent("cabinet")) }
 
     func pay(_ tariff: Tariff, method: String) async throws -> URL {
         let path = tariff.kind == "traffic" ? "pay/traffic/\(tariff.id)" : "pay/\(tariff.id)"
         let json = try await post(path, field: "method", value: method)
-        if json["ok"] as? Bool == true, let r = json["redirect"] as? String, let url = URL(string: r) { return url }
+        if json["ok"] as? Bool == true, let r = json["redirect"] as? String,
+           let url = URL(string: r, relativeTo: base)?.absoluteURL { return url }
         throw Failure(message: (json["error"] as? String) ?? "Не удалось создать платёж")
     }
 
