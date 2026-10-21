@@ -14,7 +14,8 @@ targets:
   TitanVPS:
     type: application
     platform: iOS
-    # Shared: what the app and TitanWidgets both use (VPN on/off, the Live Activity's data).
+    # Shared: what the app and TitanWidgets both use (VPN on/off, the toggle's intent, the Live
+    # Activity's data).
     sources: [TitanVPS, Shared]
     dependencies:
       - target: TitanTunnel
@@ -62,6 +63,8 @@ targets:
         ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "AppIconLight AppIconDark"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
+        # `#if TITAN_APP` in Shared: what only the app runs (the toggle's intent turns the VPN on as Siri does).
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) TITAN_APP"
         # Cronet (Chromium's network stack, for Naive) is linked here, with what it needs.
         OTHER_LDFLAGS: ["-lresolv", "-lc++", "$(PROJECT_DIR)/Frameworks/LibXray.xcframework/libcronet.a",
           "-framework", "CoreTelephony", "-framework", "CryptoTokenKit", "-framework", "LocalAuthentication",
@@ -111,9 +114,9 @@ targets:
         ENABLE_BITCODE: NO
 
   # Widgets (iOS 18 only; on iOS 16–17 the app installs without them): the VPN toggle for
-  # Пункт управления, the Lock Screen and the Action button, and the Live Activity. The toggle
-  # starts and stops the tunnel itself with the VPN profile the app saved, hence the Network
-  # Extension entitlement.
+  # Пункт управления, the Lock Screen and the Action button, and the Live Activity. The toggle's
+  # intent runs in the app (LiveActivityIntent); its state is read here from the VPN profile the
+  # app saved, hence the Network Extension entitlement.
   TitanWidgets:
     type: app-extension
     platform: iOS

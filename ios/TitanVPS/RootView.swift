@@ -49,6 +49,7 @@ struct RootView: View {
             if case .connected = state {
                 store.checkConnection(auto: true)
                 Task { await Reminders.askOnce(for: store.subscription?.info) }
+                Task { await store.followTunnel() }
             } else {
                 store.resetCheck()
             }
@@ -59,19 +60,27 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: Reminders.openSubscription)) { _ in
             if store.subscription != nil { tab = .subscription }
         }
-        // Back in the app after a while: the subscription again (renewed in the bot meanwhile?),
-        // which also moves the reminders.
         .onChange(of: scenePhase) { phase in
-            guard phase == .active, let sub = store.subscription, Date().timeIntervalSince(sub.fetchedAt) > 1800 else { return }
+            guard phase == .active else { return }
+            // Back in the app: the VPN may have changed while it was away (the tunnel fell, iOS
+            // Settings); the Live Activity and Пункт управления's toggle follow it again.
+            LiveActivityController.sync(vpn.state, server: store.selected?.name, paused: store.vpnPaused)
+            // After a while: the subscription again (renewed in the bot meanwhile?), which also
+            // moves the reminders.
+            guard let sub = store.subscription, Date().timeIntervalSince(sub.fetchedAt) > 1800 else { return }
             Task { await store.refresh(quiet: true) }
         }
         .task {
-            LiveActivityController.endIfOff()
+            LiveActivityController.sync(vpn.state, server: store.selected?.name, paused: store.vpnPaused)
             try? await Task.sleep(nanoseconds: 900_000_000)
+            // Started by iOS in the background for Пункт управления or Siri (maybe to turn it off).
+            // Read after the splash, when a tap's launch is in the foreground (a scene-based app
+            // starts in the background), and before the refresh: leaving the app meanwhile still connects.
+            let inBackground = UIApplication.shared.applicationState == .background
             withAnimation { splash = false }
             await store.refresh(quiet: true)
             // Автоподключение: on at launch too (iOS brings it back after sleep itself).
-            if autoconnect, !vpn.isOn, let s = store.selected, !store.blockedOnWifi(s) { await vpn.connect(s) }
+            if autoconnect, !vpn.isOn, !inBackground, let s = store.selected, !store.blockedOnWifi(s) { await vpn.connect(s) }
         }
         // titanvps://import/<key>, titanvps://add?url=<key> (same as Android): add and connect.
         .onOpenURL { url in

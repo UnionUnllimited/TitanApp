@@ -179,6 +179,12 @@ final class AppStore: ObservableObject {
             Task { await Reminders.update(for: sub.info) }
             if let data = try? JSONEncoder().encode(sub) { UserDefaults.standard.set(data, forKey: subKey) }
             if !sub.servers.contains(where: { $0.id == selectedId }) { select(sub.servers.first?.id) }
+            // While off: what iOS Settings and Автоподключение start follows it too (a ping's
+            // pause reconnects with a fresh config anyway).
+            if let vpn, !pingBusy, !vpnPaused {
+                let picked = selected
+                Task { await vpn.refreshProfile(sub.servers, picked: picked) }
+            }
             return true
         } catch {
             let text = error.localizedDescription
@@ -191,6 +197,15 @@ final class AppStore: ObservableObject {
     func select(_ id: String?) {
         selectedId = id
         UserDefaults.standard.set(id, forKey: selKey)
+    }
+
+    /// Connected: the VPN may have come up without the app (iOS Settings, Автоподключение) on
+    /// the profile's last server, not the one picked here. The pick follows what really runs.
+    func followTunnel() async {
+        let picked = selectedId
+        guard let name = await TunnelSwitch.serverName(), picked == selectedId, vpn?.isConnected == true,
+              name != selected?.name, let s = subscription?.servers.first(where: { $0.name == name }) else { return }
+        select(s.id)
     }
 
     func logout() {

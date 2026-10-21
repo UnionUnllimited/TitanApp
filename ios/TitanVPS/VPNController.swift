@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import NetworkExtension
 
@@ -14,6 +15,8 @@ final class VPNController: ObservableObject {
     @Published private(set) var failures = 0
     /// What was asked for last: Выкл while connect is still saving the profile wins.
     private var wantOn = false
+    /// Connects (and server switches) under way: the profile is theirs to save until they end.
+    private var connectsInFlight = 0
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
 
@@ -80,6 +83,8 @@ final class VPNController: ObservableObject {
 
     func connect(_ server: Server) async {
         wantOn = true
+        connectsInFlight += 1
+        defer { connectsInFlight -= 1 }
         guard let tunnelId = Self.tunnelBundleId else {
             fail("В этой сборке нет VPN-расширения")
             return
@@ -96,7 +101,7 @@ final class VPNController: ObservableObject {
             let proto = (m.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
             proto.providerBundleIdentifier = tunnelId
             proto.serverAddress = server.name
-            var provider: [String: Any] = ["config": config]
+            var provider: [String: Any] = ["config": config, "source": Self.source(server)]
             if let plugin = prepared.plugin { provider["plugin"] = plugin }
             proto.providerConfiguration = provider
             proto.disconnectOnSleep = false
@@ -154,6 +159,34 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /// What a profile's config was built from: the subscription's server as it was then.
+    nonisolated static func source(_ server: Server) -> String {
+        SHA256.hash(data: Data((server.xrayJson ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The subscription refreshed while off: iOS Settings and Автоподключение start the profile
+    /// with no options, so its config follows the subscription (the picked server if its own is
+    /// gone). Only an existing profile, never while on or while a connect is under way.
+    func refreshProfile(_ servers: [Server], picked: Server?) async {
+        guard let m = manager, connectsInFlight == 0, !isOn, state != .disconnecting else { return }
+        try? await m.loadFromPreferences()
+        let status = m.connection.status
+        guard connectsInFlight == 0, status == .disconnected || status == .invalid,
+              let proto = m.protocolConfiguration as? NETunnelProviderProtocol else { return }
+        let own = servers.first { $0.name == proto.serverAddress }
+        // Its server as the subscription has it now: nothing to save.
+        if let own, (proto.providerConfiguration?["source"] as? String) == Self.source(own) { return }
+        guard let server = own ?? picked,
+              let prepared = try? Plugins.prepare(server, forTunnel: true),
+              let config = try? XrayRunConfig.build(serverJson: prepared.json) else { return }
+        var provider: [String: Any] = ["config": config, "source": Self.source(server)]
+        if let plugin = prepared.plugin { provider["plugin"] = plugin }
+        proto.serverAddress = server.name
+        proto.providerConfiguration = provider
+        m.protocolConfiguration = proto
+        try? await m.saveToPreferences()
+    }
+
     /// Автоподключение switched in the settings: applies to the VPN profile at once.
     func setAutoconnect(_ on: Bool) {
         guard let m = manager, isOn else { return }
@@ -203,6 +236,9 @@ final class VPNController: ObservableObject {
     /// Reconnects on another server while on.
     func switchTo(_ server: Server) async {
         guard isOn else { return }
+        // Off for a moment in between: no refreshProfile then either.
+        connectsInFlight += 1
+        defer { connectsInFlight -= 1 }
         manager?.connection.stopVPNTunnel()
         try? await Task.sleep(nanoseconds: 700_000_000)
         await connect(server)

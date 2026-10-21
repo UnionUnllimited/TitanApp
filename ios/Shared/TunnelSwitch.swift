@@ -2,12 +2,12 @@ import Foundation
 import Network
 import NetworkExtension
 
-/// Turns the VPN on and off without the app's screen: Пункт управления (TitanWidgets), Siri and
-/// Команды. It works with the VPN profile the app saved when it last connected: its
-/// providerConfiguration has that server's config, so the tunnel starts with no options, as it
-/// does from iOS Settings.
+/// Turns the VPN on and off without the app's screen: Пункт управления, Siri and Команды (their
+/// intents run in the app's process); TitanWidgets reads the toggle's state with it. It works
+/// with the VPN profile the app saved when it last connected: its providerConfiguration has
+/// that server's config, so the tunnel starts with no options, as it does from iOS Settings.
 enum TunnelSwitch {
-    /// A server to run instead of the profile's last one (Siri in the app: the picked server).
+    /// A server to run instead of the profile's last one (the server picked in the app).
     struct Target {
         let name: String
         let provider: [String: Any]
@@ -33,6 +33,12 @@ enum TunnelSwitch {
     /// The server the profile runs, by its name in the subscription (with the flag).
     static func serverName() async -> String? {
         ((try? await manager())?.protocolConfiguration as? NETunnelProviderProtocol)?.serverAddress
+    }
+
+    /// When the VPN came up; nil unless it is connected now.
+    static func connectedSince() async -> Date? {
+        guard let m = try? await manager(), m.connection.status == .connected else { return nil }
+        return m.connection.connectedDate ?? Date()
     }
 
     /// Starts the tunnel and waits until it is up; throws the tunnel's reason if it falls.
@@ -71,6 +77,11 @@ enum TunnelSwitch {
             try await m.saveToPreferences()
             try await m.loadFromPreferences()
         }
+        // Turned off a moment ago: the old session ends first (a start meanwhile may be lost).
+        for _ in 0..<15 {
+            guard m.connection.status == .disconnecting else { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
         // No options: the tunnel takes the config from the profile. Автоподключение may have
         // started it on the save already.
         if !isOn(m.connection.status) { try m.connection.startVPNTunnel() }
@@ -89,20 +100,23 @@ enum TunnelSwitch {
     }
 
     /// Up to 12 s: enough for the tunnel to start, short enough for Siri. Still connecting
-    /// after that is no error.
+    /// after that is no error; never started (no network, say) is.
     private static func waitUntilUp(_ connection: NEVPNConnection) async throws {
-        var wasConnecting = false
+        var started = false
         for _ in 0..<60 {
             switch connection.status {
             case .connected: return
-            case .connecting, .reasserting: wasConnecting = true
+            // Disconnecting too: start let the old session end, so this is the new one.
+            case .connecting, .reasserting, .disconnecting: started = true
             case .disconnected, .invalid:
                 // It fell while starting: the tunnel's reason.
-                if wasConnecting { throw await lastError(connection) }
+                if started { throw await lastError(connection) }
             default: break
             }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
+        let status = connection.status
+        if status == .disconnected || status == .invalid { throw await lastError(connection) }
     }
 
     private static func lastError(_ connection: NEVPNConnection) async -> TunnelSwitchError {

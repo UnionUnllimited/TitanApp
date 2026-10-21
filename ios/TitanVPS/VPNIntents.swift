@@ -3,7 +3,8 @@ import Foundation
 
 /// Siri and Команды: Titan VPS on, off and the other way round, without opening the app.
 /// They run in the app's process (in the background if it isn't open) and work with the VPN
-/// profile as Пункт управления does (TunnelSwitch); on comes on the server picked in the app.
+/// profile through TunnelSwitch, as Пункт управления's toggle does (SetVPNIntent); on comes on
+/// the server picked in the app.
 struct TurnOnVPNIntent: AppIntent {
     static var title: LocalizedStringResource = "Включить Titan VPS"
     static var description = IntentDescription("Подключает VPN к серверу, выбранному в приложении.")
@@ -67,16 +68,28 @@ struct TitanShortcuts: AppShortcutsProvider {
     }
 }
 
+// Run in the background, these may start the Live Activity too (iOS 18+, as the activity).
+@available(iOS 18.0, *)
+extension TurnOnVPNIntent: LiveActivityIntent {}
+
+@available(iOS 18.0, *)
+extension ToggleVPNIntent: LiveActivityIntent {}
+
 enum VPNIntents {
     /// Returns the server's name without its flag (for Siri to say).
     static func turnOn() async throws -> String {
+        // Пункт управления's toggle then shows what the VPN really did, failed or not: run in the
+        // background (Siri, Команды), the app has no screen to see the change.
+        defer { VPNControl.reload() }
         let defaults = UserDefaults.standard
         let name = try await TunnelSwitch.start(picked(), onDemand: defaults.bool(forKey: "autoconnect"),
                                                 bypassOnWifi: defaults.bool(forKey: TechMode.key))
+        await LiveActivityController.turnedOn()
         return name.splitFlag.1
     }
 
     static func turnOff() async {
+        defer { VPNControl.reload() }
         await TunnelSwitch.stop()
         await LiveActivityController.endAll()
     }
@@ -93,7 +106,8 @@ enum VPNIntents {
             throw TunnelSwitchError("В подписке нет серверов. Обновите её в приложении Titan VPS")
         }
         let prepared = try Plugins.prepare(server, forTunnel: true)
-        var provider: [String: Any] = ["config": try XrayRunConfig.build(serverJson: prepared.json)]
+        var provider: [String: Any] = ["config": try XrayRunConfig.build(serverJson: prepared.json),
+                                       "source": VPNController.source(server)]
         if let plugin = prepared.plugin { provider["plugin"] = plugin }
         return TunnelSwitch.Target(name: server.name, provider: provider)
     }

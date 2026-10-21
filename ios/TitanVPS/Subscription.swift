@@ -272,7 +272,9 @@ enum SubscriptionAPI {
             cfg.removeValue(forKey: "inbounds")
             XrayRunConfig.retargetInboundRules(&cfg, oldTags: oldTags)
             let (host, port) = endpoint(proxy)
-            let json = (try? JSONSerialization.data(withJSONObject: cfg)).map { String(decoding: $0, as: UTF8.self) }
+            // Sorted: a Swift dictionary's key order changes with each parse, and
+            // VPNController.source hashes this to tell a changed server.
+            let json = (try? JSONSerialization.data(withJSONObject: cfg, options: .sortedKeys)).map { String(decoding: $0, as: UTF8.self) }
             // Stable across launches (hashValue isn't): the picked server stays picked.
             return Server(id: "json-\(i)-\(name)", name: name, host: host, port: port,
                           proto: (proxy["protocol"] as? String) ?? "", xrayJson: json, proxyTag: proxyTag)

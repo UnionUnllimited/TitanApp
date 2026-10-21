@@ -65,7 +65,7 @@ jobs:
           cp -R build/Build/Products/Release-iphoneos/TitanVPS.app Payload/
           ls Payload/TitanVPS.app/PlugIns
           codesign -f -s - --entitlements TitanTunnel/TitanTunnel.entitlements Payload/TitanVPS.app/PlugIns/TitanTunnel.appex
-          # The widgets' toggle starts the VPN itself: it needs the Network Extension entitlement too.
+          # The widgets' toggle reads the VPN's state from its profile: Network Extension entitlement too.
           codesign -f -s - --entitlements TitanWidgets/TitanWidgets.entitlements Payload/TitanVPS.app/PlugIns/TitanWidgets.appex
           codesign -f -s - --entitlements TitanVPS/TitanVPS.entitlements Payload/TitanVPS.app
           codesign -d --entitlements - Payload/TitanVPS.app/PlugIns/TitanTunnel.appex

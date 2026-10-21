@@ -2,9 +2,9 @@ import AppIntents
 import SwiftUI
 import WidgetKit
 
-/// Titan VPS on and off from Пункт управления, the Lock Screen and the Action button. The
-/// toggle's intent runs here, in the widget extension, with the VPN profile the app saved
-/// (TunnelSwitch): the app needn't be running.
+/// Titan VPS on and off from Пункт управления, the Lock Screen and the Action button. Its intent
+/// (SetVPNIntent, ios/Shared) runs in the app's process; here the extension only reads the
+/// VPN's state from the profile the app saved (TunnelSwitch).
 struct VPNToggleControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: VPNControl.kind, provider: VPNStatusProvider()) { isOn in
@@ -14,7 +14,7 @@ struct VPNToggleControl: ControlWidget {
             .tint(Brand.green)
         }
         .displayName("Titan VPS")
-        .description("Включает и выключает VPN на последнем сервере.")
+        .description("Включает и выключает VPN на сервере, выбранном в приложении.")
     }
 }
 
@@ -24,21 +24,5 @@ struct VPNStatusProvider: ControlValueProvider {
 
     func currentValue() async throws -> Bool {
         await TunnelSwitch.isOn()
-    }
-}
-
-struct SetVPNIntent: SetValueIntent {
-    static let title: LocalizedStringResource = "Titan VPS"
-    /// Siri and Команды have the app's own intents (VPNIntents.swift).
-    static let isDiscoverable = false
-
-    @Parameter(title: "Включён")
-    var value: Bool
-
-    func perform() async throws -> some IntentResult {
-        // The toggle then shows what the VPN really did, failed or not.
-        defer { VPNControl.reload() }
-        if value { try await TunnelSwitch.start() } else { await TunnelSwitch.stop() }
-        return .result()
     }
 }

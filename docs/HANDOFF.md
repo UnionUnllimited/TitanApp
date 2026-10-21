@@ -18,7 +18,7 @@
 | `ios/TitanVPS/` | iOS-приложение (SwiftUI) |
 | `ios/TitanTunnel/` | iOS Packet Tunnel Extension: запускает Xray и клиент протокола |
 | `ios/TitanWidgets/` | iOS 18 WidgetKit Extension: переключатель VPN для Пункта управления и Live Activity |
-| `ios/Shared/` | Код, общий для приложения и расширений (включение VPN, данные Live Activity) |
+| `ios/Shared/` | Код, общий для приложения и расширений (включение VPN, интент переключателя, данные Live Activity) |
 | `ios/project.yml` | Проект Xcode (XcodeGen) |
 | `scripts/build-libxray.sh` | Сборка libXray для Android |
 | `scripts/build-libxray-ios.sh` | Сборка `LibXray.xcframework` для iOS (libXray v26.9.30 в режиме `local` с изменённым Xray-core) |
@@ -51,22 +51,37 @@
 - Пинг: iOS `ios/TitanVPS/XrayPing.swift`; Android `app/.../core/PingService.kt`; Windows `desktop/.../Repository.kt` (`PingEngine`).
 - VPN: iOS `ios/TitanVPS/VPNController.swift` и `ios/TitanTunnel/PacketTunnelProvider.swift`;
   Android `app/.../vpn/TitanVpnService.kt`; Windows `desktop/.../AppState.kt`, `Tun.kt`.
+  - На iOS профиль VPN хранит конфиг сервера, с которым туннель стартует из Настроек iOS и по автоподключению.
+    После обновления подписки при выключенном VPN приложение пересобирает его, если сервер в подписке
+    изменился или пропал (`VPNController.refreshProfile`; по ключу `source` — хешу конфига сервера из подписки).
+  - Если VPN включился не из приложения, выбранным в приложении становится сервер профиля (`AppStore.followTunnel`).
 - Интерфейс iOS: общие кнопки, переключатели, строки настроек, тосты и хаптика — `ios/TitanVPS/Components.swift`;
   ползунок «Выкл | Вкл» (перетаскивание, блокировка на время пинга) — `PowerSlider.swift`;
   «Проверить соединение» (запрос через работающий VPN: задержка, страна и IP выхода) — `ConnectionCheck.swift`.
 - Виджеты iOS (расширение `ios/TitanWidgets/`, только iOS 18; на iOS 16–17 приложение ставится без него):
   - переключатель «Titan VPS» для Пункта управления, экрана блокировки и кнопки действия — `VPNToggleControl.swift`.
-    Включает и выключает VPN прямо из расширения по профилю VPN, который приложение сохранило при
-    последнем подключении (`ios/Shared/TunnelSwitch.swift`), поэтому у расширения есть право Network Extension.
-    Приложение и сам переключатель просят iOS перечитать его состояние (`ios/Shared/VPNControl.swift`);
-    туннель WidgetKit не подключает (лимит памяти Network Extension);
+    Его интент `SetVPNIntent` (`ios/Shared/VPNToggleIntent.swift`) — `LiveActivityIntent`, поэтому iOS выполняет
+    его в процессе приложения (если нужно, запускает приложение в фоне). Он включает VPN так же, как Siri:
+    на сервере, выбранном в приложении, с автоподключением и правилами технического режима; тут же
+    запускает или закрывает Live Activity. Код, который есть только в приложении, — под условием компиляции
+    `TITAN_APP` (задано для цели приложения в `ios/project.yml`).
+    Само расширение только читает состояние VPN из профиля, который сохранило приложение
+    (`ios/Shared/TunnelSwitch.swift`), поэтому у расширения есть право Network Extension.
+    Приложение просит iOS перечитать состояние переключателя (`ios/Shared/VPNControl.swift`) при каждом
+    изменении VPN, которое видит, при каждом открытии, после нажатия на переключатель и после включения
+    или выключения из Siri и Команд (`VPNIntents.turnOn` / `turnOff`). Туннель WidgetKit
+    не подключает (лимит памяти Network Extension), поэтому, если VPN выключился, пока приложение закрыто
+    (туннель упал, выключили в Настройках iOS), переключатель покажет это после открытия приложения
+    или нажатия на него;
   - Live Activity и Dynamic Island при включённом VPN (сервер, флаг, время подключения) — `VPNLiveActivity.swift`;
     данные — `ios/Shared/VPNActivity.swift`. Запускает, обновляет и завершает её приложение:
-    `ios/TitanVPS/LiveActivity.swift`, вызов из `RootView` (`onChange(of: vpn.state)`).
-    Расширение Live Activity не закрывает: если VPN выключили из Пункта управления, пока приложение
-    было закрыто или в фоне, она останется до открытия приложения.
+    `ios/TitanVPS/LiveActivity.swift`. Вызовы — из `RootView` (при изменении VPN, при запуске и каждом
+    открытии приложения) и из интентов переключателя и Siri, которым iOS разрешает запускать её и в фоне.
+    Если VPN выключили в Настройках iOS или туннель упал, пока приложение закрыто, она останется
+    до открытия приложения.
 - Siri и Команды (iOS 16+): «Включить / Выключить / Переключить Titan VPS» и фразы для Siri — `ios/TitanVPS/VPNIntents.swift`.
   Работают в процессе приложения через `TunnelSwitch`; включают выбранный в приложении сервер.
+  Включение из Siri в фоне на iOS 18 сразу запускает и Live Activity.
 - Обновление Windows: `desktop/.../Updater.kt` (окно обновления на PowerShell).
 - Технический режим (диагностика, скрыт за кодом): iOS `ios/TitanVPS/TechModeView.swift`,
   Android `app/.../ui/TechModeScreen.kt`, Windows `desktop/.../TechMode.kt`.
