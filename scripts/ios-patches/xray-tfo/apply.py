@@ -57,12 +57,27 @@ for rel, edits in [
          "\treturn context.WithValue(ctx, titanOutboundManagerKey{}, m)\n}\n\n"
          "func InitSystemDialer(dc dns.Client, om outbound.Manager) {\n"),
     ]),
+    # Each handler keeps its own instance and puts its manager in the ctx of every dial it
+    # makes: Dispatch too (WireGuard dials from there), and mux/XUDP or VLESS pre-connections
+    # whose ctx has no instance in it.
     ("app/proxyman/outbound/handler.go", [
+        ("\tuplinkCounter   stats.Counter\n\tdownlinkCounter stats.Counter\n}\n",
+         "\tuplinkCounter   stats.Counter\n\tdownlinkCounter stats.Counter\n"
+         "\t// Titan patch: the instance it belongs to (dialerProxy lookups).\n\ttitanV *core.Instance\n}\n"),
+        ("\t\tuplinkCounter:   uplinkCounter,\n\t\tdownlinkCounter: downlinkCounter,\n\t}\n",
+         "\t\tuplinkCounter:   uplinkCounter,\n\t\tdownlinkCounter: downlinkCounter,\n\t\ttitanV:          v,\n\t}\n"),
+        ("func (h *Handler) Dispatch(ctx context.Context, link *transport.Link) {\n",
+         "func (h *Handler) Dispatch(ctx context.Context, link *transport.Link) {\n\tctx = h.titanCtx(ctx)\n"),
         ("\tconn, err := internet.Dial(ctx, dest, h.streamSettings)\n\tconn = h.getStatCouterConnection(conn)\n",
-         "\tif v := core.FromContext(ctx); v != nil {\n"
-         "\t\tif m, ok := v.GetFeature(outbound.ManagerType()).(outbound.Manager); ok {\n"
-         "\t\t\tctx = internet.TitanWithOutboundManager(ctx, m)\n\t\t}\n\t}\n"
+         "\tctx = h.titanCtx(ctx)\n"
          "\tconn, err := internet.Dial(ctx, dest, h.streamSettings)\n\tconn = h.getStatCouterConnection(conn)\n"),
+        ("func (h *Handler) SetOutboundGateway(",
+         "// titanCtx: DialSystem finds dialerProxy among this handler's own instance's outbounds.\n"
+         "func (h *Handler) titanCtx(ctx context.Context) context.Context {\n"
+         "\tif h.titanV != nil {\n"
+         "\t\tif m, ok := h.titanV.GetFeature(outbound.ManagerType()).(outbound.Manager); ok {\n"
+         "\t\t\treturn internet.TitanWithOutboundManager(ctx, m)\n\t\t}\n\t}\n\treturn ctx\n}\n\n"
+         "func (h *Handler) SetOutboundGateway("),
     ]),
 ]:
     target = src / rel

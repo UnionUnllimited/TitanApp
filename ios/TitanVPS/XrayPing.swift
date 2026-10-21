@@ -33,6 +33,10 @@ enum XrayPing {
     private static let startSpacing: UInt64 = 100_000_000
     /// Calls running at once at most (each is an Xray instance in memory).
     private static let maxCalls = 24
+    /// A balancer's members running at once: АВТО doesn't take every slot of the list.
+    private static let perServer = 6
+    /// A balancer whose members all failed is tried again on this many of them only.
+    private static let retryPerServer = 6
     /// What failed gets a second, slower try after the rest (as on Android).
     private static let retryTimeout = 8
     /// A server that answered is asked once more on the spot: DNS, the TLS session and the
@@ -85,7 +89,12 @@ enum XrayPing {
             if ms >= 0 { await onResult(servers[server].id, ms, nil) } else { failed[server] = why ?? "" }
         }
         if Task.isCancelled || failed.isEmpty { return }
-        let again = units.filter { failed[$0.server] != nil }
+        var retried: [Int: Int] = [:]
+        let again = units.filter { u in
+            guard failed[u.server] != nil, retried[u.server, default: 0] < retryPerServer else { return false }
+            retried[u.server, default: 0] += 1
+            return true
+        }
         await measure(again, timeout: retryTimeout) { server, ms, why in
             // A failed protocol client says why in its own log.
             let clientLog = ms < 0 && prepared[server]?.log != nil ? prepared[server]?.logTail() : nil
@@ -95,10 +104,10 @@ enum XrayPing {
         }
     }
 
-    /// Starts [units] in order, one every [startSpacing], at most [maxCalls] at once. [each]
-    /// gets a server's result once: its first member that answers, or its first failure
-    /// reason when none did. Members of a server already shown aren't started. Stopped:
-    /// nothing new starts.
+    /// Starts [units] in order, one every [startSpacing], at most [maxCalls] at once and
+    /// [perServer] of one server. [each] gets a server's result once: its first member that
+    /// answers, or its first failure reason when none did. Members of a server already shown
+    /// aren't started. Stopped: nothing new starts.
     private static func measure(_ units: [Unit], timeout: Int,
                                 each: (Int, Int, String?) async -> Void) async {
         var left: [Int: Int] = [:]
@@ -106,24 +115,22 @@ enum XrayPing {
         var shown = Set<Int>()
         var reason: [Int: String] = [:]
         await withTaskGroup(of: Event.self) { group in
+            var pending = Array(units.indices)
+            var busy: [Int: Int] = [:]
             var running = 0
-            var next = 0
             var ticking = false
             while true {
-                while next < units.count, shown.contains(units[next].server) {
-                    left[units[next].server, default: 1] -= 1
-                    next += 1
-                }
-                if !ticking, next < units.count, running < maxCalls, !Task.isCancelled {
-                    let index = next
-                    let item = units[next].item
-                    next += 1
+                if !ticking, running < maxCalls, !Task.isCancelled,
+                   let at = pending.firstIndex(where: { busy[units[$0].server, default: 0] < perServer }) {
+                    let index = pending.remove(at: at)
+                    let item = units[index].item
+                    busy[units[index].server, default: 0] += 1
                     running += 1
                     ticking = true
                     group.addTask {
                         let first = await probe(item, timeout: timeout)
                         var ms = first.0
-                        if ms >= 0 {
+                        if ms >= 0, !Task.isCancelled {
                             let warm = await probe(item, timeout: warmTimeout).0
                             if warm >= 0 { ms = min(ms, warm) }
                         }
@@ -141,10 +148,13 @@ enum XrayPing {
                 case let .done(unit, ms, why):
                     running -= 1
                     let server = units[unit].server
+                    busy[server, default: 1] -= 1
                     left[server, default: 1] -= 1
                     if shown.contains(server) || Task.isCancelled { continue }
                     if ms >= 0 {
                         shown.insert(server)
+                        // Its other members aren't needed any more.
+                        pending.removeAll { units[$0].server == server }
                         await each(server, ms, nil)
                     } else {
                         if reason[server] == nil, let why, !why.isEmpty { reason[server] = why }
