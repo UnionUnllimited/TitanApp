@@ -11,7 +11,7 @@ struct FlagCircle: View {
     /// The name without it: АВТО gets the bolt.
     var name = ""
     let size: CGFloat
-    /// Behind the bolt, the server and an emoji flag.
+    /// The disc behind the flag (image or emoji), the bolt and the server.
     var fill: Color = Color.secondary.opacity(0.15)
     /// A hairline round it: a white flag keeps its edge.
     var stroke: Color = Color.white.opacity(0.15)
@@ -22,20 +22,19 @@ struct FlagCircle: View {
         let code = Flags.code(flag)
         let country = code.flatMap(Flags.country)
         ZStack {
+            // Under the image too, as Windows' disc: Nepal's flag is transparent round its pennant.
+            fill
             if let code, let image = Flags.image(code) {
                 // Original: not tinted as a button's template image.
                 Image(image).renderingMode(.original).resizable().scaledToFill()
+            } else if let flag {
+                // The emoji's flag is wider than tall and has a margin: large enough that
+                // its height fills the circle.
+                Text(flag).font(.system(size: size * 1.6)).fixedSize()
+            } else if name.lowercased().contains("авто") {
+                Image(systemName: "bolt.fill").font(.system(size: size * 0.5)).foregroundStyle(bolt)
             } else {
-                fill
-                if let flag {
-                    // The emoji's flag is wider than tall and has a margin: large enough that
-                    // its height fills the circle.
-                    Text(flag).font(.system(size: size * 1.6)).fixedSize()
-                } else if name.lowercased().contains("авто") {
-                    Image(systemName: "bolt.fill").font(.system(size: size * 0.5)).foregroundStyle(bolt)
-                } else {
-                    Image(systemName: "server.rack").font(.system(size: size * 0.5)).foregroundStyle(symbol)
-                }
+                Image(systemName: "server.rack").font(.system(size: size * 0.5)).foregroundStyle(symbol)
             }
         }
         .frame(width: size, height: size)
