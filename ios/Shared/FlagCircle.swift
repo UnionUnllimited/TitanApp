@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// A server's flag filled into a circle, as on Windows: the square flag from Flags.xcassets
-/// (flag-icons, made in CI by scripts/download-flags-ios.sh; vector, sharp at any size), else
+/// (flag-icons, drawn to PNG by librsvg in CI: scripts/download-flags-ios.sh), else
 /// the flag emoji as large as the circle needs. No flag: a bolt for АВТО, else a server.
 /// The app's list and status, Настройки and the Live Activity give it their colours.
 struct FlagCircle: View {

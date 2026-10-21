@@ -64,7 +64,7 @@
   «Проверить соединение» (запрос через работающий VPN: задержка, страна и IP выхода) — `ConnectionCheck.swift`.
 - Оплата тарифа из «Личного кабинета» iOS открывается внутри приложения (WKWebView, не Safari) — `ios/TitanVPS/PaymentView.swift`.
 - Круглые флаги на iOS, как на Windows (список серверов, строка под статусом, Настройки, «Проверить соединение»,
-  Live Activity и Dynamic Island) — `FlagCircle` в `ios/Shared/FlagCircle.swift`: векторный флаг из `flag-icons`,
+  Live Activity и Dynamic Island) — `FlagCircle` в `ios/Shared/FlagCircle.swift`: флаг из `flag-icons` (PNG, нарисованные librsvg),
   залитый в круг. Каталог `Flags.xcassets` собирает шаг CI «Download flag images» (`ios.yml`, `testflight.yml`)
   перед xcodegen; в локальной сборке без него в круге эмодзи флага.
 - Виджеты iOS (расширение `ios/TitanWidgets/`, только iOS 18; на iOS 16–17 приложение ставится без него):
