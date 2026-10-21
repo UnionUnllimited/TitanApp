@@ -350,10 +350,10 @@ struct ToastView: View {
 
 extension Font {
     /// The system font at [size] grown with the phone's text size (Dynamic Type): text up to
-    /// 1.6×, big titles and numbers (28 pt and up) up to 1.2×, so that the layout holds.
+    /// 1.25×, titles and big numbers (24 pt and up) not at all, so that the design holds.
     /// RootView rebuilds the screens when the text size changes.
     static func scaled(_ size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
-        let limit: CGFloat = size >= 28 ? 1.2 : 1.6
+        let limit: CGFloat = size >= 24 ? 1 : 1.25
         return .system(size: min(UIFontMetrics.default.scaledValue(for: size), size * limit), weight: weight, design: design)
     }
 }
@@ -517,55 +517,6 @@ struct SegmentedTabs: View {
         .padding(4)
         .background(Palette.surface, in: Capsule())
         .overlay(Capsule().stroke(Palette.outline.opacity(0.6), lineWidth: 1))
-    }
-}
-
-// MARK: - Living status
-
-/// A dot with a ring that keeps spreading out from it (a live connection).
-struct PulseDot: View {
-    let color: Color
-    var active = true
-    var size: CGFloat = 10
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active || reduceMotion)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
-            ZStack {
-                if active && !reduceMotion {
-                    Circle()
-                        .stroke(color.opacity(0.7 * (1 - t)), lineWidth: 2)
-                        .scaleEffect(1 + 1.6 * t)
-                }
-                Circle().fill(color)
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
-    }
-}
-
-/// A soft glow in the colour of the VPN's state behind the switch and the status, slowly
-/// breathing; none while off.
-struct StateAura: View {
-    let color: Color?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: color == nil || reduceMotion)) { ctx in
-            let breath = reduceMotion ? 0 : sin(ctx.date.timeIntervalSinceReferenceDate * 1.3)
-            GeometryReader { g in
-                Ellipse()
-                    .fill(RadialGradient(colors: [(color ?? .clear).opacity(0.2 + 0.07 * breath), (color ?? .clear).opacity(0)],
-                                         center: .center, startRadius: 0, endRadius: g.size.width * 0.55))
-                    .frame(width: g.size.width, height: g.size.height)
-            }
-        }
-        .opacity(color == nil ? 0 : 1)
-        .animation(.easeInOut(duration: 0.6), value: color)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }
 

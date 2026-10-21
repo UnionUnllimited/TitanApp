@@ -147,30 +147,12 @@ struct HomeView: View {
                 .buttonStyle(PressableStyle())
             }
             subscriptionCard(sub)
-            VStack(spacing: 12) {
-                PowerSlider(phase: powerPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Пинг…",
-                            failures: vpn.failures, onToggle: toggleVPN,
-                            onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) },
-                            onHold: { holdingDrag = $0 })
-                    .padding(.top, 6)
-                statusBlock
-            }
-            .background(StateAura(color: stateColor).padding(.horizontal, -24).padding(.vertical, -36))
-            if vpn.isConnected && !paused {
-                LiveStatsCard(monitor: traffic)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-    }
-
-    /// The colour of the VPN's state (the glow behind the switch, the dot by the status); nil while off.
-    private var stateColor: Color? {
-        if paused { return .orange }
-        switch vpn.state {
-        case .connected: return Palette.green
-        case .connecting, .disconnecting: return Palette.primary
-        case .error: return .red
-        case .off: return nil
+            PowerSlider(phase: powerPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Пинг…",
+                        failures: vpn.failures, onToggle: toggleVPN,
+                        onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) },
+                        onHold: { holdingDrag = $0 })
+                .padding(.top, 6)
+            statusBlock
         }
     }
 
@@ -206,16 +188,9 @@ struct HomeView: View {
 
     private var statusBlock: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 10) {
-                if let color = stateColor {
-                    // Spreading rings while it's live or on its way; still on an error.
-                    PulseDot(color: color, active: vpn.isOn || paused, size: 11)
-                        .transition(.scale.combined(with: .opacity))
-                }
-                Text(statusTitle).font(.scaled(26, weight: .heavy))
-                    .foregroundStyle(statusColor)
-            }
-            .animation(.easeInOut(duration: 0.25), value: statusTitle)
+            Text(statusTitle).font(.scaled(26, weight: .heavy))
+                .foregroundStyle(statusColor)
+                .animation(.easeInOut(duration: 0.25), value: statusTitle)
             if paused {
                 Text("VPN включится сам, когда пинг закончится")
                     .font(.scaled(14)).foregroundStyle(.secondary)
@@ -225,6 +200,7 @@ struct HomeView: View {
                     Text(String(format: "%02d:%02d:%02d", s / 3600, s % 3600 / 60, s % 60))
                         .font(.scaled(15, weight: .medium).monospacedDigit()).foregroundStyle(.secondary)
                 }
+                SpeedLine(monitor: traffic)
             }
             HStack(spacing: 6) {
                 if let s = store.selected {
@@ -252,6 +228,9 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 4)
+        .background(alignment: .center) {
+            if vpn.isConnected && !paused { SpeedBackdrop(monitor: traffic) }
+        }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: vpn.isConnected)
     }
 
@@ -496,7 +475,7 @@ struct HomeView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: g == .servers ? "server.rack" : "shuffle")
-                Text(g.rawValue).lineLimit(1)
+                Text(g.rawValue).lineLimit(1).minimumScaleFactor(0.7)
                 Text("\(count)").font(.scaled(12, weight: .semibold))
                     .foregroundStyle(selected ? .white : .secondary)
                     .padding(.horizontal, 7).padding(.vertical, 2)

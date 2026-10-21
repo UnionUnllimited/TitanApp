@@ -112,75 +112,37 @@ final class TrafficMonitor: ObservableObject {
     }
 }
 
-/// Главная while connected: download and upload speed, a live chart of the last minute and
-/// what this session has used.
-struct LiveStatsCard: View {
+/// Under the connection timer: the speed now, quietly.
+struct SpeedLine: View {
     @ObservedObject var monitor: TrafficMonitor
 
-    private let downFill = LinearGradient(colors: [Palette.primary.opacity(0.4), Palette.primary.opacity(0.02)],
-                                          startPoint: .top, endPoint: .bottom)
+    var body: some View {
+        Text("↓ \(Fmt.speed(monitor.down))    ↑ \(Fmt.speed(monitor.up))")
+            .font(.scaled(12, weight: .medium).monospacedDigit())
+            .foregroundStyle(.tertiary)
+            .accessibilityLabel("Загрузка \(Fmt.speed(monitor.down)), отдача \(Fmt.speed(monitor.up))")
+    }
+}
+
+/// Behind the status: the last minute of download as a faint curve, barely there.
+struct SpeedBackdrop: View {
+    @ObservedObject var monitor: TrafficMonitor
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 0) {
-                speed(icon: "arrow.down", title: "Загрузка", value: monitor.down, color: Palette.primary)
-                Rectangle().fill(Palette.outline).frame(width: 1, height: 36)
-                speed(icon: "arrow.up", title: "Отдача", value: monitor.up, color: Palette.violet)
-            }
-            chart
-                .frame(height: 64)
-            HStack(spacing: 6) {
-                Image(systemName: "clock.arrow.circlepath")
-                Text("За сессию")
-                Spacer()
-                Text("↓ \(Fmt.bytes(monitor.sessionDown))   ↑ \(Fmt.bytes(monitor.sessionUp))")
-                    .monospacedDigit()
-            }
-            .font(.scaled(12, weight: .medium))
-            .foregroundStyle(.secondary)
-        }
-        .padding(16)
-        .background(Palette.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Palette.outline.opacity(0.5), lineWidth: 1))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Загрузка \(Fmt.speed(monitor.down)), отдача \(Fmt.speed(monitor.up)), за сессию \(Fmt.bytes(monitor.sessionDown + monitor.sessionUp))")
-    }
-
-    private func speed(icon: String, title: String, value: Double, color: Color) -> some View {
-        let parts = Fmt.speedParts(value)
-        return VStack(spacing: 4) {
-            Label(title, systemImage: icon)
-                .font(.scaled(12, weight: .semibold))
-                .foregroundStyle(color)
-            (Text(parts.number).font(.scaled(22, weight: .bold)) + Text(" " + parts.unit).font(.scaled(13, weight: .semibold)))
-                .monospacedDigit()
-                .contentTransition(.numericText())
-                .animation(.easeOut(duration: 0.3), value: parts.number)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    /// Download as a filled curve, upload as a dashed line, over the last minute.
-    private var chart: some View {
-        let top = max(monitor.history.map { max($0.down, $0.up) }.max() ?? 0, 1024)
+        let top = max(monitor.history.map(\.down).max() ?? 0, 64 * 1024)
         let lastId = monitor.history.last?.id ?? TrafficMonitor.window
-        return Chart(monitor.history) { s in
+        Chart(monitor.history) { s in
             AreaMark(x: .value("Время", s.id), y: .value("Загрузка", s.down))
                 .interpolationMethod(.catmullRom)
-                .foregroundStyle(downFill)
-            LineMark(x: .value("Время", s.id), y: .value("Скорость", s.down), series: .value("Направление", "down"))
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(Palette.primary)
-                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
-            LineMark(x: .value("Время", s.id), y: .value("Скорость", s.up), series: .value("Направление", "up"))
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(Palette.violet.opacity(0.85))
-                .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [3, 3]))
+                .foregroundStyle(LinearGradient(colors: [Palette.primary.opacity(0.14), Palette.primary.opacity(0)],
+                                                startPoint: .top, endPoint: .bottom))
         }
         .chartXAxis(.hidden)
         .chartYAxis(.hidden)
         .chartXScale(domain: (lastId - TrafficMonitor.window + 1)...max(lastId, TrafficMonitor.window))
-        .chartYScale(domain: 0...(top * 1.15))
+        .chartYScale(domain: 0...(top * 1.2))
         .animation(.easeOut(duration: 0.35), value: monitor.history.last?.id)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
