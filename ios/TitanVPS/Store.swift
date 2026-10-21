@@ -48,6 +48,9 @@ final class AppStore: ObservableObject {
     private let favKey = "titan.favorites"
     private let pathMonitor = NWPathMonitor()
 
+    /// The app's own, while it runs: the Live Activity's ‹ › move the pick here (VPNIntents).
+    static weak var current: AppStore?
+
     init() {
         if let data = UserDefaults.standard.data(forKey: subKey),
            let sub = try? JSONDecoder().decode(Subscription.self, from: data) {
@@ -62,6 +65,7 @@ final class AppStore: ObservableObject {
         }
         pathMonitor.start(queue: DispatchQueue(label: "titan.path"))
         UNUserNotificationCenter.current().delegate = NotificationPresenter.shared
+        Self.current = self
     }
 
     /// Support: the subscription's support-url, else the bot.

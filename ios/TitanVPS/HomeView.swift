@@ -398,7 +398,7 @@ struct HomeView: View {
             }
             // Favourites first, in the subscription's order otherwise.
             let items = groups[page] ?? groups[.servers] ?? []
-            ForEach(items.filter(store.isFavorite) + items.filter { !store.isFavorite($0) }) { s in
+            ForEach(ServerGroup.ordered(items, favorites: store.favorites)) { s in
                 let locked = store.blockedOnWifi(s)
                 let favorite = store.isFavorite(s)
                 // Swipe right: favourite (or not any more); swipe left: ping this one.
@@ -436,8 +436,7 @@ struct HomeView: View {
         Button {
             Haptics.tap()
             // In the order shown (favourites first): results fill the list from the top.
-            let tab = groups[page] ?? []
-            store.pingAll(first: (tab.filter(store.isFavorite) + tab.filter { !store.isFavorite($0) }).map(\.id))
+            store.pingAll(first: ServerGroup.ordered(groups[page] ?? [], favorites: store.favorites).map(\.id))
         } label: {
             HStack(spacing: 7) {
                 if store.pinging {

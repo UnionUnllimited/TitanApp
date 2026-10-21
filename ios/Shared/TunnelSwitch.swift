@@ -2,10 +2,11 @@ import Foundation
 import Network
 import NetworkExtension
 
-/// Turns the VPN on and off without the app's screen: Пункт управления, Siri and Команды (their
-/// intents run in the app's process); TitanWidgets reads the toggle's state with it. It works
-/// with the VPN profile the app saved when it last connected: its providerConfiguration has
-/// that server's config, so the tunnel starts with no options, as it does from iOS Settings.
+/// Turns the VPN on and off without the app's screen: Пункт управления, Siri, Команды and the
+/// Live Activity's buttons (their intents run in the app's process); TitanWidgets reads the
+/// toggle's state with it. It works with the VPN profile the app saved when it last connected:
+/// its providerConfiguration has that server's config, so the tunnel starts with no options,
+/// as it does from iOS Settings.
 enum TunnelSwitch {
     /// A server to run instead of the profile's last one (the server picked in the app).
     struct Target {
@@ -99,6 +100,17 @@ enum TunnelSwitch {
         m.connection.stopVPNTunnel()
     }
 
+    /// After stop, before start on another server: up to 5 s until the old session is down
+    /// (start does nothing while it still counts as on).
+    static func waitUntilDown() async {
+        guard let m = try? await manager() else { return }
+        for _ in 0..<25 {
+            let status = m.connection.status
+            if status == .disconnected || status == .invalid { return }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
     /// Up to 12 s: enough for the tunnel to start, short enough for Siri. Still connecting
     /// after that is no error; never started (no network, say) is.
     private static func waitUntilUp(_ connection: NEVPNConnection) async throws {
@@ -129,7 +141,7 @@ enum TunnelSwitch {
     }
 
     /// The phone is on Wi-Fi now (as AppStore.onWifi sees it).
-    private static func onWifi() async -> Bool {
+    static func onWifi() async -> Bool {
         let monitor = NWPathMonitor()
         let once = Once()
         let wifi = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in

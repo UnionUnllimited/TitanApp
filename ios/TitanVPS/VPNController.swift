@@ -19,14 +19,28 @@ final class VPNController: ObservableObject {
     private var connectsInFlight = 0
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
+    /// The profile's first load: an intent may come right at launch.
+    private var loading: Task<Void, Never>?
+
+    /// The app's own, while it runs: the Live Activity's ‹ › switch through it (VPNIntents).
+    static weak var current: VPNController?
 
     init() {
-        Task { await load() }
+        loading = Task { await load() }
+        Self.current = self
+    }
+
+    /// Returns once the profile has been read (state is the VPN's real one from then on).
+    func loaded() async {
+        await loading?.value
     }
 
     var isOn: Bool {
         switch state { case .connecting, .connected: return true; default: return false }
     }
+
+    /// A connect or a server switch is under way (the tunnel may be down for a moment in it).
+    var connectsUnderWay: Bool { connectsInFlight > 0 }
 
     var isConnected: Bool {
         if case .connected = state { return true }
@@ -239,9 +253,21 @@ final class VPNController: ObservableObject {
         // Off for a moment in between: no refreshProfile then either.
         connectsInFlight += 1
         defer { connectsInFlight -= 1 }
+        wantOn = true
         manager?.connection.stopVPNTunnel()
         try? await Task.sleep(nanoseconds: 700_000_000)
+        // Turned off meanwhile (Выкл, Пункт управления, Siri): stays off, as the tunnel is now.
+        guard wantOn else {
+            update()
+            return
+        }
         await connect(server)
+    }
+
+    /// Turned off outside the app's screen (Пункт управления, Siri): a connect or a server
+    /// switch under way gives up instead of bringing the VPN back.
+    func cancelConnects() {
+        wantOn = false
     }
 
     private static func describe(_ error: Error) -> String {

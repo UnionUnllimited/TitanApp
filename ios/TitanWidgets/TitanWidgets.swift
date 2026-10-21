@@ -19,9 +19,6 @@ enum Brand {
     static let violet = Color(hex: 0x5B3DF5)
     /// The brand blue, lighter: readable on navy.
     static let sky = Color(hex: 0x7EA6FF)
-    static let accentGradient = LinearGradient(colors: [blue, violet], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let greenGradient = LinearGradient(colors: [Color(hex: 0x22C55E), Color(hex: 0x15803D)],
-                                              startPoint: .topLeading, endPoint: .bottomTrailing)
 }
 
 extension Color {

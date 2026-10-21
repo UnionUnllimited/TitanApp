@@ -322,6 +322,12 @@ enum ServerGroup: String, CaseIterable, Identifiable {
         return out
     }
 
+    /// A tab's servers as Главная lists them: favourites first, in the subscription's order
+    /// otherwise (the Live Activity's ‹ › go through them in this order too).
+    static func ordered(_ servers: [Server], favorites: Set<String>) -> [Server] {
+        servers.filter { favorites.contains($0.name) } + servers.filter { !favorites.contains($0.name) }
+    }
+
     static func isBypass(_ s: Server) -> Bool { s.name.lowercased().contains("обход") }
     /// A bypass server that spends GB: all but the free ones ("Обход 1 бесплатный").
     static func isLimited(_ s: Server) -> Bool { isBypass(s) && !letters(s.name).contains("бесплатн") }

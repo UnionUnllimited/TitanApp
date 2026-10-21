@@ -14,8 +14,8 @@ targets:
   TitanVPS:
     type: application
     platform: iOS
-    # Shared: what the app and TitanWidgets both use (VPN on/off, the toggle's intent, the Live
-    # Activity's data).
+    # Shared: what the app and TitanWidgets both use (VPN on/off, the toggle's and the Live
+    # Activity buttons' intents, the Live Activity's data).
     sources: [TitanVPS, Shared]
     dependencies:
       - target: TitanTunnel
@@ -66,7 +66,8 @@ targets:
         ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "AppIconLight AppIconDark"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
-        # `#if TITAN_APP` in Shared: what only the app runs (the toggle's intent turns the VPN on as Siri does).
+        # `#if TITAN_APP` in Shared: what only the app runs (the toggle's and the Live Activity buttons'
+        # intents act in the app's process).
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) TITAN_APP"
         # Cronet (Chromium's network stack, for Naive) is linked here, with what it needs.
         OTHER_LDFLAGS: ["-lresolv", "-lc++", "$(PROJECT_DIR)/Frameworks/LibXray.xcframework/libcronet.a",

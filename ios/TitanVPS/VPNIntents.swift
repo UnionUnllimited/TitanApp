@@ -88,23 +88,199 @@ enum VPNIntents {
         return name.splitFlag.1
     }
 
+    @MainActor
     static func turnOff() async {
         defer { VPNControl.reload() }
+        // A switch of the activity's ‹ › (or the app's connect) under way stays off too.
+        switchGeneration += 1
+        offs += 1
+        switchingTo = nil
+        VPNController.current?.cancelConnects()
         await TunnelSwitch.stop()
         await LiveActivityController.endAll()
     }
 
-    /// The server picked in the app (AppStore keeps the subscription and the pick under these
-    /// keys), with its config for the tunnel, built as VPNController.connect builds it.
+    // MARK: The Live Activity's ‹ ›
+
+    /// The server asked for last while switches are under way: a quick next tap goes on from it.
+    @MainActor private static var switchingTo: String?
+    @MainActor private static var switchesInFlight = 0
+    /// Bumped on each tap and on off: a switch still under way gives way to the newest (or stops).
+    @MainActor private static var switchGeneration = 0
+    @MainActor private static var switchTask: Task<Void, Never>?
+    /// Bumped on off only: a background switch already starting the tunnel stops it again.
+    @MainActor private static var offs = 0
+
+    /// The previous or the next server (SwitchServerIntent): in the current one's tab (Серверы
+    /// or Обходы) as Главная lists it, round the end; on Wi-Fi from a bypass server to a regular
+    /// one, as in the app.
+    /// Through the app's own objects when they are alive (its screen follows), else with the
+    /// VPN profile as Siri does. VPN off: only the pick moves, and an activity left up goes.
+    @MainActor
+    static func switchServer(forward: Bool) async {
+        defer { VPNControl.reload() }
+        let defaults = UserDefaults.standard
+        guard let all = (AppStore.current?.subscription ?? savedSubscription())?.servers else { return }
+        let servers = all.filter { !ServerGroup.isHidden($0) }
+        // The slow reads first: from here to the pick nothing waits, so each of quick taps
+        // steps one server further.
+        let on = await TunnelSwitch.isOn()
+        let running = await TunnelSwitch.serverName()
+        var wifiLocked = false
+        if servers.contains(where: ServerGroup.isBypass) { wifiLocked = await bypassLockedOnWifi() }
+
+        let store = AppStore.current
+        // A ping holds the VPN off and brings it back by itself.
+        if let store, store.pingBusy || store.vpnPaused { return }
+        // From the server asked for last, else the one the tunnel runs, else the pick.
+        let asked = switchingTo
+        let pickedId = store?.selectedId ?? defaults.string(forKey: "titan.selected")
+        var found = servers.first(where: { $0.id == asked })
+        if found == nil, on { found = servers.first(where: { $0.name == running }) }
+        if found == nil { found = servers.first(where: { $0.id == pickedId }) ?? servers.first }
+        guard let current = found else { return }
+        let bypass = ServerGroup.isBypass(current)
+        let favorites = store?.favorites ?? Set(defaults.stringArray(forKey: "titan.favorites") ?? [])
+        let next: Server
+        if bypass && wifiLocked {
+            // On a bypass server on Wi-Fi (joined while the app was closed): off it to a regular
+            // one, as the app moves (AppStore.firstRegular: a favourite first).
+            let regular = ServerGroup.ordered(servers.filter { !ServerGroup.isBypass($0) }, favorites: favorites)
+            guard let to = forward ? regular.first : regular.last else { return }
+            next = to
+        } else {
+            let list = ServerGroup.ordered(servers.filter { ServerGroup.isBypass($0) == bypass }, favorites: favorites)
+            guard list.count > 1, let i = list.firstIndex(where: { $0.id == current.id }) else { return }
+            next = list[(i + (forward ? 1 : list.count - 1)) % list.count]
+        }
+
+        if let store { store.select(next.id) } else { defaults.set(next.id, forKey: "titan.selected") }
+        // Off: only the pick. A switch under way has the tunnel down for a moment: still on.
+        guard on || switchesInFlight > 0 else {
+            // A banner left from a VPN that went off without the app (iOS Settings, the tunnel
+            // fell) goes now instead of still saying "Подключено". Not while the app reconnects.
+            if VPNController.current?.connectsUnderWay != true { await LiveActivityController.endIfOffNow() }
+            return
+        }
+        switchingTo = next.id
+        switchGeneration += 1
+        let gen = switchGeneration
+        switchesInFlight += 1
+        defer {
+            switchesInFlight -= 1
+            if switchesInFlight == 0 { switchingTo = nil }
+        }
+        await LiveActivityController.switching(to: next.name)
+        // One at a time: each waits for the one before and goes on only if it is still the last.
+        let previous = switchTask
+        let task = Task { @MainActor in
+            await previous?.value
+            guard gen == switchGeneration else { return }
+            if let vpn = VPNController.current {
+                await switchInApp(vpn, to: next, gen: gen)
+            } else {
+                await switchProfile(to: next, gen: gen)
+            }
+        }
+        switchTask = task
+        await task.value
+        if gen == switchGeneration { switchTask = nil }
+    }
+
+    /// As a tap on the server in Главная: VPNController reconnects and the app's screen follows.
+    @MainActor private static func switchInApp(_ vpn: VPNController, to server: Server, gen: Int) async {
+        await vpn.loaded()
+        // Turned off meanwhile: switchTo / connect would want it on again.
+        guard gen == switchGeneration else { return }
+        // Down between two quick taps: on again on this one.
+        if vpn.isOn { await vpn.switchTo(server) } else { await vpn.connect(server) }
+        // Up before iOS may suspend the app again, so the activity says so (no screen may be
+        // watching the VPN to tell it).
+        for i in 0..<60 {
+            guard gen == switchGeneration, !vpn.isConnected else { break }
+            // Fell: with the tunnel's reason, or plain off a second after the start.
+            if case .error = vpn.state { break }
+            if i >= 5, case .off = vpn.state { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        await settle(gen)
+    }
+
+    /// Launched in the background for the tap: the VPN profile, as Siri turns it on.
+    @MainActor private static func switchProfile(to server: Server, gen: Int) async {
+        let defaults = UserDefaults.standard
+        let onDemand = defaults.bool(forKey: "autoconnect")
+        let bypassOnWifi = defaults.bool(forKey: TechMode.key)
+        // Can't be run: the VPN stays as it is, the activity back to what runs.
+        guard runnable(server) else {
+            await settle(gen)
+            return
+        }
+        await TunnelSwitch.stop()
+        await TunnelSwitch.waitUntilDown()
+        // The network's own routes and DNS back first (as VPNController.switchTo waits): the new
+        // server's host is resolved by the phone's network, not the old tunnel.
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        // A newer tap (or an off) takes it from here.
+        guard gen == switchGeneration else { return }
+        let offsBefore = offs
+        // Fell on the way: settle ends the activity with the VPN.
+        if let config = try? target(server) {
+            _ = try? await TunnelSwitch.start(config, onDemand: onDemand, bypassOnWifi: bypassOnWifi)
+        } else {
+            // Not built after all: the profile's last server again.
+            _ = try? await TunnelSwitch.start(nil, onDemand: onDemand, bypassOnWifi: bypassOnWifi)
+        }
+        // Turned off while the profile was saved: stays off (and Автоподключение with it).
+        // Not on a newer tap: that one restarts the tunnel itself.
+        if offs != offsBefore {
+            await TunnelSwitch.stop()
+            return
+        }
+        await settle(gen)
+    }
+
+    /// What target needs no network for (a plugin's host is resolved there).
+    private static func runnable(_ server: Server) -> Bool {
+        server.xrayJson != nil && server.proxyTag != nil
+            && (Plugins.endpoint(server).map { $0.kind.supportedOnIOS } ?? true)
+    }
+
+    /// A switch is over: the activity shows the server up, or goes with a VPN that is off.
+    /// Not when a newer tap or an off has taken over since: that one sees to the activity.
+    @MainActor private static func settle(_ gen: Int) async {
+        let on = await TunnelSwitch.isOn()
+        guard gen == switchGeneration else { return }
+        if on { await LiveActivityController.turnedOn() } else { await LiveActivityController.endAll() }
+    }
+
+    /// On Wi-Fi bypass servers are off limits, except in Технический режим (AppStore.bypassLockedOnWifi).
+    @MainActor private static func bypassLockedOnWifi() async -> Bool {
+        if let store = AppStore.current { return store.bypassLockedOnWifi }
+        if UserDefaults.standard.bool(forKey: TechMode.key) { return false }
+        return await TunnelSwitch.onWifi()
+    }
+
+    /// The subscription as the app saved it last (AppStore keeps it under this key).
+    private static func savedSubscription() -> Subscription? {
+        guard let data = UserDefaults.standard.data(forKey: "titan.subscription") else { return nil }
+        return try? JSONDecoder().decode(Subscription.self, from: data)
+    }
+
+    /// The server picked in the app (AppStore keeps the pick under this key), with its config.
     private static func picked() throws -> TunnelSwitch.Target {
-        guard let data = UserDefaults.standard.data(forKey: "titan.subscription"),
-              let sub = try? JSONDecoder().decode(Subscription.self, from: data) else {
+        guard let sub = savedSubscription() else {
             throw TunnelSwitchError("Добавьте ключ подписки в приложении Titan VPS")
         }
         let id = UserDefaults.standard.string(forKey: "titan.selected")
         guard let server = sub.servers.first(where: { $0.id == id }) ?? sub.servers.first else {
             throw TunnelSwitchError("В подписке нет серверов. Обновите её в приложении Titan VPS")
         }
+        return try target(server)
+    }
+
+    /// A server's config for the tunnel, built as VPNController.connect builds it.
+    private static func target(_ server: Server) throws -> TunnelSwitch.Target {
         let prepared = try Plugins.prepare(server, forTunnel: true)
         var provider: [String: Any] = ["config": try XrayRunConfig.build(serverJson: prepared.json),
                                        "source": VPNController.source(server)]

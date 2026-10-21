@@ -1,10 +1,12 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
-/// While the VPN is on: the server and the time on it, on the Lock Screen and in the Dynamic
-/// Island. The app starts and ends it (LiveActivity.swift). No widgetURL: a tap just opens the
-/// app (titanvps:// links are for keys).
+/// While the VPN is on: the server with its flag, and ‹ › for the previous and the next one
+/// (SwitchServerIntent, run in the app), on the Lock Screen and in the Dynamic Island. The app
+/// starts and ends it (LiveActivity.swift). No widgetURL: a tap elsewhere just opens the app
+/// (titanvps:// links are for keys).
 struct VPNLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: VPNActivityAttributes.self) { context in
@@ -13,92 +15,74 @@ struct VPNLiveActivity: Widget {
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             let state = context.state
+            let label = ServerLabel(state)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    ShieldBadge(connected: state.connected, size: 40)
+                    ServerTile(icon: label.icon, size: 46)
                         .padding(.leading, 4)
                 }
-                DynamicIslandExpandedRegion(.trailing) {
-                    ElapsedTime(state: state, size: 20)
-                        .frame(width: 80, alignment: .trailing)
-                        .padding(.trailing, 4)
-                }
                 DynamicIslandExpandedRegion(.center) {
-                    Text("Titan VPS")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.6))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(label.name)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
+                        StatusLine(connected: state.connected, size: 12)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 2)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 10) {
-                        FlagView(flag: state.flag, size: 24)
-                        Text(state.server)
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                        Spacer(minLength: 6)
-                        StatusPill(connected: state.connected)
+                        SwitchButton(forward: false, titled: true)
+                        SwitchButton(forward: true, titled: true)
                     }
                     .padding(.horizontal, 4)
                     .padding(.top, 6)
                 }
             } compactLeading: {
-                Image(systemName: state.connected ? "checkmark.shield.fill" : "shield.lefthalf.filled")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(state.connected ? Brand.green : Brand.sky)
+                ServerIcon(icon: label.icon, size: 16)
             } compactTrailing: {
-                ElapsedTime(state: state, size: 14, color: Brand.green)
-                    .frame(width: 52, alignment: .trailing)
+                StatusDot(connected: state.connected)
             } minimal: {
-                Image(systemName: state.connected ? "checkmark.shield.fill" : "shield.lefthalf.filled")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(state.connected ? Brand.green : Brand.sky)
+                ServerIcon(icon: label.icon, size: 15)
             }
             .keylineTint(Brand.green)
         }
     }
 }
 
-/// Lock Screen and the banner: the shield, the server, the time on.
+/// Lock Screen and the banner: the flag, the whole name, the state, ‹ ›.
 private struct ActivityBanner: View {
     let state: VPNActivityAttributes.ContentState
 
     var body: some View {
-        HStack(spacing: 14) {
-            ShieldBadge(connected: state.connected, size: 48)
+        let label = ServerLabel(state)
+        HStack(spacing: 12) {
+            ServerTile(icon: label.icon, size: 48)
             VStack(alignment: .leading, spacing: 3) {
                 Text("TITAN VPS")
                     .font(.system(size: 11, weight: .bold))
                     .kerning(1.2)
                     .foregroundStyle(Color.white.opacity(0.5))
-                HStack(spacing: 7) {
-                    FlagView(flag: state.flag, size: 19)
-                    Text(state.server)
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                }
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(state.connected ? Brand.green : Brand.sky)
-                        .frame(width: 7, height: 7)
-                    Text(state.connected ? "Подключено" : "Подключаемся…")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(state.connected ? Brand.green : Brand.sky)
-                }
+                // Whole: on two lines, a little smaller if need be, rather than cut with "…"
+                // (a Live Activity can't scroll it).
+                Text(label.name)
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+                StatusLine(connected: state.connected)
             }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 2) {
-                ElapsedTime(state: state, size: 24)
-                    .frame(width: 96, alignment: .trailing)
-                if state.connected {
-                    Text("в сети")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.5))
-                }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                SwitchButton(forward: false)
+                SwitchButton(forward: true)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
         .background {
             // Navy with the logo's blue and violet glowing from the corners.
             ZStack {
@@ -110,72 +94,123 @@ private struct ActivityBanner: View {
     }
 }
 
-/// Green shield when connected, the brand's blue to violet while it connects again.
-private struct ShieldBadge: View {
-    let connected: Bool
-    let size: CGFloat
+/// The tile's emoji and the name beside it: the flag, else an emoji the name starts with
+/// ("⚡ АВТО"), which the name then goes without.
+private struct ServerLabel {
+    let icon: String?
+    let name: String
 
-    var body: some View {
-        ZStack {
-            Circle().fill(connected ? Brand.greenGradient : Brand.accentGradient)
-            Image(systemName: connected ? "checkmark.shield.fill" : "shield.lefthalf.filled")
-                .font(.system(size: size * 0.46, weight: .bold))
-                .foregroundStyle(.white)
+    init(_ state: VPNActivityAttributes.ContentState) {
+        let rest = String(state.server.dropFirst()).trimmingCharacters(in: .whitespaces)
+        if let flag = state.flag {
+            icon = flag
+            name = state.server
+        } else if let first = state.server.first, Self.isEmoji(first), !rest.isEmpty {
+            icon = String(first)
+            name = rest
+        } else {
+            icon = nil
+            name = state.server
         }
-        .frame(width: size, height: size)
-        .shadow(color: (connected ? Brand.green : Brand.blue).opacity(0.45), radius: 8)
+    }
+
+    /// A picture emoji (⚡, 🌍), not a letter or a digit.
+    private static func isEmoji(_ c: Character) -> Bool {
+        guard let scalar = c.unicodeScalars.first else { return false }
+        return scalar.properties.isEmojiPresentation || (scalar.properties.isEmoji && c.unicodeScalars.count > 1)
     }
 }
 
-/// The time since connecting ("12:34", "1:02:03"), arrows while it connects again.
-private struct ElapsedTime: View {
-    let state: VPNActivityAttributes.ContentState
+/// The flag (or the name's own emoji); a globe without one.
+private struct ServerIcon: View {
+    let icon: String?
     let size: CGFloat
-    var color: Color = .white
 
     var body: some View {
-        if state.connected {
-            Text(timerInterval: state.connectedSince...Date.distantFuture, countsDown: false)
-                .font(.system(size: size, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(color)
-                .multilineTextAlignment(.trailing)
-                .lineLimit(1)
+        if let icon {
+            Text(icon).font(.system(size: size))
         } else {
-            Image(systemName: "arrow.triangle.2.circlepath")
+            Image(systemName: "globe")
                 .font(.system(size: size * 0.85, weight: .semibold))
                 .foregroundStyle(Brand.sky)
         }
     }
 }
 
-private struct FlagView: View {
-    let flag: String?
+/// The flag on a soft square.
+private struct ServerTile: View {
+    let icon: String?
     let size: CGFloat
 
     var body: some View {
-        if let flag {
-            Text(flag).font(.system(size: size))
-        } else {
-            Image(systemName: "globe")
-                .font(.system(size: size * 0.8, weight: .semibold))
-                .foregroundStyle(Brand.sky)
+        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+        ServerIcon(icon: icon, size: size * 0.56)
+            .frame(width: size, height: size)
+            .background(Color.white.opacity(0.1), in: shape)
+            .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+    }
+}
+
+/// Green "Подключено"; the brand's blue while it connects again (another server, a ping).
+private struct StatusLine: View {
+    let connected: Bool
+    var size: CGFloat = 13
+
+    var body: some View {
+        let color = connected ? Brand.green : Brand.sky
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(connected ? "Подключено" : "Переключаемся…")
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(color)
+                .lineLimit(1)
         }
     }
 }
 
-private struct StatusPill: View {
+/// The compact island's state: a dot in the same colours.
+private struct StatusDot: View {
     let connected: Bool
 
     var body: some View {
         let color = connected ? Brand.green : Brand.sky
-        HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(connected ? "Подключено" : "Подключаемся…")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(color)
+        Circle()
+            .fill(color)
+            .frame(width: 8, height: 8)
+            .padding(3)
+            .background(Circle().fill(color.opacity(0.22)))
+            .accessibilityLabel(connected ? "Подключено" : "Переключаемся")
+    }
+}
+
+/// ‹ or ›: the previous or the next server, as listed in the app (SwitchServerIntent switches
+/// in the app's process). Round on the Lock Screen; titled capsules in the Dynamic Island.
+private struct SwitchButton: View {
+    let forward: Bool
+    var titled = false
+
+    var body: some View {
+        Button(intent: SwitchServerIntent(forward: forward)) {
+            Group {
+                if titled {
+                    HStack(spacing: 5) {
+                        if !forward { Image(systemName: "chevron.left") }
+                        Text(forward ? "Следующий" : "Предыдущий").lineLimit(1)
+                        if forward { Image(systemName: "chevron.right") }
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(maxWidth: .infinity, minHeight: 36)
+                    .background(Color.white.opacity(0.14), in: Capsule())
+                } else {
+                    Image(systemName: forward ? "chevron.right" : "chevron.left")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 38, height: 38)
+                        .background(Color.white.opacity(0.14), in: Circle())
+                }
+            }
+            .foregroundStyle(.white)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(color.opacity(0.16), in: Capsule())
+        .buttonStyle(.plain)
+        .accessibilityLabel(forward ? "Следующий сервер" : "Предыдущий сервер")
     }
 }

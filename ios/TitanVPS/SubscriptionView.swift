@@ -246,6 +246,10 @@ struct ProfileView: View {
     @AppStorage("theme") private var theme = "system"
     @AppStorage("autoconnect") private var autoconnect = false
     @AppStorage(Reminders.key) private var reminders = true
+    @AppStorage(LiveActivityController.key) private var liveActivity = true
+    /// Live Activities are off for the app in iOS Settings: the switch alone shows nothing.
+    @State private var activitiesOff = false
+    @Environment(\.scenePhase) private var scenePhase
     @State private var confirmLogout = false
     @State private var confirmReset = false
     @State private var about = false
@@ -327,6 +331,11 @@ struct ProfileView: View {
                                 if let info = store.subscription?.info { await Reminders.update(for: info) }
                             }
                         }
+                        // The Live Activity is drawn by TitanWidgets, which needs iOS 18.
+                        if #available(iOS 18.0, *) {
+                            RowDivider()
+                            liveActivityRow
+                        }
                     }
 
                     SectionTitle("Приложение")
@@ -386,6 +395,9 @@ struct ProfileView: View {
                 .frame(maxWidth: .infinity)
             }
             .background(Palette.background.ignoresSafeArea())
+            // Back from iOS Settings: maybe allowed there now.
+            .onAppear { activitiesOff = !LiveActivityController.allowedInSettings }
+            .onChange(of: scenePhase) { if $0 == .active { activitiesOff = !LiveActivityController.allowedInSettings } }
             .navigationTitle("Настройки")
             .navigationDestination(isPresented: $showTech) { TechModeView() }
             .sheet(isPresented: $about) { AboutSheet(version: version, support: store.supportURL) }
@@ -412,6 +424,47 @@ struct ProfileView: View {
                 Button("Отмена", role: .cancel) {}
             } message: {
                 Text("VPN отключится, ключ нужно будет вставить заново.")
+            }
+        }
+    }
+
+    /// Dynamic Island: the Live Activity while connected (on by default). Off ends it at once;
+    /// on while connected starts it.
+    private var liveActivityRow: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Toggle(isOn: $liveActivity) {
+                HStack(spacing: 14) {
+                    IconTile(icon: "iphone", color: Palette.violet)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Dynamic Island").font(.scaled(16, weight: .medium))
+                            .lineLimit(1).minimumScaleFactor(0.75)
+                        Text("Сервер и его смена на экране блокировки")
+                            .font(.scaled(12)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .toggleStyle(TitanToggleStyle())
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .onChange(of: liveActivity) { on in
+                if on {
+                    LiveActivityController.sync(vpn.state, server: store.selected?.name, paused: store.vpnPaused)
+                } else {
+                    Task { await LiveActivityController.endAll() }
+                }
+            }
+            if liveActivity && activitiesOff {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Live Activity для Titan VPS выключены в Настройках iOS")
+                        .font(.scaled(12)).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Открыть Настройки") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                    .font(.scaled(13, weight: .semibold))
+                }
+                // Under the text, as RowDivider.
+                .padding(.leading, 62).padding(.trailing, 16).padding(.bottom, 12)
             }
         }
     }
