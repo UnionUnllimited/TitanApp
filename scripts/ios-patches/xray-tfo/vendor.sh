@@ -23,3 +23,9 @@ python3 "$HERE/apply_libxray.py" "$LIBXRAY"
 cp "$HERE/titan_tfo_test.go" "$HERE/tfo_safe_test.go" "$XRAY/transport/internet/"
 (cd "$XRAY" && go test -count=1 -v -run TestTitanTFO ./transport/internet/)
 rm "$XRAY/transport/internet/titan_tfo_test.go" "$XRAY/transport/internet/tfo_safe_test.go"
+
+# Several instances in one process (the app's parallel pings): a dialerProxy hop comes from
+# the dialing instance, also through mux.
+cp "$HERE/titan_obm_test.go" "$XRAY/core/"
+(cd "$XRAY" && go test -count=1 -v -run TestTitanOwnHop ./core/)
+rm "$XRAY/core/titan_obm_test.go"

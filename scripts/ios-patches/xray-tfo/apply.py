@@ -55,7 +55,17 @@ for rel, edits in [
          "// TitanWithOutboundManager: DialSystem takes dialerProxy from this manager (Titan patch).\n"
          "func TitanWithOutboundManager(ctx context.Context, m outbound.Manager) context.Context {\n"
          "\treturn context.WithValue(ctx, titanOutboundManagerKey{}, m)\n}\n\n"
+         "// TitanOutboundManager: the one TitanWithOutboundManager put in ctx, if any.\n"
+         "func TitanOutboundManager(ctx context.Context) outbound.Manager {\n"
+         "\tm, _ := ctx.Value(titanOutboundManagerKey{}).(outbound.Manager)\n\treturn m\n}\n\n"
          "func InitSystemDialer(dc dns.Client, om outbound.Manager) {\n"),
+    ]),
+    # gRPC with finalmask dials on grpc's own context: the manager is carried over to it.
+    ("transport/internet/grpc/dial.go", [
+        ("\t\t\tgctx = session.ContextWithTimeoutOnly(gctx, true)\n",
+         "\t\t\tgctx = session.ContextWithTimeoutOnly(gctx, true)\n"
+         "\t\t\tif m := internet.TitanOutboundManager(ctx); m != nil {\n"
+         "\t\t\t\tgctx = internet.TitanWithOutboundManager(gctx, m)\n\t\t\t}\n"),
     ]),
     # Each handler keeps its own instance and puts its manager in the ctx of every dial it
     # makes: Dispatch too (WireGuard dials from there), and mux/XUDP or VLESS pre-connections
