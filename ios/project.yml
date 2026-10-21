@@ -1,6 +1,6 @@
 name: TitanVPS
 options:
-  bundleIdPrefix: su.titanvps
+  bundleIdPrefix: com.titanvps
   deploymentTarget:
     iOS: "16.0"
 packages:
@@ -26,7 +26,7 @@ targets:
       path: TitanVPS/Info.plist
       properties:
         CFBundleURLTypes:
-          - CFBundleURLName: su.titanvps.app
+          - CFBundleURLName: com.titanvps.ios
             CFBundleURLSchemes: [titanvps]
     entitlements:
       path: TitanVPS/TitanVPS.entitlements
@@ -34,7 +34,7 @@ targets:
         com.apple.developer.networking.networkextension: [packet-tunnel-provider]
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: su.titanvps.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.titanvps.ios
         PRODUCT_NAME: TitanVPS
         MARKETING_VERSION: "0.2.0"
         CURRENT_PROJECT_VERSION: "1"
@@ -80,7 +80,7 @@ targets:
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: su.titanvps.app.tunnel
+        PRODUCT_BUNDLE_IDENTIFIER: com.titanvps.ios.tunnel
         PRODUCT_NAME: TitanTunnel
         MARKETING_VERSION: "0.2.0"
         CURRENT_PROJECT_VERSION: "1"

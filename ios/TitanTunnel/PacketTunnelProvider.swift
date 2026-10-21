@@ -8,7 +8,7 @@ import os
 /// The tunnel's own connections to the servers don't go through the tunnel (iOS keeps
 /// the provider's sockets outside it).
 final class PacketTunnelProvider: NEPacketTunnelProvider {
-    private let log = Logger(subsystem: "su.titanvps", category: "tunnel")
+    private let log = Logger(subsystem: "com.titanvps.ios", category: "tunnel")
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         let config = (options?["config"] as? String)
@@ -67,7 +67,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// What runs now, to start again on a new network.
     private var running: (config: String, plugin: String?)?
     private var pathMonitor: NWPathMonitor?
-    private let queue = DispatchQueue(label: "su.titanvps.tunnel.network")
+    private let queue = DispatchQueue(label: "com.titanvps.ios.tunnel.network")
     private var network: String?
     private var pendingRestart: DispatchWorkItem?
 
@@ -182,7 +182,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private static func error(_ text: String) -> NSError {
-        NSError(domain: "su.titanvps.tunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+        NSError(domain: "com.titanvps.ios.tunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }
 }
 

@@ -1,0 +1,117 @@
+name: TestFlight
+
+# A signed build uploaded to App Store Connect (TestFlight). Run by hand: Actions → TestFlight →
+# Run workflow. Signing is automatic, through an App Store Connect API key (role Admin, or App
+# Manager with access to cloud-managed distribution certificates). Repository secrets:
+#   APP_STORE_CONNECT_KEY_ID     Key ID of the API key
+#   APP_STORE_CONNECT_ISSUER_ID  Issuer ID (Users and Access → Integrations)
+#   APP_STORE_CONNECT_KEY_P8     the text of the AuthKey_<id>.p8 file
+#   APPLE_TEAM_ID                Team ID (Membership details)
+# The App IDs com.titanvps.ios, com.titanvps.ios.tunnel and com.titanvps.ios.widgets get the
+# Network Extensions capability; the app's record in App Store Connect uses com.titanvps.ios.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Версия для TestFlight (например 1.0.0)
+        default: "1.0.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: macos-15
+    env:
+      KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - name: Check secrets
+        run: |
+          missing=""
+          for v in KEY_ID ISSUER_ID KEY_P8 TEAM_ID; do [ -n "${!v}" ] || missing="$missing $v"; done
+          if [ -n "$missing" ]; then
+            echo "::error::Не заданы секреты:$missing (список в начале .github/workflows/testflight.yml)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      # The same cache as ios.yml: an unchanged core isn't built again.
+      - name: Cache LibXray.xcframework
+        id: libxray-cache
+        uses: actions/cache@v4
+        with:
+          path: ios/Frameworks/LibXray.xcframework
+          key: libxray-ios-v26.9.30-${{ hashFiles('scripts/build-libxray-ios.sh', 'scripts/ios-patches/**') }}
+
+      - name: Build LibXray.xcframework
+        if: steps.libxray-cache.outputs.cache-hit != 'true'
+        env:
+          LIBXRAY_REF: v26.9.30
+        run: ./scripts/build-libxray-ios.sh
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: API key
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s\n' "$KEY_P8" > "$RUNNER_TEMP/keys/AuthKey_$KEY_ID.p8"
+
+      # Build numbers only grow: the date and time of the build (yyMMddHHmm, UTC).
+      - name: Archive
+        working-directory: ios
+        run: |
+          xcodebuild -project TitanVPS.xcodeproj -scheme TitanVPS -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath build/TitanVPS.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$KEY_ID.p8" \
+            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$(date -u +%y%m%d%H%M)" \
+            archive
+
+      - name: Upload to TestFlight
+        working-directory: ios
+        run: |
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive -archivePath build/TitanVPS.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist -exportPath build/export \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$KEY_ID.p8" \
+            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID"
+
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keys"
