@@ -34,9 +34,10 @@ struct PowerSlider: View {
     private var dragging: DragState? = nil
     /// The side just picked, held until the VPN's state follows (or for a moment at most).
     @State private var pending: Bool?
-    /// Each drag's direction, decided on its first move (by where it started): only a
-    /// sideways one moves the knob or switches; an up or down one is the screen scrolling.
+    /// Each drag's direction, decided on its first move past 16 pt (by where it started): only
+    /// a clearly sideways one moves the knob or switches; anything else is the screen scrolling.
     @State private var axis: AxisLock?
+    @State private var held = false
     @State private var shakes: CGFloat = 0
     @State private var nudge: CGFloat = 0
 
@@ -81,7 +82,11 @@ struct PowerSlider: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isOn)
         .animation(.easeInOut(duration: 0.25), value: phase)
         .onChange(of: phase) { _ in pending = nil }
-        .onChange(of: dragging?.horizontal == true) { onHold($0) }
+        .onChange(of: dragging?.horizontal == true) { holding in
+            held = holding
+            onHold(holding)
+        }
+        .onDisappear { if held { held = false; onHold(false) } }
         .onChange(of: failures) { _ in
             guard pending != nil else { return }
             withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) { pending = nil }
@@ -169,13 +174,19 @@ struct PowerSlider: View {
         .allowsHitTesting(false)
     }
 
+    /// Sideways only when clearly so (within about 34° of level): looser than a row's, as the
+    /// knob is a big sideways target, yet a thumb's up or down stroke stays the screen's.
+    private static func sideways(_ t: CGSize) -> Bool { abs(t.width) > abs(t.height) * 1.5 }
+
     private func drag(maxX: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 6)
+        // In screen points and past the page's own start, as a server row's (SwipeActions).
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
             .updating($dragging) { value, state, transaction in
                 guard !locked else { return }
-                // Decided once per drag: a vertical one is the screen scrolling.
+                // Decided once per drag, in screen points: anything but a clearly sideways move
+                // is the screen scrolling.
                 if state == nil {
-                    state = DragState(horizontal: abs(value.translation.width) > abs(value.translation.height), dx: 0)
+                    state = DragState(horizontal: Self.sideways(value.translation), dx: 0)
                 }
                 if state?.horizontal == true {
                     state?.dx = value.translation.width
@@ -185,13 +196,14 @@ struct PowerSlider: View {
             .onChanged { value in
                 // A new drag (a cancelled one never ended): its direction is decided now.
                 if axis?.start != value.startLocation {
-                    axis = AxisLock(start: value.startLocation,
-                                    horizontal: abs(value.translation.width) > abs(value.translation.height))
+                    axis = AxisLock(start: value.startLocation, horizontal: Self.sideways(value.translation))
                 }
             }
             .onEnded { value in
                 let horizontal = axis?.start == value.startLocation && axis?.horizontal == true
                 axis = nil
+                // The screen scrolls again at once, whatever comes next.
+                if held { held = false; onHold(false) }
                 guard horizontal else { return }
                 if locked { refuse(); onLockedTap(); return }
                 let wasOn = isOn

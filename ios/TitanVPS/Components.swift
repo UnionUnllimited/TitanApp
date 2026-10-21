@@ -541,7 +541,7 @@ struct SwipeAction {
 
 /// A row that can be swiped: right for [right] (shown on the left), left for [left] (shown on
 /// the right). Let go past the mark and it happens; the row slides back. In a ScrollView:
-/// an up or down drag is the page scrolling, decided on the first move.
+/// only a clearly sideways move holds the row; anything else is the page scrolling.
 struct SwipeActions<Content: View>: View {
     var right: SwipeAction?
     var left: SwipeAction?
@@ -616,11 +616,18 @@ struct SwipeActions<Content: View>: View {
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: armed)
     }
 
+    /// Sideways only when clearly so (within about 27° of level): a thumb's up or down stroke
+    /// drifts sideways too, and it must stay the page's.
+    private static func sideways(_ t: CGSize) -> Bool { abs(t.width) > abs(t.height) * 2 }
+
     private var gesture: some Gesture {
-        DragGesture(minimumDistance: 12)
+        // In screen points: the row moves with the page as it scrolls, so in its own space an
+        // up or down drag reads as sideways. Past 20 pt, after the page's own start: on iOS 26
+        // (where this no longer runs alongside the page pan) an up or down drag is the page's.
+        DragGesture(minimumDistance: 20, coordinateSpace: .global)
             .updating($dragging) { value, state, transaction in
                 if state == nil {
-                    state = DragState(horizontal: abs(value.translation.width) > abs(value.translation.height) * 1.2, dx: 0)
+                    state = DragState(horizontal: Self.sideways(value.translation), dx: 0)
                 }
                 if state?.horizontal == true {
                     state?.dx = value.translation.width
@@ -629,13 +636,14 @@ struct SwipeActions<Content: View>: View {
             }
             .onChanged { value in
                 if axis?.start != value.startLocation {
-                    axis = AxisLock(start: value.startLocation,
-                                    horizontal: abs(value.translation.width) > abs(value.translation.height) * 1.2)
+                    axis = AxisLock(start: value.startLocation, horizontal: Self.sideways(value.translation))
                 }
             }
             .onEnded { value in
                 let horizontal = axis?.start == value.startLocation && axis?.horizontal == true
                 axis = nil
+                // The page scrolls again at once, whatever comes next.
+                if held { held = false; onHold(false) }
                 guard horizontal else { return }
                 let dx = value.translation.width
                 if dx >= mark, let right { Haptics.success(); right.perform() }
