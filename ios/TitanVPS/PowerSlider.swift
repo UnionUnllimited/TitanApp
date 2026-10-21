@@ -123,13 +123,13 @@ struct PowerSlider: View {
             HStack(spacing: 6) {
                 Text("Вкл")
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.scaled(13, weight: .bold))
             }
             .frame(maxWidth: .infinity)
             .shimmer(phase == .off && !locked, tint: Palette.primary, duration: 2)
             .opacity(Double(1 - progress))
         }
-        .font(.system(size: 17, weight: .semibold))
+        .font(.scaled(17, weight: .semibold))
         .foregroundStyle(.secondary)
         .padding(.horizontal, inset)
         .allowsHitTesting(false)
@@ -160,7 +160,7 @@ struct PowerSlider: View {
                     Text("Выкл")
                 }
             }
-            .font(.system(size: 17, weight: .bold))
+            .font(.scaled(17, weight: .bold))
             .foregroundStyle(lit ? Color.white : Color.primary)
             .lineLimit(1)
             .minimumScaleFactor(0.7)

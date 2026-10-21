@@ -32,7 +32,7 @@ struct PrimaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 17, weight: .semibold))
+            .font(.scaled(17, weight: .semibold))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: height)
             .padding(.horizontal, 16)
@@ -53,7 +53,7 @@ struct SecondaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .semibold))
+            .font(.scaled(16, weight: .semibold))
             .foregroundStyle(tint)
             .frame(maxWidth: .infinity, minHeight: height)
             .padding(.horizontal, 12)
@@ -83,7 +83,7 @@ struct CircleIconButton: View {
     var body: some View {
         Button(action: action) {
             SpinningIcon(name: icon, spinning: spinning)
-                .font(.system(size: size * 0.4, weight: .semibold))
+                .font(.scaled(size * 0.4, weight: .semibold))
                 .foregroundStyle(Palette.primary)
                 .frame(width: size, height: size)
                 .background(Palette.primary.opacity(0.12), in: Circle())
@@ -124,7 +124,7 @@ struct TitanToggleStyle: ToggleStyle {
                     .shadow(color: .black.opacity(0.2), radius: 3, y: 1.5)
                     .overlay(
                         Image(systemName: configuration.isOn ? "checkmark" : "xmark")
-                            .font(.system(size: 10, weight: .heavy))
+                            .font(.scaled(10, weight: .heavy))
                             .foregroundStyle(configuration.isOn ? Palette.green : Color.gray)
                     )
                     .padding(3)
@@ -154,7 +154,7 @@ struct IconTile: View {
 
     var body: some View {
         Image(systemName: icon)
-            .font(.system(size: size * 0.47, weight: .semibold))
+            .font(.scaled(size * 0.47, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(
@@ -178,16 +178,16 @@ struct SettingsRow<Trailing: View>: View {
         HStack(spacing: 14) {
             IconTile(icon: icon, color: color)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(titleColor)
+                Text(title).font(.scaled(16, weight: .medium)).foregroundStyle(titleColor)
                 if let subtitle {
-                    Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(subtitle).font(.scaled(12)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 8)
             trailing
             if chevron {
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 16)
@@ -210,7 +210,7 @@ struct SectionTitle: View {
 
     var body: some View {
         Text(text.uppercased())
-            .font(.system(size: 13, weight: .semibold))
+            .font(.scaled(13, weight: .semibold))
             .kerning(0.6)
             .foregroundStyle(.secondary)
             .padding(.leading, 6)
@@ -333,8 +333,8 @@ struct ToastView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: icon).font(.system(size: 18, weight: .semibold)).foregroundStyle(color)
-            Text(toast.text).font(.system(size: 15, weight: .semibold)).multilineTextAlignment(.leading)
+            Image(systemName: icon).font(.scaled(18, weight: .semibold)).foregroundStyle(color)
+            Text(toast.text).font(.scaled(15, weight: .semibold)).multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
@@ -348,7 +348,34 @@ struct ToastView: View {
 
 // MARK: - Formatting
 
+extension Font {
+    /// The system font at [size] grown with the phone's text size (Dynamic Type): text up to
+    /// 1.6×, big titles and numbers (28 pt and up) up to 1.2×, so that the layout holds.
+    /// RootView rebuilds the screens when the text size changes.
+    static func scaled(_ size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+        let limit: CGFloat = size >= 28 ? 1.2 : 1.6
+        return .system(size: min(UIFontMetrics.default.scaledValue(for: size), size * limit), weight: weight, design: design)
+    }
+}
+
 enum Fmt {
+    /// "2.4 МБ/с" as number and unit (the number drawn larger).
+    static func speedParts(_ bytesPerSecond: Double) -> (number: String, unit: String) {
+        let b = max(bytesPerSecond, 0)
+        if b >= 1_048_576 { return (String(format: "%.1f", b / 1_048_576), "МБ/с") }
+        if b >= 1024 { return (String(format: "%.0f", b / 1024), "КБ/с") }
+        return (String(format: "%.0f", b), "Б/с")
+    }
+
+    static func speed(_ bytesPerSecond: Double) -> String {
+        let p = speedParts(bytesPerSecond)
+        return p.number + " " + p.unit
+    }
+
+    static func bytes(_ count: UInt64) -> String {
+        formatBytes(Int64(clamping: count))
+    }
+
     /// "13 июля 2027"; "Бессрочно" for no expiry.
     static func date(_ unix: Int64) -> String {
         guard unix > 0 else { return "Бессрочно" }
@@ -470,7 +497,7 @@ struct SegmentedTabs: View {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { selection = item.id }
                 } label: {
                     Label(item.title, systemImage: item.icon)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.scaled(15, weight: .semibold))
                         .foregroundStyle(on ? Color.white : Color.secondary)
                         .frame(maxWidth: .infinity, minHeight: 42)
                         .background {
@@ -490,5 +517,164 @@ struct SegmentedTabs: View {
         .padding(4)
         .background(Palette.surface, in: Capsule())
         .overlay(Capsule().stroke(Palette.outline.opacity(0.6), lineWidth: 1))
+    }
+}
+
+// MARK: - Living status
+
+/// A dot with a ring that keeps spreading out from it (a live connection).
+struct PulseDot: View {
+    let color: Color
+    var active = true
+    var size: CGFloat = 10
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active || reduceMotion)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
+            ZStack {
+                if active && !reduceMotion {
+                    Circle()
+                        .stroke(color.opacity(0.7 * (1 - t)), lineWidth: 2)
+                        .scaleEffect(1 + 1.6 * t)
+                }
+                Circle().fill(color)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A soft glow in the colour of the VPN's state behind the switch and the status, slowly
+/// breathing; none while off.
+struct StateAura: View {
+    let color: Color?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: color == nil || reduceMotion)) { ctx in
+            let breath = reduceMotion ? 0 : sin(ctx.date.timeIntervalSinceReferenceDate * 1.3)
+            GeometryReader { g in
+                Ellipse()
+                    .fill(RadialGradient(colors: [(color ?? .clear).opacity(0.2 + 0.07 * breath), (color ?? .clear).opacity(0)],
+                                         center: .center, startRadius: 0, endRadius: g.size.width * 0.55))
+                    .frame(width: g.size.width, height: g.size.height)
+            }
+        }
+        .opacity(color == nil ? 0 : 1)
+        .animation(.easeInOut(duration: 0.6), value: color)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Swipe actions
+
+/// What a row does when swiped far enough one way.
+struct SwipeAction {
+    let icon: String
+    let title: String
+    let color: Color
+    let perform: () -> Void
+}
+
+/// A row that can be swiped: right for [right] (shown on the left), left for [left] (shown on
+/// the right). Let go past the mark and it happens; the row slides back. In a ScrollView:
+/// an up or down drag is the page scrolling, decided on the first move.
+struct SwipeActions<Content: View>: View {
+    var right: SwipeAction?
+    var left: SwipeAction?
+    /// A sideways drag holds the row: the page shouldn't scroll meanwhile.
+    var onHold: (Bool) -> Void = { _ in }
+    @ViewBuilder var content: Content
+
+    private struct DragState: Equatable {
+        var horizontal: Bool
+        var dx: CGFloat
+    }
+
+    private struct AxisLock: Equatable {
+        var start: CGPoint
+        var horizontal: Bool
+    }
+
+    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.32, dampingFraction: 0.8)))
+    private var dragging: DragState? = nil
+    @State private var axis: AxisLock?
+    private let mark: CGFloat = 84
+
+    private var offset: CGFloat {
+        guard let d = dragging, d.horizontal else { return 0 }
+        let dx = d.dx
+        if dx > 0 && right == nil || dx < 0 && left == nil { return dx * 0.15 }
+        let far = abs(dx)
+        // Past the mark it follows the finger reluctantly.
+        let shown = far <= mark ? far : mark + (far - mark) * 0.35
+        return dx > 0 ? shown : -shown
+    }
+
+    var body: some View {
+        let dx = offset
+        content
+            .offset(x: dx)
+            .background(alignment: dx >= 0 ? .leading : .trailing) {
+                if let action = dx > 0 ? right : (dx < 0 ? left : nil) {
+                    revealed(action, width: abs(dx), armed: abs(dx) >= mark, onLeft: dx > 0)
+                }
+            }
+            .simultaneousGesture(gesture)
+            .onChange(of: abs(dx) >= mark) { armed in
+                if armed, dragging != nil { Haptics.tap(.medium) }
+            }
+            .onChange(of: dragging?.horizontal == true) { onHold($0) }
+            .accessibilityActions {
+                if let right { Button(right.title, action: right.perform) }
+                if let left { Button(left.title, action: left.perform) }
+            }
+    }
+
+    private func revealed(_ action: SwipeAction, width: CGFloat, armed: Bool, onLeft: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(action.color.opacity(armed ? 1 : 0.55))
+            .frame(width: width + 24)
+            .overlay(alignment: onLeft ? .leading : .trailing) {
+                VStack(spacing: 3) {
+                    Image(systemName: action.icon).font(.scaled(18, weight: .bold))
+                        .scaleEffect(armed ? 1.15 : 0.9)
+                    Text(action.title).font(.scaled(10, weight: .semibold)).lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .frame(width: 76)
+                .opacity(min(Double(width / mark), 1))
+            }
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: armed)
+    }
+
+    private var gesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .updating($dragging) { value, state, transaction in
+                if state == nil {
+                    state = DragState(horizontal: abs(value.translation.width) > abs(value.translation.height) * 1.2, dx: 0)
+                }
+                if state?.horizontal == true {
+                    state?.dx = value.translation.width
+                    transaction.animation = .interactiveSpring(response: 0.18, dampingFraction: 0.86)
+                }
+            }
+            .onChanged { value in
+                if axis?.start != value.startLocation {
+                    axis = AxisLock(start: value.startLocation,
+                                    horizontal: abs(value.translation.width) > abs(value.translation.height) * 1.2)
+                }
+            }
+            .onEnded { value in
+                let horizontal = axis?.start == value.startLocation && axis?.horizontal == true
+                axis = nil
+                guard horizontal else { return }
+                let dx = value.translation.width
+                if dx >= mark, let right { Haptics.success(); right.perform() }
+                else if dx <= -mark, let left { Haptics.success(); left.perform() }
+            }
     }
 }

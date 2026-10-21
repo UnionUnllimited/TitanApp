@@ -10,8 +10,10 @@ struct HomeView: View {
     @State private var page: ServerGroup = .servers
     @State private var expanded = false
     @State private var wifiInfo = false
-    /// The Выкл | Вкл knob is being dragged sideways: the page stays still.
-    @State private var holdingKnob = false
+    /// The Выкл | Вкл knob or a server row is being dragged sideways: the page stays still.
+    @State private var holdingDrag = false
+    /// Speed and traffic while connected (read only while Главная is on screen).
+    @StateObject private var traffic = TrafficMonitor()
     @Environment(\.openURL) private var openURL
     var openSubscription: () -> Void
     var openSettings: () -> Void
@@ -23,7 +25,12 @@ struct HomeView: View {
                 header
                 if wide {
                     HStack(alignment: .top, spacing: 0) {
-                        ScrollView { VStack(spacing: 12) { controls }.padding(16) }.scrollDisabled(holdingKnob)
+                        ScrollView {
+                            VStack(spacing: 12) { controls }
+                                .animation(.spring(response: 0.45, dampingFraction: 0.85), value: vpn.isConnected)
+                                .padding(16)
+                        }
+                        .scrollDisabled(holdingDrag)
                         ScrollView { VStack(spacing: 10) { list }.padding(16) }.refreshable { await store.refreshFromPull() }
                     }
                 } else {
@@ -32,11 +39,12 @@ struct HomeView: View {
                             controls
                             list
                         }
+                        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: vpn.isConnected)
                         .padding(16)
                         .frame(maxWidth: 640)
                         .frame(maxWidth: .infinity)
                     }
-                    .scrollDisabled(holdingKnob)
+                    .scrollDisabled(holdingDrag)
                     .refreshable { await store.refreshFromPull() }
                 }
             }
@@ -44,6 +52,16 @@ struct HomeView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Palette.background.ignoresSafeArea())
+        .onAppear { if vpn.isConnected { traffic.start() } }
+        .onDisappear { traffic.stop() }
+        .onChange(of: vpn.isConnected) { connected in
+            if connected {
+                traffic.reset()
+                traffic.start()
+            } else {
+                traffic.stop()
+            }
+        }
         .alert("Недоступно на Wi-Fi", isPresented: $wifiInfo) {
             Button("Понятно", role: .cancel) {}
         } message: {
@@ -87,7 +105,7 @@ struct HomeView: View {
             Spacer()
             HStack(spacing: 8) {
                 Image("Logo").resizable().scaledToFit().frame(width: 40, height: 40)
-                Text("Titan VPS").font(.system(size: 22, weight: .bold))
+                Text("Titan VPS").font(.scaled(22, weight: .bold))
             }
             Spacer()
             squareButton(scheme == .dark ? "sun.max.fill" : "moon.fill", label: "Тема") {
@@ -101,7 +119,7 @@ struct HomeView: View {
 
     private func squareButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 19, weight: .semibold)).foregroundStyle(Palette.primary)
+            Image(systemName: icon).font(.scaled(19, weight: .semibold)).foregroundStyle(Palette.primary)
                 .frame(width: 48, height: 48)
                 .background(Palette.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Palette.outline.opacity(0.5), lineWidth: 1))
@@ -121,7 +139,7 @@ struct HomeView: View {
                         Text(text).multilineTextAlignment(.leading)
                         Spacer(minLength: 0)
                     }
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.scaled(14, weight: .medium))
                     .foregroundStyle(.white)
                     .padding(14)
                     .background(status == "BLOCKED" ? Color.red : Color.orange, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -129,12 +147,30 @@ struct HomeView: View {
                 .buttonStyle(PressableStyle())
             }
             subscriptionCard(sub)
-            PowerSlider(phase: powerPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Пинг…",
-                        failures: vpn.failures, onToggle: toggleVPN,
-                        onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) },
-                        onHold: { holdingKnob = $0 })
-                .padding(.top, 6)
-            statusBlock
+            VStack(spacing: 12) {
+                PowerSlider(phase: powerPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Пинг…",
+                            failures: vpn.failures, onToggle: toggleVPN,
+                            onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) },
+                            onHold: { holdingDrag = $0 })
+                    .padding(.top, 6)
+                statusBlock
+            }
+            .background(StateAura(color: stateColor).padding(.horizontal, -24).padding(.vertical, -36))
+            if vpn.isConnected && !paused {
+                LiveStatsCard(monitor: traffic)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    /// The colour of the VPN's state (the glow behind the switch, the dot by the status); nil while off.
+    private var stateColor: Color? {
+        if paused { return .orange }
+        switch vpn.state {
+        case .connected: return Palette.green
+        case .connecting, .disconnecting: return Palette.primary
+        case .error: return .red
+        case .off: return nil
         }
     }
 
@@ -170,17 +206,24 @@ struct HomeView: View {
 
     private var statusBlock: some View {
         VStack(spacing: 6) {
-            Text(statusTitle).font(.system(size: 26, weight: .heavy))
-                .foregroundStyle(statusColor)
-                .animation(.easeInOut(duration: 0.25), value: statusTitle)
+            HStack(spacing: 10) {
+                if let color = stateColor {
+                    // Spreading rings while it's live or on its way; still on an error.
+                    PulseDot(color: color, active: vpn.isOn || paused, size: 11)
+                        .transition(.scale.combined(with: .opacity))
+                }
+                Text(statusTitle).font(.scaled(26, weight: .heavy))
+                    .foregroundStyle(statusColor)
+            }
+            .animation(.easeInOut(duration: 0.25), value: statusTitle)
             if paused {
                 Text("VPN включится сам, когда пинг закончится")
-                    .font(.system(size: 14)).foregroundStyle(.secondary)
+                    .font(.scaled(14)).foregroundStyle(.secondary)
             } else if case .connected(let since) = vpn.state {
                 TimelineView(.periodic(from: .now, by: 1)) { ctx in
                     let s = max(Int(ctx.date.timeIntervalSince(since)), 0)
                     Text(String(format: "%02d:%02d:%02d", s / 3600, s % 3600 / 60, s % 60))
-                        .font(.system(size: 15, weight: .medium).monospacedDigit()).foregroundStyle(.secondary)
+                        .font(.scaled(15, weight: .medium).monospacedDigit()).foregroundStyle(.secondary)
                 }
             }
             HStack(spacing: 6) {
@@ -197,10 +240,10 @@ struct HomeView: View {
                     Text("Выберите сервер")
                 }
             }
-            .font(.system(size: 16, weight: .medium))
+            .font(.scaled(16, weight: .medium))
             .foregroundStyle(.secondary)
             if case .error(let message) = vpn.state {
-                Text(message).font(.system(size: 13)).foregroundStyle(.red).multilineTextAlignment(.center)
+                Text(message).font(.scaled(13)).foregroundStyle(.red).multilineTextAlignment(.center)
             }
             if vpn.isConnected && !paused {
                 connectionCheck.padding(.top, 4)
@@ -232,14 +275,14 @@ struct HomeView: View {
                             Text([Fmt.flag(code), Fmt.country(code) ?? code].compactMap { $0 }.joined(separator: " "))
                                 .lineLimit(1)
                         }
-                        Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary)
+                        Image(systemName: "arrow.clockwise").font(.scaled(12, weight: .bold)).foregroundStyle(.secondary)
                     case .failed:
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                         Text("Нет ответа через VPN")
-                        Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary)
+                        Image(systemName: "arrow.clockwise").font(.scaled(12, weight: .bold)).foregroundStyle(.secondary)
                     }
                 }
-                .font(.system(size: 14, weight: .semibold))
+                .font(.scaled(14, weight: .semibold))
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 16)
                 .frame(height: 40)
@@ -252,12 +295,12 @@ struct HomeView: View {
             switch store.check {
             case .ok(let r):
                 if let ip = r.ip {
-                    Text("IP: \(ip)").font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
+                    Text("IP: \(ip)").font(.scaled(12).monospacedDigit()).foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
             case .failed(let why):
                 Text(why.isEmpty || !techMode ? "Попробуйте ещё раз или выберите другой сервер" : "\(why). Попробуйте другой сервер")
-                    .font(.system(size: 12)).foregroundStyle(.red.opacity(0.85)).multilineTextAlignment(.center)
+                    .font(.scaled(12)).foregroundStyle(.red.opacity(0.85)).multilineTextAlignment(.center)
             default:
                 EmptyView()
             }
@@ -282,17 +325,17 @@ struct HomeView: View {
                 Button(action: openSubscription) {
                     HStack(spacing: 14) {
                         Image(systemName: "crown.fill")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(.scaled(18, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(width: 44, height: 44)
                             .background(active ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Color.red), in: Circle())
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 4) {
-                                Text(active ? "Подписка активна" : "Подписка истекла").font(.system(size: 16, weight: .semibold))
-                                Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(.tertiary)
+                                Text(active ? "Подписка активна" : "Подписка истекла").font(.scaled(16, weight: .semibold))
+                                Image(systemName: "chevron.right").font(.scaled(12, weight: .bold)).foregroundStyle(.tertiary)
                             }
                             Text(sub.info.expire > 0 ? "До " + Fmt.date(sub.info.expire) : "Бессрочно")
-                                .font(.system(size: 14)).foregroundStyle(.secondary)
+                                .font(.scaled(14)).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 0)
                     }
@@ -316,7 +359,7 @@ struct HomeView: View {
                     Image(systemName: "chevron.down")
                         .rotationEffect(.degrees(expanded ? 180 : 0))
                 }
-                .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                .font(.scaled(13, weight: .medium)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity).padding(.vertical, 8)
                 .contentShape(Rectangle())
             }
@@ -340,7 +383,7 @@ struct HomeView: View {
             Spacer()
             Text(value).fontWeight(.medium)
         }
-        .font(.system(size: 14))
+        .font(.scaled(14))
     }
 
     @ViewBuilder private var list: some View {
@@ -362,31 +405,42 @@ struct HomeView: View {
                 } else if sub.info.total > 0 {
                     HStack(spacing: 6) {
                         Text("Трафик: \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
-                        Button("Докупить ГБ", action: openSubscription).font(.system(size: 13, weight: .semibold))
+                        Button("Докупить ГБ", action: openSubscription).font(.scaled(13, weight: .semibold))
                     }
                 } else {
                     Text("Для ограничений мобильного интернета")
                 }
             }
-            .font(.system(size: 13)).foregroundStyle(.secondary)
+            .font(.scaled(13)).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
 
             if page == .bypass && store.bypassLockedOnWifi {
                 Text("Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Серверы».")
-                    .font(.system(size: 13)).foregroundStyle(.orange)
+                    .font(.scaled(13)).foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
             }
             // Favourites first, in the subscription's order otherwise.
             let items = groups[page] ?? groups[.servers] ?? []
             ForEach(items.filter(store.isFavorite) + items.filter { !store.isFavorite($0) }) { s in
                 let locked = store.blockedOnWifi(s)
-                ServerRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
-                          unsupported: Plugins.endpoint(s).map { !$0.kind.supportedOnIOS } ?? false,
-                          onPing: { store.pingOne(s) }, error: techMode ? store.pingErrors[s.id] : nil, limited: page == .bypass && ServerGroup.isLimited(s),
-                          favorite: store.isFavorite(s), locked: locked,
-                          selected: s.id == store.selected?.id) {
-                    if locked { Haptics.warning(); wifiInfo = true; return }
-                    pick(s)
+                let favorite = store.isFavorite(s)
+                // Swipe right: favourite (or not any more); swipe left: ping this one.
+                SwipeActions(
+                    right: SwipeAction(icon: favorite ? "star.slash.fill" : "star.fill",
+                                       title: favorite ? "Убрать" : "В избранное", color: .orange) {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { store.toggleFavorite(s) }
+                    },
+                    left: SwipeAction(icon: "speedometer", title: "Пинг", color: Palette.primary) { store.pingOne(s) },
+                    onHold: { holdingDrag = $0 }
+                ) {
+                    ServerRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
+                              unsupported: Plugins.endpoint(s).map { !$0.kind.supportedOnIOS } ?? false,
+                              onPing: { store.pingOne(s) }, error: techMode ? store.pingErrors[s.id] : nil, limited: page == .bypass && ServerGroup.isLimited(s),
+                              favorite: favorite, locked: locked,
+                              selected: s.id == store.selected?.id) {
+                        if locked { Haptics.warning(); wifiInfo = true; return }
+                        pick(s)
+                    }
                 }
                 .contextMenu {
                     Button { pick(s) } label: { Label("Выбрать", systemImage: "checkmark.circle") }
@@ -416,7 +470,7 @@ struct HomeView: View {
                 }
                 Text(store.pinging ? "Стоп" : "Пинг").fontWeight(.semibold)
             }
-            .font(.system(size: 14))
+            .font(.scaled(14))
             .foregroundStyle(store.pinging ? Color.white : Color.primary)
             .padding(.horizontal, 14).frame(height: 52)
             .background(store.pinging ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Palette.surface),
@@ -443,12 +497,12 @@ struct HomeView: View {
             HStack(spacing: 6) {
                 Image(systemName: g == .servers ? "server.rack" : "shuffle")
                 Text(g.rawValue).lineLimit(1)
-                Text("\(count)").font(.system(size: 12, weight: .semibold))
+                Text("\(count)").font(.scaled(12, weight: .semibold))
                     .foregroundStyle(selected ? .white : .secondary)
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background(selected ? Palette.primary : Palette.outline, in: RoundedRectangle(cornerRadius: 10))
             }
-            .font(.system(size: 14, weight: .medium))
+            .font(.scaled(14, weight: .medium))
             .foregroundStyle(selected ? Palette.primary : .secondary)
             .frame(maxWidth: .infinity, minHeight: 44)
             .background(selected ? Palette.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 13))
@@ -483,7 +537,7 @@ struct ServerRow: View {
                 ZStack {
                     Circle().fill(Palette.track)
                     if let flag {
-                        Text(flag).font(.system(size: 30))
+                        Text(flag).font(.scaled(30))
                     } else if name.lowercased().contains("авто") {
                         Image(systemName: "bolt.fill").foregroundStyle(Palette.primary)
                     } else {
@@ -494,14 +548,14 @@ struct ServerRow: View {
                 .clipShape(Circle())
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
-                        if favorite { Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.yellow) }
-                        MarqueeText(text: name, font: .system(size: 16, weight: .semibold))
+                        if favorite { Image(systemName: "star.fill").font(.scaled(11)).foregroundStyle(.yellow) }
+                        MarqueeText(text: name, font: .scaled(16, weight: .semibold))
                     }
                     Text(unsupported ? "Пока не работает на iPhone" : limited ? "Лимитный · расходует ГБ" : "Безлимит")
-                        .font(.system(size: 11))
+                        .font(.scaled(11))
                         .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
                     if let error, ping == -1, !pending {
-                        Text(error).font(.system(size: 10)).foregroundStyle(.red.opacity(0.8)).lineLimit(6)
+                        Text(error).font(.scaled(10)).foregroundStyle(.red.opacity(0.8)).lineLimit(6)
                     }
                 }
                 Spacer()
@@ -510,7 +564,7 @@ struct ServerRow: View {
                     HStack(spacing: 5) {
                         if pending { ProgressView().scaleEffect(0.7) }
                         if let ping {
-                            Text(ping >= 0 ? "\(ping) мс" : "таймаут").font(.system(size: 14))
+                            Text(ping >= 0 ? "\(ping) мс" : "таймаут").font(.scaled(14))
                                 .foregroundStyle(Self.color(ping)).opacity(pending ? 0.5 : 1)
                         } else if !pending {
                             Image(systemName: "speedometer").foregroundStyle(.secondary.opacity(0.6))

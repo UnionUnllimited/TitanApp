@@ -61,7 +61,7 @@ struct CabinetView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button { dismiss() } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.scaled(13, weight: .bold))
                             .foregroundStyle(.secondary)
                             .frame(width: 32, height: 32)
                             .background(Palette.track, in: Circle())
@@ -72,7 +72,7 @@ struct CabinetView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button { Task { await load() } } label: {
                         SpinningIcon(name: "arrow.clockwise", spinning: loading)
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.scaled(13, weight: .bold))
                             .foregroundStyle(Palette.primary)
                             .frame(width: 32, height: 32)
                             .background(Palette.primary.opacity(0.14), in: Circle())
@@ -126,7 +126,7 @@ struct CabinetView: View {
     private func banner(_ text: String, icon: String, color: Color) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon).foregroundStyle(color)
-            Text(text).font(.system(size: 14, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+            Text(text).font(.scaled(14, weight: .medium)).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(14)
@@ -152,12 +152,12 @@ struct CabinetView: View {
     private var failure: some View {
         VStack(spacing: 14) {
             Image(systemName: "wifi.exclamationmark")
-                .font(.system(size: 38, weight: .semibold))
+                .font(.scaled(38, weight: .semibold))
                 .foregroundStyle(Palette.primary)
                 .frame(width: 88, height: 88)
                 .background(Palette.primary.opacity(0.12), in: Circle())
-            Text("Кабинет не загрузился").font(.system(size: 19, weight: .bold))
-            Text(error ?? "Ошибка").font(.system(size: 14)).multilineTextAlignment(.center).foregroundStyle(.secondary)
+            Text("Кабинет не загрузился").font(.scaled(19, weight: .bold))
+            Text(error ?? "Ошибка").font(.scaled(14)).multilineTextAlignment(.center).foregroundStyle(.secondary)
             Button { Task { await load() } } label: { Label("Повторить", systemImage: "arrow.clockwise") }
                 .buttonStyle(PrimaryButtonStyle(height: 50))
                 .frame(maxWidth: 240)
@@ -176,14 +176,14 @@ struct CabinetView: View {
                     HStack(spacing: 12) {
                         IconTile(icon: "chart.pie.fill", color: Palette.primary, size: 38)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Трафик").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
-                            Text(traffic).font(.system(size: 16, weight: .bold)).monospacedDigit()
+                            Text("Трафик").font(.scaled(13, weight: .semibold)).foregroundStyle(.secondary)
+                            Text(traffic).font(.scaled(16, weight: .bold)).monospacedDigit()
                                 .lineLimit(1).minimumScaleFactor(0.75)
                         }
                     }
                     GradientBar(value: used, gradient: trafficGradient(used))
                     if let n = d.trafficNote {
-                        Text(n).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(n).font(.scaled(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(18)
@@ -196,12 +196,12 @@ struct CabinetView: View {
                 if showDevices {
                     tile {
                         IconTile(icon: "iphone", color: Palette.violet, size: 38)
-                        Text("Устройства").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                        Text("Устройства").font(.scaled(13, weight: .semibold)).foregroundStyle(.secondary)
                         Text(devicesText(count: devices?.count, limit: limit))
-                            .font(.system(size: 28, weight: .heavy)).monospacedDigit()
+                            .font(.scaled(28, weight: .heavy)).monospacedDigit()
                             .lineLimit(1).minimumScaleFactor(0.6)
                         Text("Лимит: " + (limit.map(devicesWord) ?? "без ограничения"))
-                            .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                            .font(.scaled(13, weight: .medium)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -217,12 +217,12 @@ struct CabinetView: View {
                     } label: {
                         tile {
                             IconTile(icon: copied ? "checkmark" : "person.text.rectangle.fill", color: copied ? Palette.green : .orange, size: 38)
-                            Text("Ваш ID").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
-                            Text(id).font(.system(size: 20, weight: .heavy)).monospacedDigit()
+                            Text("Ваш ID").font(.scaled(13, weight: .semibold)).foregroundStyle(.secondary)
+                            Text(id).font(.scaled(20, weight: .heavy)).monospacedDigit()
                                 .lineLimit(1).minimumScaleFactor(0.6)
                             Label(copied ? "Скопировано" : "Нажмите, чтобы скопировать",
                                   systemImage: copied ? "checkmark.circle.fill" : "doc.on.doc")
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.scaled(12, weight: .medium))
                                 .foregroundStyle(copied ? Palette.green : Color.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -245,24 +245,24 @@ struct CabinetView: View {
                 Circle().fill(Color.white).frame(width: 7, height: 7)
                 Text(d.status.isEmpty ? (d.active ? "Активна" : "Неактивна") : d.status)
             }
-            .font(.system(size: 13, weight: .bold))
+            .font(.scaled(13, weight: .bold))
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(Color.white.opacity(0.2), in: Capsule())
             .padding(.bottom, 4)
             if !d.days.isEmpty {
                 HStack(alignment: .lastTextBaseline, spacing: 6) {
-                    Text(d.days).font(.system(size: 64, weight: .black, design: .rounded))
-                    Text(d.daysUnit).font(.system(size: 20, weight: .semibold)).opacity(0.85)
-                    if !d.hours.isEmpty { Text(d.hours).font(.system(size: 22, weight: .bold)).opacity(0.85) }
+                    Text(d.days).font(.scaled(64, weight: .black, design: .rounded))
+                    Text(d.daysUnit).font(.scaled(20, weight: .semibold)).opacity(0.85)
+                    if !d.hours.isEmpty { Text(d.hours).font(.scaled(22, weight: .bold)).opacity(0.85) }
                 }
                 .lineLimit(1).minimumScaleFactor(0.6)
-                Text("ОСТАЛОСЬ").font(.system(size: 11, weight: .semibold)).kerning(1.6).opacity(0.75)
+                Text("ОСТАЛОСЬ").font(.scaled(11, weight: .semibold)).kerning(1.6).opacity(0.75)
             } else if !d.heroText.isEmpty {
-                Text(d.heroText).font(.system(size: 20, weight: .bold))
+                Text(d.heroText).font(.scaled(20, weight: .bold))
             }
             if !d.until.isEmpty {
                 Label(d.until, systemImage: "calendar")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.scaled(15, weight: .semibold))
                     .padding(.horizontal, 12).padding(.vertical, 7)
                     .background(Color.black.opacity(0.18), in: Capsule())
                     .padding(.top, 8)
@@ -275,7 +275,7 @@ struct CabinetView: View {
             ZStack(alignment: .topTrailing) {
                 RoundedRectangle(cornerRadius: 24, style: .continuous).fill(gradient)
                 Image(systemName: "crown.fill")
-                    .font(.system(size: 130))
+                    .font(.scaled(130))
                     .foregroundStyle(Color.white.opacity(0.12))
                     .rotationEffect(.degrees(-14))
                     .offset(x: 26, y: -6)
@@ -331,7 +331,7 @@ private struct PayPane: View {
             if data.tariffs.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "creditcard.trianglebadge.exclamationmark")
-                        .font(.system(size: 34, weight: .semibold)).foregroundStyle(.secondary)
+                        .font(.scaled(34, weight: .semibold)).foregroundStyle(.secondary)
                     Text("Сейчас оплата недоступна").foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 32)
@@ -369,9 +369,9 @@ private struct PayPane: View {
                     IconTile(icon: kind == "sub" ? "crown.fill" : "chart.pie.fill",
                              color: kind == "sub" ? Palette.primary : Palette.violet, size: 38)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(kind == "sub" ? "Продлить подписку" : "Докупить трафик").font(.system(size: 17, weight: .bold))
+                        Text(kind == "sub" ? "Продлить подписку" : "Докупить трафик").font(.scaled(17, weight: .bold))
                         Text(kind == "sub" ? "Дни добавятся к текущей подписке" : "Гигабайты для обходов")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .font(.scaled(12)).foregroundStyle(.secondary)
                     }
                 }
                 if kind == "sub" && !data.limits.isEmpty { limits(kind) }
@@ -379,7 +379,7 @@ private struct PayPane: View {
                 if let t = selected {
                     let methods = (data.methods[kind] ?? []).filter { t.methods.contains($0.id) }
                     let list = methods.isEmpty ? t.methods.map { CabinetAPI.Method(id: $0, title: "") } : methods
-                    if list.isEmpty { Text("Оплата для этого тарифа недоступна").font(.system(size: 13)).foregroundStyle(.red) }
+                    if list.isEmpty { Text("Оплата для этого тарифа недоступна").font(.scaled(13)).foregroundStyle(.red) }
                     ForEach(list, id: \.id) { m in
                         Button {
                             Haptics.tap(.medium)
@@ -396,7 +396,7 @@ private struct PayPane: View {
                     }
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                 } else if !visible.isEmpty {
-                    Text("Выберите тариф, чтобы оплатить").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text("Выберите тариф, чтобы оплатить").font(.scaled(12)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -408,7 +408,7 @@ private struct PayPane: View {
     private func limits(_ kind: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Лимит устройств", systemImage: "iphone")
-                .font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                .font(.scaled(13, weight: .semibold)).foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(data.limits, id: \.self) { l in
@@ -422,7 +422,7 @@ private struct PayPane: View {
                             }
                         } label: {
                             Text("\(l)")
-                                .font(.system(size: 16, weight: .bold))
+                                .font(.scaled(16, weight: .bold))
                                 .foregroundStyle(on ? Color.white : Color.primary)
                                 .frame(width: 46, height: 42)
                                 .background(on ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Palette.track),
@@ -437,7 +437,7 @@ private struct PayPane: View {
                 .padding(.vertical, 4)
             }
             Text("Сколько устройств одновременно. Фиксируется после первой оплаты.")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .font(.scaled(12)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -454,12 +454,12 @@ private struct PayPane: View {
                     if on { Circle().fill(Palette.primary).frame(width: 12, height: 12).transition(.scale) }
                 }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(t.name).font(.system(size: 16, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
-                    if !meta.isEmpty { Text(meta).font(.system(size: 12)).foregroundStyle(.secondary) }
+                    Text(t.name).font(.scaled(16, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                    if !meta.isEmpty { Text(meta).font(.scaled(12)).foregroundStyle(.secondary) }
                 }
                 Spacer(minLength: 8)
                 Text(price(t.price))
-                    .font(.system(size: 18, weight: .heavy)).monospacedDigit()
+                    .font(.scaled(18, weight: .heavy)).monospacedDigit()
                     .foregroundStyle(on ? Palette.primary : Color.primary)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)

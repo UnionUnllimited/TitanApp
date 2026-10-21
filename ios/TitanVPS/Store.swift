@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import SwiftUI
+import UserNotifications
 
 @MainActor
 final class AppStore: ObservableObject {
@@ -60,6 +61,7 @@ final class AppStore: ObservableObject {
             Task { @MainActor in if self?.onWifi != wifi { self?.onWifi = wifi } }
         }
         pathMonitor.start(queue: DispatchQueue(label: "titan.path"))
+        UNUserNotificationCenter.current().delegate = NotificationPresenter.shared
     }
 
     /// Support: the subscription's support-url, else the bot.
@@ -174,6 +176,7 @@ final class AppStore: ObservableObject {
         do {
             let sub = try await SubscriptionAPI.fetch(url)
             subscription = sub
+            Task { await Reminders.update(for: sub.info) }
             if let data = try? JSONEncoder().encode(sub) { UserDefaults.standard.set(data, forKey: subKey) }
             if !sub.servers.contains(where: { $0.id == selectedId }) { select(sub.servers.first?.id) }
             return true

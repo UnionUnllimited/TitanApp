@@ -267,7 +267,7 @@ struct TechModeView: View {
     private var actions: some View {
         VStack(spacing: 10) {
             Button { Task { await checkAll() } } label: {
-                Label("Проверить всё", systemImage: "stethoscope").font(.system(size: 17, weight: .semibold))
+                Label("Проверить всё", systemImage: "stethoscope").font(.scaled(17, weight: .semibold))
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
@@ -411,10 +411,10 @@ struct TechModeView: View {
                 Text("Журнал").fontWeight(.semibold)
                 let lines = journal
                 Text(lines.isEmpty ? "Пусто: ошибок пинга нет" : lines.joined(separator: "\n"))
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .font(.scaled(12, weight: .regular, design: .monospaced))
                     .textSelection(.enabled)
                 Text("Последние ошибки пинга серверов (заметки TCP Fast Open — в [скобках]) и ошибка подключения VPN.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .font(.scaled(12)).foregroundStyle(.secondary)
             }
             .padding(16)
         }
@@ -431,12 +431,12 @@ struct TechModeView: View {
                 Text(title).fontWeight(.semibold)
                 ForEach(Array(rows.enumerated()), id: \.offset) { item in
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(item.element.0).font(.system(size: 12)).foregroundStyle(.secondary)
-                        Text(item.element.1).font(.system(size: 13, weight: .regular, design: .monospaced))
+                        Text(item.element.0).font(.scaled(12)).foregroundStyle(.secondary)
+                        Text(item.element.1).font(.scaled(13, weight: .regular, design: .monospaced))
                             .textSelection(.enabled)
                     }
                 }
-                if let caption { Text(caption).font(.system(size: 12)).foregroundStyle(.secondary) }
+                if let caption { Text(caption).font(.scaled(12)).foregroundStyle(.secondary) }
                 extra()
             }
             .padding(16)

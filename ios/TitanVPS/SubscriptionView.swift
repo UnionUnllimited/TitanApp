@@ -15,7 +15,7 @@ struct SubscriptionView: View {
                 let active = info.expire <= 0 || info.expire > now
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("Подписка").font(.system(size: 28, weight: .bold))
+                        Text("Подписка").font(.scaled(28, weight: .bold))
                         Spacer()
                         CircleIconButton(icon: "arrow.clockwise", spinning: store.busy, size: 42) {
                             Task { await store.refreshByHand() }
@@ -29,32 +29,32 @@ struct SubscriptionView: View {
                             HStack(spacing: 6) {
                                 Circle().fill(active ? Palette.green : .red).frame(width: 8, height: 8)
                                 Text(active ? "Подписка активна" : "Подписка истекла")
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(.scaled(13, weight: .semibold))
                             }
                             .foregroundStyle(active ? Palette.green : .red)
                             .padding(.horizontal, 10).padding(.vertical, 5)
                             .background((active ? Palette.green : Color.red).opacity(0.14), in: Capsule())
-                            Text(expiry(info.expire)).font(.system(size: 26, weight: .bold))
+                            Text(expiry(info.expire)).font(.scaled(26, weight: .bold))
                             if info.expire > 0 {
                                 Text("Осталось \(max((info.expire - now) / 86400, 0)) дн.").foregroundStyle(.secondary)
                             }
-                            Text("Обновлено " + Fmt.ago(sub.fetchedAt)).font(.system(size: 12)).foregroundStyle(.tertiary)
+                            Text("Обновлено " + Fmt.ago(sub.fetchedAt)).font(.scaled(12)).foregroundStyle(.tertiary)
                         }
                         .padding(16)
                     }
                     Card {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Трафик на обходах").foregroundStyle(.secondary).font(.system(size: 14))
+                            Text("Трафик на обходах").foregroundStyle(.secondary).font(.scaled(14))
                             if info.total > 0 {
-                                Text("\(formatBytes(info.remaining)) из \(formatBytes(info.total))").font(.system(size: 26, weight: .bold))
+                                Text("\(formatBytes(info.remaining)) из \(formatBytes(info.total))").font(.scaled(26, weight: .bold))
                                 GradientBar(value: Double(info.remaining) / Double(max(info.total, 1)),
                                             gradient: info.remaining * 10 < info.total ? LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing) : Palette.accentGradient)
                             } else {
-                                Text("Безлимит").font(.system(size: 26, weight: .bold))
+                                Text("Безлимит").font(.scaled(26, weight: .bold))
                             }
-                            Text("На обычных серверах — безлимит").font(.system(size: 13)).foregroundStyle(.secondary)
+                            Text("На обычных серверах — безлимит").font(.scaled(13)).foregroundStyle(.secondary)
                             Text("Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные серверы не работают. Гигабайты списываются только пока вы подключены к обходу. На Wi-Fi обходы не нужны и недоступны. Закончились ГБ — докупите в личном кабинете.")
-                                .font(.system(size: 12)).foregroundStyle(.secondary).padding(.top, 4)
+                                .font(.scaled(12)).foregroundStyle(.secondary).padding(.top, 4)
                         }
                         .padding(16)
                     }
@@ -69,7 +69,7 @@ struct SubscriptionView: View {
                             Button { showDevices = true } label: {
                                 SettingsRow(icon: "iphone.and.arrow.forward", color: Palette.primary, title: "Подключённые устройства", chevron: true) {
                                     Text("\(acc.devices.count)" + (acc.deviceLimit > 0 ? " из \(acc.deviceLimit)" : ""))
-                                        .font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)
+                                        .font(.scaled(15, weight: .medium)).foregroundStyle(.secondary)
                                 }
                             }
                             .buttonStyle(RowButtonStyle())
@@ -89,7 +89,7 @@ struct SubscriptionView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Расширенные функции").fontWeight(.semibold)
                             Text("Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте или в полном кабинете на сайте (вход по почте или через Telegram).")
-                                .font(.system(size: 13)).foregroundStyle(.secondary)
+                                .font(.scaled(13)).foregroundStyle(.secondary)
                             let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
                                 guard let scheme = u.scheme, let host = u.host else { return nil }
                                 return URL(string: "\(scheme)://\(host)/auth")
@@ -176,12 +176,12 @@ struct DevicesView: View {
                             Image(systemName: icon(d.os)).foregroundStyle(Palette.primary).frame(width: 26)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text((d.model.isEmpty ? "Устройство" : d.model) + (isThis(d) ? " · это устройство" : ""))
-                                    .font(.system(size: 15))
+                                    .font(.scaled(15))
                                 Text([d.os + (d.osVersion.isEmpty ? "" : " \(d.osVersion)"), d.app.isEmpty ? "" : AccountAPI.appName(d.app)]
                                     .filter { !$0.isEmpty }.joined(separator: " · "))
-                                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                                    .font(.scaled(12)).foregroundStyle(.secondary)
                                 if let seen = Self.lastSeen(d.lastSeen) {
-                                    Text(seen).font(.system(size: 12)).foregroundStyle(.secondary)
+                                    Text(seen).font(.scaled(12)).foregroundStyle(.secondary)
                                 }
                             }
                         }
@@ -245,6 +245,7 @@ struct ProfileView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("theme") private var theme = "system"
     @AppStorage("autoconnect") private var autoconnect = false
+    @AppStorage(Reminders.key) private var reminders = true
     @State private var confirmLogout = false
     @State private var confirmReset = false
     @State private var about = false
@@ -280,7 +281,7 @@ struct ProfileView: View {
                             openHome()
                         } label: {
                             SettingsRow(icon: "server.rack", color: Palette.primary, title: "Сервер", chevron: true) {
-                                Text(serverName).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
+                                Text(serverName).font(.scaled(15)).foregroundStyle(.secondary).lineLimit(1)
                                     .frame(maxWidth: 170, alignment: .trailing)
                             }
                         }
@@ -290,10 +291,10 @@ struct ProfileView: View {
                             HStack(spacing: 14) {
                                 IconTile(icon: "bolt.fill", color: Palette.green)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Автоподключение").font(.system(size: 16, weight: .medium))
+                                    Text("Автоподключение").font(.scaled(16, weight: .medium))
                                         .lineLimit(1).minimumScaleFactor(0.75)
                                     Text("VPN включится сам при запуске приложения, включении и после сна устройства")
-                                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                                        .font(.scaled(12)).foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
@@ -301,13 +302,38 @@ struct ProfileView: View {
                         .toggleStyle(TitanToggleStyle())
                         .padding(.horizontal, 16).padding(.vertical, 12)
                         .onChange(of: autoconnect) { vpn.setAutoconnect($0) }
+                        RowDivider()
+                        Toggle(isOn: $reminders) {
+                            HStack(spacing: 14) {
+                                IconTile(icon: "bell.badge.fill", color: .orange)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Напоминания").font(.scaled(16, weight: .medium))
+                                        .lineLimit(1).minimumScaleFactor(0.75)
+                                    Text("За 3 дня и за день до конца подписки и когда на обходах кончается трафик")
+                                        .font(.scaled(12)).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                        .toggleStyle(TitanToggleStyle())
+                        .padding(.horizontal, 16).padding(.vertical, 12)
+                        .onChange(of: reminders) { on in
+                            guard on else { Reminders.cancelAll(); return }
+                            Task {
+                                guard await Reminders.allowed() else {
+                                    store.showToast("Разрешите уведомления для Titan VPS в Настройках iOS", .warning)
+                                    return
+                                }
+                                if let info = store.subscription?.info { await Reminders.update(for: info) }
+                            }
+                        }
                     }
 
                     SectionTitle("Приложение")
                     Card {
                         Button { openURL(store.supportURL) } label: {
                             SettingsRow(icon: "headphones", color: Palette.primary, title: "Поддержка", subtitle: "Ответим в Telegram") {
-                                Image(systemName: "arrow.up.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.tertiary)
+                                Image(systemName: "arrow.up.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
                             }
                         }
                         .buttonStyle(RowButtonStyle())
@@ -328,7 +354,7 @@ struct ProfileView: View {
                         RowDivider()
                         SettingsRow(icon: "number", color: .gray, title: "Версия") {
                             Text(wrongCode ? "Неверный код" : version)
-                                .font(.system(size: 15).monospacedDigit())
+                                .font(.scaled(15).monospacedDigit())
                                 .foregroundStyle(wrongCode ? Color.red : Color.secondary)
                         }
                         .onTapGesture { versionTapped() }
@@ -409,20 +435,20 @@ struct ProfileView: View {
                     .padding(8)
                     .background(Palette.track, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Titan VPS").font(.system(size: 19, weight: .bold))
+                    Text("Titan VPS").font(.scaled(19, weight: .bold))
                     HStack(spacing: 6) {
                         Circle().fill(active ? Palette.green : Color.red).frame(width: 8, height: 8)
                         Text(active ? (sub.info.expire > 0 ? "Активна до " + Fmt.date(sub.info.expire) : "Подписка бессрочная") : "Подписка истекла")
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.scaled(14, weight: .medium))
                             .foregroundStyle(active ? Color.primary : Color.red)
                     }
                     if let acc = store.account, acc.devicesEnabled {
                         Text("Устройства: \(acc.devices.count)" + (acc.deviceLimit > 0 ? " из \(acc.deviceLimit)" : ""))
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                            .font(.scaled(13)).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").font(.scaled(14, weight: .semibold)).foregroundStyle(.tertiary)
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -488,8 +514,8 @@ struct ThemePicker: View {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { theme = o.id }
                 } label: {
                     VStack(spacing: 6) {
-                        Image(systemName: o.icon).font(.system(size: 18, weight: .semibold))
-                        Text(o.title).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                        Image(systemName: o.icon).font(.scaled(18, weight: .semibold))
+                        Text(o.title).font(.scaled(13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
                     }
                     .foregroundStyle(on ? Color.white : Color.secondary)
                     .frame(maxWidth: .infinity, minHeight: 64)
@@ -537,8 +563,8 @@ struct AboutSheet: View {
                 .shadow(color: Palette.primary.opacity(0.35), radius: 20, y: 8)
                 .padding(.top, 28)
             VStack(spacing: 4) {
-                Text("Titan VPS").font(.system(size: 26, weight: .bold))
-                Text("Версия \(version)").font(.system(size: 15).monospacedDigit()).foregroundStyle(.secondary)
+                Text("Titan VPS").font(.scaled(26, weight: .bold))
+                Text("Версия \(version)").font(.scaled(15).monospacedDigit()).foregroundStyle(.secondary)
             }
             chip("cpu", "Ядро Xray")
             VStack(spacing: 10) {
@@ -556,7 +582,7 @@ struct AboutSheet: View {
 
     private func chip(_ icon: String, _ text: String) -> some View {
         Label(text, systemImage: icon)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.scaled(13, weight: .semibold))
             .foregroundStyle(Palette.primary)
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(Palette.primary.opacity(0.12), in: Capsule())

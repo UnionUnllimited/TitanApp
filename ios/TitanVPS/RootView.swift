@@ -8,6 +8,8 @@ struct RootView: View {
     @AppStorage("autoconnect") private var autoconnect = false
     @State private var tab: Tab = .home
     @State private var splash = true
+    /// The phone's text size: the screens are built again when it changes (Font.scaled).
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         ZStack {
@@ -25,6 +27,7 @@ struct RootView: View {
                     ProfileView(openSubscription: { tab = .subscription }, openHome: { tab = .home })
                         .tabItem { Label("Профиль", systemImage: "person") }.tag(Tab.profile)
                 }
+                .id(typeSize)
             }
         }
         .overlay(alignment: .top) {
@@ -78,9 +81,9 @@ struct SplashView: View {
                     .scaleEffect(appeared ? 1 : 0.8)
                     .opacity(appeared ? 1 : 0)
                 VStack(spacing: 6) {
-                    Text("Titan VPS").font(.system(size: 40, weight: .heavy))
+                    Text("Titan VPS").font(.scaled(40, weight: .heavy))
                         .foregroundStyle(Palette.logoGradient)
-                    Text("Подключение в одно касание").font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)
+                    Text("Подключение в одно касание").font(.scaled(15, weight: .medium)).foregroundStyle(.secondary)
                 }
                 .opacity(appeared ? 1 : 0)
                 .offset(y: appeared ? 0 : 14)
@@ -105,10 +108,10 @@ struct WelcomeView: View {
             VStack(spacing: 22) {
                 VStack(spacing: 12) {
                     GlowingLogo(size: 110)
-                    Text("Titan VPS").font(.system(size: 34, weight: .heavy))
+                    Text("Titan VPS").font(.scaled(34, weight: .heavy))
                         .foregroundStyle(Palette.logoGradient)
                     Text("Вставьте ключ подписки из бота или личного кабинета — и VPN включится сразу")
-                        .font(.system(size: 15))
+                        .font(.scaled(15))
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -136,14 +139,14 @@ struct WelcomeView: View {
 
     private var keyCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Ключ подписки").font(.system(size: 13, weight: .semibold)).kerning(0.4)
+            Text("Ключ подписки").font(.scaled(13, weight: .semibold)).kerning(0.4)
                 .foregroundStyle(.secondary)
             HStack(spacing: 10) {
                 Image(systemName: "key.fill")
                     .foregroundStyle(valid ? Palette.green : Palette.primary)
                     .frame(width: 22)
                 TextField("https://api1.titanvps.su/…", text: $key)
-                    .font(.system(size: 15))
+                    .font(.scaled(15))
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .keyboardType(.URL)
                     .submitLabel(.go)
@@ -171,7 +174,7 @@ struct WelcomeView: View {
             .animation(.easeInOut(duration: 0.2), value: editing)
             if !key.isEmpty && !valid {
                 Text("Это не похоже на ключ Titan VPS. Скопируйте ссылку подписки из бота целиком.")
-                    .font(.system(size: 12)).foregroundStyle(.orange)
+                    .font(.scaled(12)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button {
@@ -211,13 +214,13 @@ struct WelcomeView: View {
     /// Где взять ключ: the bot, the subscription, the link.
     private var steps: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Где взять ключ").font(.system(size: 16, weight: .bold))
+            Text("Где взять ключ").font(.scaled(16, weight: .bold))
             step(1, "Откройте нашего бота в Telegram")
             step(2, "Оформите подписку или продлите её")
             step(3, "Скопируйте ссылку-ключ и вставьте её выше")
             Link(destination: Config.telegram) {
                 Label("Открыть бота", systemImage: "paperplane.fill")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.scaled(16, weight: .semibold))
                     .foregroundStyle(Palette.primary)
                     .frame(maxWidth: .infinity, minHeight: 48)
                     .background(Palette.primary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -234,11 +237,11 @@ struct WelcomeView: View {
     private func step(_ n: Int, _ text: String) -> some View {
         HStack(spacing: 12) {
             Text("\(n)")
-                .font(.system(size: 14, weight: .bold))
+                .font(.scaled(14, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 28, height: 28)
                 .background(Palette.accentGradient, in: Circle())
-            Text(text).font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+            Text(text).font(.scaled(15)).fixedSize(horizontal: false, vertical: true)
         }
     }
 
