@@ -35,7 +35,8 @@
 - Android: тег `android-N`, файлы `titan-vps-arm64.apk`, `titan-vps-armv7.apk`, `titan-vps-universal.apk`
 - Windows: тег `windows-N`, файлы `titan-vps-setup.exe`, `titan-vps.msi`. `xray.exe` собирается в CI из Xray-core v26.9.30 с патчем `scripts/ios-patches/xray-tfo` и тегом `tfogo_checklinkname0`
 - iOS: тег `ios-N`, файл `TitanVPS-unsigned.ipa` (без подписи, для сервисов подписи и Sideloadly)
-- iOS в TestFlight: workflow `testflight.yml`, запускается вручную (Actions → TestFlight → Run workflow).
+- iOS в TestFlight: workflow `testflight.yml`, запускается вручную (Actions → TestFlight → Run workflow)
+  или пушем тега `testflight-*` (версия 1.0.0).
   Подпись автоматическая через ключ App Store Connect API; нужные секреты перечислены в начале файла.
   Bundle ID: `com.titanvps.ios` (туннель `com.titanvps.ios.tunnel`, виджеты `com.titanvps.ios.widgets`);
   прежний `su.titanvps.app` остался за сервисом подписи. Манифесты приватности: `PrivacyInfo.xcprivacy`

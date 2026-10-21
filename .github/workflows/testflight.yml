@@ -1,7 +1,7 @@
 name: TestFlight
 
 # A signed build uploaded to App Store Connect (TestFlight). Run by hand: Actions → TestFlight →
-# Run workflow. Signing is automatic, through an App Store Connect API key (role Admin, or App
+# Run workflow, or push a tag testflight-<anything> (version 1.0.0). Signing is automatic, through an App Store Connect API key (role Admin, or App
 # Manager with access to cloud-managed distribution certificates). Repository secrets:
 #   APP_STORE_CONNECT_KEY_ID     Key ID of the API key
 #   APP_STORE_CONNECT_ISSUER_ID  Issuer ID (Users and Access → Integrations)
@@ -16,6 +16,8 @@ on:
       version:
         description: Версия для TestFlight (например 1.0.0)
         default: "1.0.0"
+  push:
+    tags: ["testflight-*"]
 
 permissions:
   contents: read
@@ -32,7 +34,7 @@ jobs:
       ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
       KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
       TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      VERSION: ${{ github.event.inputs.version }}
+      VERSION: ${{ github.event.inputs.version || '1.0.0' }}
     steps:
       - name: Check secrets
         run: |
