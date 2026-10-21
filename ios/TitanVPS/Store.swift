@@ -378,7 +378,11 @@ final class AppStore: ObservableObject {
         guard let vpn, !vpn.isOn else { vpnPaused = false; return }
         // "Пауза" stays on screen until connect has taken over (Подключаемся…).
         resuming = Task {
-            await vpn.connect(selected ?? server)
+            let target = selected ?? server
+            await vpn.connect(target)
+            // Another server picked while connect was still starting: switchTo skipped it (still
+            // off), and followTunnel would put the pick back on this one.
+            if let now = selected, now.id != target.id, vpn.isOn { await vpn.switchTo(now) }
             resuming = nil
             // A newer ping may have paused it again meanwhile: that one owns the flag now.
             if holds.isEmpty { vpnPaused = false }
