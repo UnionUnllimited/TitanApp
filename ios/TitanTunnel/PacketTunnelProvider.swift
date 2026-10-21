@@ -33,6 +33,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 self.running = (config, plugin)
                 self.watchNetwork()
                 completionHandler(nil)
+                // Пункт управления's toggle follows the tunnel, whoever started it (and stopped it).
+                VPNControl.reload()
             } catch {
                 self.log.error("start failed: \(error.localizedDescription, privacy: .public)")
                 self.stopPlugin()
@@ -47,6 +49,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         running = nil
         _ = Self.invoke("stopXray")
         stopPlugin()
+        VPNControl.reload()
         completionHandler()
     }
 

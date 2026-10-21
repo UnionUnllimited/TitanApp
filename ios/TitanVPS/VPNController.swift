@@ -31,10 +31,15 @@ final class VPNController: ObservableObject {
     }
 
     /// The extension's bundle id as it is in this build (a re-signing service may change it).
+    /// The packet tunnel's: TitanWidgets.appex is next to it.
     private static var tunnelBundleId: String? {
         guard let plugins = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: plugins, includingPropertiesForKeys: nil) else { return nil }
-        return items.first { $0.pathExtension == "appex" }.flatMap { Bundle(url: $0)?.bundleIdentifier }
+        let tunnel = items.filter { $0.pathExtension == "appex" }.compactMap { Bundle(url: $0) }.first { bundle in
+            let ext = bundle.infoDictionary?["NSExtension"] as? [String: Any]
+            return ext?["NSExtensionPointIdentifier"] as? String == "com.apple.networkextension.packet-tunnel"
+        }
+        return tunnel?.bundleIdentifier
     }
 
     private func load() async {
@@ -85,6 +90,9 @@ final class VPNController: ObservableObject {
             let prepared = try Plugins.prepare(server, forTunnel: true)
             let config = try XrayRunConfig.build(serverJson: prepared.json)
             let m = manager ?? NETunnelProviderManager()
+            // Пункт управления, Siri or iOS Settings may have changed the profile since it was
+            // loaded: saving over the old copy would fail.
+            if manager != nil { try? await m.loadFromPreferences() }
             let proto = (m.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
             proto.providerBundleIdentifier = tunnelId
             proto.serverAddress = server.name
@@ -134,14 +142,14 @@ final class VPNController: ObservableObject {
         wantOn = false
         state = .disconnecting
         guard let m = manager else { return }
-        // Turned off by hand: iOS must not bring it back on its own.
-        if m.isOnDemandEnabled {
-            m.isOnDemandEnabled = false
-            Task {
+        Task {
+            // The profile as saved now (see connect). Turned off by hand: iOS must not bring it
+            // back on its own.
+            try? await m.loadFromPreferences()
+            if m.isOnDemandEnabled {
+                m.isOnDemandEnabled = false
                 try? await m.saveToPreferences()
-                m.connection.stopVPNTunnel()
             }
-        } else {
             m.connection.stopVPNTunnel()
         }
     }
@@ -149,8 +157,11 @@ final class VPNController: ObservableObject {
     /// Автоподключение switched in the settings: applies to the VPN profile at once.
     func setAutoconnect(_ on: Bool) {
         guard let m = manager, isOn else { return }
-        m.isOnDemandEnabled = on
-        Task { try? await m.saveToPreferences() }
+        Task {
+            try? await m.loadFromPreferences()
+            m.isOnDemandEnabled = on
+            try? await m.saveToPreferences()
+        }
     }
 
     /// Turns the tunnel off for a ping: through it nearly every probe times out (the app's own
@@ -159,6 +170,7 @@ final class VPNController: ObservableObject {
     func pauseForPing() async -> Bool {
         guard isOn, let m = manager else { return false }
         wantOn = false
+        try? await m.loadFromPreferences()
         if m.isOnDemandEnabled {
             m.isOnDemandEnabled = false
             try? await m.saveToPreferences()

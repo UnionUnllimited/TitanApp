@@ -43,8 +43,11 @@ struct RootView: View {
         // Проверить соединение: once right after connecting; the old result goes with the connection.
         .onChange(of: vpn.state) { state in
             if case .connected = state { store.checkConnection(auto: true) } else { store.resetCheck() }
+            // Пункт управления's toggle and the Live Activity follow the VPN.
+            LiveActivityController.vpnChanged(state, server: store.selected?.name, paused: store.vpnPaused)
         }
         .task {
+            LiveActivityController.endIfOff()
             try? await Task.sleep(nanoseconds: 900_000_000)
             withAnimation { splash = false }
             await store.refresh(quiet: true)

@@ -1,6 +1,8 @@
 name: TitanVPS
 options:
   bundleIdPrefix: su.titanvps
+  # The app is in Russian: Siri's phrases (App Shortcuts) are read as Russian.
+  developmentLanguage: ru
   deploymentTarget:
     iOS: "16.0"
 packages:
@@ -12,15 +14,21 @@ targets:
   TitanVPS:
     type: application
     platform: iOS
-    sources: [TitanVPS]
+    # Shared: what the app and TitanWidgets both use (VPN on/off, the Live Activity's data).
+    sources: [TitanVPS, Shared]
     dependencies:
       - target: TitanTunnel
+        embed: true
+      - target: TitanWidgets
         embed: true
       # The real ping (pingBatch) runs Xray in the app too.
       - framework: Frameworks/LibXray.xcframework
         embed: false
       - sdk: libresolv.tbd
       - package: SwiftSoup
+      # iOS 16.1+: weak, so the app still starts on 16.0.
+      - sdk: ActivityKit.framework
+        weak: true
     # titanvps://import/<key> and titanvps://add?url=<key> links (same as Android).
     info:
       path: TitanVPS/Info.plist
@@ -28,6 +36,12 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: su.titanvps.app
             CFBundleURLSchemes: [titanvps]
+        # The Live Activity while connected (TitanWidgets draws it).
+        NSSupportsLiveActivities: true
+        # Siri: how "Titan VPS" sounds in Russian.
+        INAlternativeAppNames:
+          - INAlternativeAppName: Титан ВПС
+          - INAlternativeAppName: Титан ВПН
     entitlements:
       path: TitanVPS/TitanVPS.entitlements
       properties:
@@ -59,7 +73,11 @@ targets:
   TitanTunnel:
     type: app-extension
     platform: iOS
-    sources: [TitanTunnel]
+    sources:
+      - TitanTunnel
+      # The Пункт управления toggle's kind: the tunnel has it read again on start and stop.
+      - path: Shared
+        includes: [VPNControl.swift]
     dependencies:
       - framework: Frameworks/LibXray.xcframework
         embed: false
@@ -95,3 +113,37 @@ targets:
           "-framework", "CoreText", "-framework", "CoreGraphics", "-framework", "CFNetwork", "-framework", "Network",
           "-framework", "Security", "-framework", "UIKit"]
         ENABLE_BITCODE: NO
+
+  # Widgets (iOS 18 only; on iOS 16–17 the app installs without them): the VPN toggle for
+  # Пункт управления, the Lock Screen and the Action button, and the Live Activity. The toggle
+  # starts and stops the tunnel itself with the VPN profile the app saved, hence the Network
+  # Extension entitlement.
+  TitanWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources: [TitanWidgets, Shared]
+    dependencies:
+      - sdk: NetworkExtension.framework
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    entitlements:
+      path: TitanWidgets/TitanWidgets.entitlements
+      properties:
+        com.apple.developer.networking.networkextension: [packet-tunnel-provider]
+    info:
+      path: TitanWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Titan VPS
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: su.titanvps.app.widgets
+        PRODUCT_NAME: TitanWidgets
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
