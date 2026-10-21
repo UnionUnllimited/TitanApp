@@ -87,7 +87,8 @@ struct RootView: View {
             Task {
                 guard await store.activate(url.absoluteString) else { return }
                 tab = .home
-                if let s = store.selected, !store.blockedOnWifi(s) {
+                // Coming back after a ping: that reconnect goes over to the pick itself.
+                if let s = store.selected, !store.blockedOnWifi(s), !store.resumingAfterPing {
                     if vpn.isOn { await vpn.switchTo(s) } else { await vpn.connect(s) }
                 }
             }

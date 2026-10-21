@@ -70,7 +70,7 @@ struct HomeView: View {
             guard wifi, vpn.isOn, store.blockedOnWifi(store.selected), let to = store.firstRegular else { return }
             store.select(to.id)
             page = .servers
-            Task { await vpn.switchTo(to) }
+            if !store.resumingAfterPing { Task { await vpn.switchTo(to) } }
             store.message = "Обходы работают только через мобильный интернет. Переключили на «\(to.name.splitFlag.1)»."
         }
     }
@@ -446,7 +446,8 @@ struct HomeView: View {
         let changed = s.id != store.selected?.id
         if changed { Haptics.selection() }
         store.select(s.id)
-        if changed { Task { await vpn.switchTo(s) } }
+        // Coming back after a ping: that reconnect goes over to the pick itself.
+        if changed, !store.resumingAfterPing { Task { await vpn.switchTo(s) } }
     }
 
     private func tabChip(_ g: ServerGroup, _ count: Int) -> some View {

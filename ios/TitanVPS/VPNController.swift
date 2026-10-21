@@ -109,6 +109,9 @@ final class VPNController: ObservableObject {
             fail("В этой сборке нет VPN-расширения")
             return
         }
+        // Подключаемся… at once: the build below may take seconds (a plugin server's DNS
+        // lookup), and Вкл again or Выкл meanwhile must find it on.
+        state = .connecting
         do {
             // MASQUE rewritten for Xray's own client; TUIC / AnyTLS / ShadowTLS / SSH / Mieru
             // pointed at their client, which the tunnel starts first; Naive says it can't.
@@ -136,13 +139,16 @@ final class VPNController: ObservableObject {
             // change) until it is turned off by hand.
             m.onDemandRules = [NEOnDemandRuleConnect()]
             m.isOnDemandEnabled = UserDefaults.standard.bool(forKey: "autoconnect")
-            state = .connecting
+            // Still wanted: Подключаемся… again if a late status of the tunnel stopped before (a
+            // switch) put it off meanwhile. Выкл or a ping's pause meanwhile keep theirs.
+            if wantOn { state = .connecting }
             try await m.saveToPreferences()
             // Saving the first time asks the user to allow the VPN; reload to get a usable manager.
             try await m.loadFromPreferences()
             manager = m
             observe()
-            // Turned off (or paused for a ping) while the profile was being saved: stay off.
+            // Turned off (or paused for a ping) while the config was built or the profile saved:
+            // stay off.
             guard wantOn else {
                 if m.isOnDemandEnabled {
                     m.isOnDemandEnabled = false
@@ -240,6 +246,9 @@ final class VPNController: ObservableObject {
         }
         // Routes and DNS of the network itself come back a moment later.
         try? await Task.sleep(nanoseconds: 700_000_000)
+        // Paused while a connect still built its config: no tunnel ran, so no status comes to say
+        // off (that connect's `guard wantOn` stops it). Off now, so the ping's end brings it back.
+        if !wantOn, state == .connecting { state = .off }
         return true
     }
 

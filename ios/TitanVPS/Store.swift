@@ -345,6 +345,10 @@ final class AppStore: ObservableObject {
         await work()
     }
 
+    /// The VPN coming back after a ping: that reconnect goes over to a server picked meanwhile
+    /// (a switchTo of its own would run alongside it). Read on a tap only, so not published.
+    var resumingAfterPing: Bool { resuming != nil }
+
     /// The first ping in flight stops the VPN (remembering its server); later ones wait for that.
     /// A reconnect after the previous ping still under way is let finish first, then paused.
     private func beginPing() async -> UUID {
@@ -378,11 +382,14 @@ final class AppStore: ObservableObject {
         guard let vpn, !vpn.isOn else { vpnPaused = false; return }
         // "Пауза" stays on screen until connect has taken over (Подключаемся…).
         resuming = Task {
-            let target = selected ?? server
+            var target = selected ?? server
             await vpn.connect(target)
-            // Another server picked while connect was still starting: switchTo skipped it (still
-            // off), and followTunnel would put the pick back on this one.
-            if let now = selected, now.id != target.id, vpn.isOn { await vpn.switchTo(now) }
+            // Picked meanwhile (the pick leaves the switch to this): over to it, again for each
+            // newer pick. Not when a newer ping waits to pause it: its own resume takes the pick.
+            while holds.isEmpty, let now = selected, now.id != target.id, vpn.isOn {
+                target = now
+                await vpn.switchTo(now)
+            }
             resuming = nil
             // A newer ping may have paused it again meanwhile: that one owns the flag now.
             if holds.isEmpty { vpnPaused = false }
