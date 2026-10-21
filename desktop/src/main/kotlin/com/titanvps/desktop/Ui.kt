@@ -4,9 +4,14 @@ package com.titanvps.desktop
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -125,13 +130,18 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -141,6 +151,8 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -149,12 +161,16 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.titanvps.desktop.ServerGroups.Group
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlinx.coroutines.delay
 
 private enum class Tab(val title: String, val icon: ImageVector) {
@@ -180,7 +196,7 @@ fun App(state: AppState) {
                         Sidebar(tab, compact, state) { tab = it }
                         Box(Modifier.weight(1f).fillMaxHeight()) {
                             when (tab) {
-                                Tab.HOME -> Home(state, sub) { tab = Tab.SUBSCRIPTION }
+                                Tab.HOME -> Home(state, sub, openSubscription = { tab = Tab.SUBSCRIPTION }, openProfile = { tab = Tab.PROFILE })
                                 Tab.SUBSCRIPTION -> SubscriptionPage(state, sub)
                                 Tab.PROFILE -> SettingsPage(state, openSubscription = { tab = Tab.SUBSCRIPTION }, openHome = { tab = Tab.HOME })
                             }
@@ -481,7 +497,7 @@ private fun Step(n: Int, text: String) {
 private enum class Sort(val title: String) { RECOMMENDED("Рекомендуемые"), PING("По пингу"), NAME("По названию") }
 
 @Composable
-private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Unit) {
+private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Unit, openProfile: () -> Unit) {
     val groups = remember(sub.servers) { ServerGroups.split(sub.servers) }
     var page by remember(sub.servers) {
         mutableStateOf(state.selected?.let { ServerGroups.groupOf(it, sub.servers) } ?: Group.SERVERS)
@@ -526,12 +542,10 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         if (maxWidth >= 820.dp) {
-            val panelWidth = if (maxWidth >= 1050.dp) 420.dp else 370.dp
+            // Wider on big windows: the connection gets the room, the list isn't a stretched band.
+            val panelWidth = (maxWidth * 0.4f).coerceIn(400.dp, 620.dp)
             Row(Modifier.fillMaxSize()) {
-                Column(
-                    Modifier.width(panelWidth).fillMaxHeight().verticalScroll(rememberScrollState()).padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) { Controls(state, sub, openSubscription) }
+                ControlCentre(state, sub, openSubscription, openProfile, Modifier.width(panelWidth).fillMaxHeight())
                 Column(Modifier.weight(1f).fillMaxHeight().padding(top = 20.dp, end = 20.dp)) {
                     header()
                     Spacer(Modifier.height(10.dp))
@@ -553,12 +567,64 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
     }
 }
 
-/** No panel under them: the subscription card, the Выкл | Вкл slider and the status as text. */
+/** Narrow windows, no panel under them: the subscription card, the Выкл | Вкл slider and the status as text. */
 @Composable
 private fun ColumnScope.Controls(state: AppState, sub: Subscription, openSubscription: () -> Unit) {
     AccountBanner(state)
     HomeSubscriptionCard(state, sub, openSubscription)
     Spacer(Modifier.height(2.dp))
+    Power(state)
+    StatusBlock(state)
+}
+
+/**
+ * Wide windows, the whole height: the subscription card on top, the connection in the middle
+ * of what's left (the flag in its ring, the status, the slider), a few facts at the bottom.
+ */
+@Composable
+private fun ControlCentre(state: AppState, sub: Subscription, openSubscription: () -> Unit, openProfile: () -> Unit, modifier: Modifier) {
+    BoxWithConstraints(modifier) {
+        // Grows with the window; the default one keeps it small rather than scroll (smaller still under a banner).
+        val banner = state.account?.status.let { it == "BLOCKED" || it == "MAINTENANCE" }
+        val emblem = minOf(maxHeight - if (banner) 680.dp else 600.dp, maxWidth * 0.7f).coerceIn(136.dp, 380.dp)
+        Column(
+            // At least the window's height, so the spacers share what's free; scrolls only when even that doesn't fit.
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = maxHeight).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            AccountBanner(state)
+            HomeSubscriptionCard(state, sub, openSubscription)
+            Spacer(Modifier.weight(1f))
+            Column(Modifier.widthIn(max = 460.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                // The lines under the emblem come and go: the room they can take is kept above it
+                // (and the check's below the slider), so the slider stays put under the mouse.
+                val roomy = emblem >= 280.dp
+                val gap = if (roomy) 24.dp else 16.dp
+                Column(
+                    Modifier.fillMaxWidth().heightIn(min = emblem + gap + 124.dp),
+                    verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    ConnectionEmblem(state.selected, state.vpn, emblem)
+                    Spacer(Modifier.height(gap))
+                    HeroStatus(state)
+                }
+                Spacer(Modifier.height(if (roomy) 32.dp else 20.dp))
+                Power(state)
+                Box(Modifier.fillMaxWidth().heightIn(min = 104.dp), contentAlignment = Alignment.TopCenter) {
+                    ConnectedDetails(state, top = 16.dp)
+                    ModeHint(state, top = 16.dp)
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            InfoChips(state, sub, openSubscription, openProfile)
+        }
+    }
+}
+
+/** Выкл | Вкл, wired to the VPN. */
+@Composable
+private fun Power(state: AppState) {
     PowerSlider(
         phase = when (state.vpn) {
             VpnState.Connecting -> Phase.CONNECTING
@@ -579,7 +645,6 @@ private fun ColumnScope.Controls(state: AppState, sub: Subscription, openSubscri
             true
         }
     }
-    StatusBlock(state)
 }
 
 /** Blocked account / maintenance, from the bot; click → support. */
@@ -774,66 +839,254 @@ private fun PowerSlider(phase: Phase, failures: Int, onToggle: (Boolean) -> Bool
 /** Under the slider: what the VPN is doing, the time on, the speed, the server, the check. */
 @Composable
 private fun StatusBlock(state: AppState) {
-    val c = Palette.colors
     val vpn = state.vpn
-    val connected = vpn is VpnState.Connected
+    Box(Modifier.fillMaxWidth()) {
+        // Behind the status: the last minute of download as a faint curve, barely there.
+        if (vpn is VpnState.Connected) SpeedBackdrop(state.traffic, Modifier.matchParentSize())
+        Column(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            StatusTitle(vpn, 26.sp)
+            when (vpn) {
+                is VpnState.Connected -> { Uptime(vpn.since); SpeedLine(state.traffic) }
+                VpnState.Connecting -> ConnectStep(state)
+                else -> {}
+            }
+            ServerLine(state, flag = true)
+            if (vpn is VpnState.Error) ErrorLine(vpn)
+            ConnectedDetails(state, top = 4.dp)
+        }
+    }
+}
+
+/** Under the emblem, in the iPhone's order: the state in big letters, the time on and the speed, the server. */
+@Composable
+private fun HeroStatus(state: AppState) {
+    val vpn = state.vpn
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        StatusTitle(vpn, 28.sp)
+        when (vpn) {
+            // The last minute faintly behind the two lines it's about only, not behind the names.
+            is VpnState.Connected -> Box(Modifier.widthIn(max = 340.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                SpeedBackdrop(state.traffic, Modifier.matchParentSize())
+                Column(Modifier.padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Uptime(vpn.since)
+                    SpeedLine(state.traffic)
+                }
+            }
+            VpnState.Connecting -> ConnectStep(state)
+            else -> {}
+        }
+        ServerLine(state, flag = false)
+        if (vpn is VpnState.Error) ErrorLine(vpn)
+    }
+}
+
+@Composable
+private fun StatusTitle(vpn: VpnState, fontSize: TextUnit) {
+    val c = Palette.colors
     val (title, color) = when (vpn) {
         is VpnState.Connected -> "Подключено" to c.green
         VpnState.Connecting -> "Подключаемся…" to Brand
         VpnState.Disconnecting -> "Отключаемся…" to c.text
         else -> "Не подключено" to c.text
     }
-    Box(Modifier.fillMaxWidth()) {
-        // Behind the status: the last minute of download as a faint curve, barely there.
-        if (connected) SpeedBackdrop(state.traffic, Modifier.matchParentSize())
-        Column(
-            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            val titleColor by animateColorAsState(color)
-            Text(title, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = titleColor)
-            when (vpn) {
-                is VpnState.Connected -> {
-                    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-                    LaunchedEffect(vpn.since) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
-                    val s = ((now - vpn.since) / 1000).coerceAtLeast(0)
-                    Text("%02d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.secondary, style = Tabular)
-                    // The speed now, quietly.
-                    Text(
-                        "↓ ${Fmt.speed(state.traffic.down)}     ↑ ${Fmt.speed(state.traffic.up)}",
-                        fontSize = 12.sp, fontWeight = FontWeight.Medium, color = c.tertiary, style = Tabular,
-                    )
-                }
-                VpnState.Connecting -> Text(state.connectStep.ifEmpty { "Устанавливаем соединение" }, fontSize = 13.sp, color = c.secondary, textAlign = TextAlign.Center)
-                else -> {}
+    val titleColor by animateColorAsState(color)
+    Text(title, fontSize = fontSize, fontWeight = FontWeight.ExtraBold, color = titleColor)
+}
+
+@Composable
+private fun Uptime(since: Long) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(since) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
+    val s = ((now - since) / 1000).coerceAtLeast(0)
+    Text("%02d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Palette.colors.secondary, style = Tabular)
+}
+
+/** The speed now, quietly. */
+@Composable
+private fun SpeedLine(traffic: TrafficMonitor) {
+    Text(
+        "↓ ${Fmt.speed(traffic.down)}     ↑ ${Fmt.speed(traffic.up)}",
+        fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Palette.colors.tertiary, style = Tabular,
+    )
+}
+
+@Composable
+private fun ConnectStep(state: AppState) {
+    Text(state.connectStep.ifEmpty { "Устанавливаем соединение" }, fontSize = 13.sp, color = Palette.colors.secondary, textAlign = TextAlign.Center)
+}
+
+@Composable
+private fun ErrorLine(error: VpnState.Error) {
+    Text(error.message, fontSize = 13.sp, color = Red, textAlign = TextAlign.Center)
+}
+
+/** The selected server and its ping; no small flag where it's shown big already. */
+@Composable
+private fun ServerLine(state: AppState, flag: Boolean) {
+    val c = Palette.colors
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        val s = state.selected
+        if (s != null) {
+            if (flag) {
+                FlagCircle(s, 20.dp)
+                Spacer(Modifier.width(7.dp))
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val s = state.selected
-                if (s != null) {
-                    FlagCircle(s, 20.dp)
-                    Spacer(Modifier.width(7.dp))
-                    val ping = state.pings[s.id]?.takeIf { it >= 0 }
-                    Text(
-                        ServerGroups.splitFlag(s.name).second + (ping?.let { " · $it мс" } ?: ""),
-                        fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                } else {
-                    Text("Выберите сервер", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.secondary)
-                }
-            }
-            if (vpn is VpnState.Error) Text(vpn.message, fontSize = 13.sp, color = Red, textAlign = TextAlign.Center)
-            AnimatedVisibility(connected, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Spacer(Modifier.height(4.dp))
-                    ConnectionCheckView(state)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        if (state.mode == "tun") "Весь трафик компьютера идёт через VPN" else "Браузеры и большинство программ идут через VPN",
-                        fontSize = 11.sp, color = c.tertiary,
-                    )
-                }
-            }
+            val ping = state.pings[s.id]?.takeIf { it >= 0 }
+            Text(
+                ServerGroups.splitFlag(s.name).second + (ping?.let { " · $it мс" } ?: ""),
+                fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        } else {
+            Text("Выберите сервер", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.secondary)
         }
+    }
+}
+
+/** Once connected: Проверить соединение with the IP, and what the mode sends through the VPN. */
+@Composable
+private fun ConnectedDetails(state: AppState, top: Dp) {
+    val c = Palette.colors
+    AnimatedVisibility(state.vpn is VpnState.Connected, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(Modifier.height(top))
+            ConnectionCheckView(state)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (state.mode == "tun") "Весь трафик компьютера идёт через VPN" else "Браузеры и большинство программ идут через VPN",
+                fontSize = 11.sp, color = c.tertiary,
+            )
+        }
+    }
+}
+
+/** Until it's on, where the check will be: what Вкл will send through the VPN. */
+@Composable
+private fun ModeHint(state: AppState, top: Dp) {
+    AnimatedVisibility(state.vpn !is VpnState.Connected, enter = fadeIn(), exit = fadeOut()) {
+        Text(
+            if (state.mode == "tun") "Весь трафик компьютера пойдёт через VPN" else "Браузеры и большинство программ пойдут через VPN",
+            fontSize = 11.sp, color = Palette.colors.tertiary, modifier = Modifier.padding(top = top),
+        )
+    }
+}
+
+/**
+ * The selected server's flag in a ring that shows the connection: a plain track while off,
+ * an arc running round while it connects, the ring closing green with a glow once on.
+ */
+@Composable
+private fun ConnectionEmblem(server: Server?, vpn: VpnState, size: Dp) {
+    val c = Palette.colors
+    val busy = vpn == VpnState.Connecting || vpn == VpnState.Disconnecting
+    val on by animateFloatAsState(if (vpn is VpnState.Connected) 1f else 0f, tween(900))
+    val track by animateColorAsState(if (vpn is VpnState.Error) Red.copy(alpha = 0.6f) else c.outline)
+    val arc = if (vpn == VpnState.Connecting) Brand else c.secondary
+    // Turns only while busy: a still emblem costs no frames.
+    val turn = if (busy) rememberInfiniteTransition().animateFloat(0f, 360f, infiniteRepeatable(tween(1400, easing = LinearEasing))).value else 0f
+    Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val h = this.size.minDimension / 2
+            val w = h * 0.05f
+            val r = h * 0.72f
+            val ring = Size(r * 2, r * 2)
+            val at = Offset(center.x - r, center.y - r)
+            if (on > 0f) drawCircle(
+                Brush.radialGradient(0.45f to c.green.copy(alpha = (if (c.dark) 0.3f else 0.22f) * on), 1f to Color.Transparent, center = center, radius = h),
+                h,
+            )
+            // Two faint ripples around it, green once on.
+            val ripple = lerp(c.outline, c.green, on)
+            drawCircle(ripple.copy(alpha = 0.5f), h * 0.86f, style = Stroke(1.dp.toPx()))
+            drawCircle(ripple.copy(alpha = 0.25f), h * 0.98f, style = Stroke(1.dp.toPx()))
+            drawCircle(track, r, style = Stroke(w))
+            if (on > 0f) drawArc(c.green, -90f, 360f * on, false, at, ring, style = Stroke(w, cap = StrokeCap.Round))
+            if (busy) rotate(turn) {
+                // A comet with a fading tail: a butt end there (a round cap would catch the gradient's
+                // wrap at 0° and show as a bright dot), a round head drawn on its own.
+                drawArc(
+                    Brush.sweepGradient(0f to arc.copy(alpha = 0f), 0.3f to arc, 1f to arc, center = center),
+                    2f, 106f, false, at, ring, style = Stroke(w, cap = StrokeCap.Butt),
+                )
+                val head = Math.toRadians(108.0)
+                drawCircle(arc, w / 2, center + Offset(r * cos(head).toFloat(), r * sin(head).toFloat()))
+            }
+            // The bezel the flag sits in; a step below the page in light, so a white rim still reads as round.
+            drawCircle(if (c.dark) c.surface else c.track, h * 0.58f)
+            drawCircle(c.outline.copy(alpha = 0.6f), h * 0.58f, style = Stroke(1.dp.toPx()))
+            // An edge for flags that are white at the rim (Finland, Japan).
+            val edge = (if (c.dark) 1.dp else 1.5.dp).toPx()
+            drawCircle(if (c.dark) c.outline else c.secondary.copy(alpha = 0.35f), h * 0.44f + edge / 2, style = Stroke(edge))
+        }
+        if (server != null) FlagCircle(server, size * 0.44f) else FlagCircle(null, false, size * 0.44f)
+    }
+}
+
+/** A few facts at the bottom of the column; each opens the page where it's set. */
+@Composable
+private fun InfoChips(state: AppState, sub: Subscription, openSubscription: () -> Unit, openProfile: () -> Unit) {
+    val info = sub.info
+    val hasBypass = remember(sub.servers) { sub.servers.any(ServerGroups::isBypass) }
+    // In order of what matters; the last ones are left out where the column is narrow.
+    FittingRow(8.dp) {
+        state.account?.takeIf { it.devicesEnabled }?.let { acc ->
+            InfoChip(
+                Icons.Default.Devices, "Устройства",
+                if (acc.deviceLimit > 0) "${acc.devices.size} из ${acc.deviceLimit}" else "${acc.devices.size}",
+                onClick = openSubscription,
+            )
+        }
+        if (hasBypass) InfoChip(
+            Icons.Default.Shuffle, "Обходы",
+            if (info.totalBytes > 0) formatBytes(info.remainingBytes) else "безлимит",
+            tint = if (info.totalBytes > 0 && info.remainingBytes * 10 < info.totalBytes) Orange else Brand,
+            onClick = openSubscription,
+        )
+        if (state.mode == "tun") InfoChip(Icons.Default.Computer, "Режим", "Весь ПК", onClick = openProfile)
+        else InfoChip(Icons.Default.Language, "Режим", "Прокси", onClick = openProfile)
+    }
+}
+
+/** Centred in one line, as many as fit: the ones that don't are left out rather than wrapped or cut. */
+@Composable
+private fun FittingRow(spacing: Dp, content: @Composable () -> Unit) {
+    Layout(content, Modifier.fillMaxWidth()) { measurables, constraints ->
+        val gap = spacing.roundToPx()
+        val shown = mutableListOf<Placeable>()
+        var width = 0
+        for (m in measurables) {
+            val p = m.measure(Constraints())
+            val w = width + (if (shown.isEmpty()) 0 else gap) + p.width
+            if (w <= constraints.maxWidth) { shown += p; width = w }
+        }
+        val height = shown.maxOfOrNull { it.height } ?: 0
+        layout(constraints.maxWidth, height) {
+            var x = (constraints.maxWidth - width) / 2
+            shown.forEach { it.placeRelative(x, (height - it.height) / 2); x += it.width + gap }
+        }
+    }
+}
+
+@Composable
+private fun InfoChip(icon: ImageVector, label: String, value: String, tint: Color = Brand, onClick: () -> Unit) {
+    val c = Palette.colors
+    var hovered by remember { mutableStateOf(false) }
+    Row(
+        Modifier.height(34.dp).clip(CircleShape).background(if (hovered) c.track else c.surface)
+            .border(1.dp, c.outline.copy(alpha = 0.6f), CircleShape)
+            .press(scale = 0.96f, onHover = { hovered = it }, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, Modifier.size(15.dp), tint = tint)
+        Spacer(Modifier.width(6.dp))
+        Text("$label ", fontSize = 12.sp, color = c.secondary, maxLines = 1)
+        Text(value, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
@@ -841,7 +1094,14 @@ private fun StatusBlock(state: AppState) {
 @Composable
 private fun SpeedBackdrop(monitor: TrafficMonitor, modifier: Modifier) {
     val history = monitor.history
-    Canvas(modifier) {
+    // Fainter on white, where the same blue shows more.
+    val alpha = if (Palette.colors.dark) 0.10f else 0.07f
+    // Soft at the sides, so it doesn't end in a cliff.
+    val fade = Modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithContent {
+        drawContent()
+        drawRect(Brush.horizontalGradient(0f to Color.Transparent, 0.2f to Color.Black, 0.8f to Color.Black, 1f to Color.Transparent), blendMode = BlendMode.DstIn)
+    }
+    Canvas(modifier.then(fade)) {
         if (history.size < 2) return@Canvas
         val top = maxOf(history.maxOf { it.down }, 64.0 * 1024) * 1.5
         val lastId = history.last().id
@@ -861,7 +1121,7 @@ private fun SpeedBackdrop(monitor: TrafficMonitor, modifier: Modifier) {
             lineTo(points.last().x, size.height)
             close()
         }
-        drawPath(path, Brush.verticalGradient(listOf(Brand.copy(alpha = 0.10f), Brand.copy(alpha = 0f))))
+        drawPath(path, Brush.verticalGradient(listOf(Brand.copy(alpha = alpha), Brand.copy(alpha = 0f))))
     }
 }
 
