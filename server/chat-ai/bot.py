@@ -575,8 +575,12 @@ async def on_group(message: Message, bot: Bot) -> None:
         return
     text = message.text or message.caption
     user = message.from_user
-    # Channel posts, anonymous admins and other bots have nothing to ask
-    if not text or text.startswith("/") or user is None or user.is_bot or message.sender_chat:
+    # An admin writing as the chat itself: an operator, who may only call the bot by @
+    anon_admin = message.sender_chat is not None and message.sender_chat.id == message.chat.id
+    # Channel posts and other bots have nothing to ask
+    if not text or text.startswith("/") or user is None:
+        return
+    if not anon_admin and (user.is_bot or message.sender_chat):
         return
 
     me = await bot.me()
@@ -584,6 +588,8 @@ async def on_group(message: Message, bot: Bot) -> None:
     direct = bool(mention and mention.search(text))
     if mention:
         text = mention.sub("", text).strip()
+    if anon_admin and not direct:
+        return
 
     prev = context = None
     reply_to = message.reply_to_message
@@ -606,7 +612,7 @@ async def on_group(message: Message, bot: Bot) -> None:
         return
     if not direct and (len(text) < 4 or (QUESTIONS_ONLY and not QUESTION_RE.search(text))):
         return
-    admin = await _is_admin(bot, message.chat.id, user.id)
+    admin = anon_admin or await _is_admin(bot, message.chat.id, user.id)
     if (admin and not direct) or not _take_call(user.id, admin, direct):
         return
 
