@@ -24,6 +24,7 @@
 | `scripts/build-libxray-ios.sh` | Сборка `LibXray.xcframework` для iOS (libXray v26.9.30 в режиме `local` с изменённым Xray-core) |
 | `scripts/download-flags-ios.sh` | Флаги для iOS: SVG из npm-пакета `flag-icons` → `ios/Shared/Flags.xcassets` (создаётся в CI, в репозитории его нет) |
 | `scripts/ios-patches/xray-tfo/` | Патч Xray-core для TCP Fast Open на iOS и Windows (`apply.py` и Go-файлы) |
+| `scripts/ios-patches/xray-mem/` | Патч Xray-core только для iOS: память gVisor-стека TUN (`apply.py` и тест) |
 | `scripts/ios-patches/titan/` | Go-пакет `titan` в xcframework: клиенты sing-box (TUIC, AnyTLS, ShadowTLS, SSH, Naive) и Mieru для iOS |
 | `server/` | Скрипты установки и удаления ноды (`install-node.sh`, `remove-node.sh`) |
 | `.github/workflows/` | CI: `android.yml`, `windows.yml`, `ios.yml` |
@@ -174,6 +175,41 @@
 tcpdump -nr /root/t.pcap -vv 'src host <IP клиента> and tcp[tcpflags] & tcp-syn != 0' | paste - - | head
 nstat -az TcpExtTCPFastOpenPassive TcpExtTCPFastOpenPassiveFail TcpExtTCPFastOpenCookieReqd
 ```
+
+## Память туннеля на iOS
+
+iOS даёт туннелю (Packet Tunnel Extension) около 50 МБ `phys_footprint` и при превышении молча
+завершает процесс (jetsam). VPN после этого поднимает «Не отключать VPN». Что ограничено и где:
+
+- libXray v26.9.30 сам (`memory/memory_ios.go`): Go `SetGCPercent(10)`, `SetMemoryLimit(30 MiB)`,
+  `FreeOSMemory` каждую секунду. Это не дублируется.
+- Патч `scripts/ios-patches/xray-mem` (только iOS, вызывается из `build-libxray-ios.sh` после xray-tfo),
+  gVisor-стек TUN в Xray-core: TCP-буферы 32 КиБ на старте и до 128 КиБ (отправка) / 256 КиБ (приём)
+  вместо 1 МиБ и 6 / 8 МиБ; окно приёма нового соединения 64 КиБ (`rcvWnd` 0 давал 1 МиБ каждому);
+  не больше 1024 рукопожатий сразу; при остановке стека закрываются и его UDP-потоки, а не живут
+  до `connIdle`. Не нашлись якоря в новом Xray-core — сборка останавливается с ошибкой (нет
+  `stack_gvisor.go` — патч пропускается).
+- `XrayRunConfig`: каждый DNS-запрос телефона — отдельный UDP-поток в TUN, и DNS-выход держал его
+  `connIdle` (300 с). Выходы `dns-out` и `protocol: dns` получают свой уровень политики (9 или следующий,
+  который в конфиге панели не занят) с `connIdle` 10 с. Нет access- и DNS-логов; нет `api`, `stats`,
+  `metrics` и правил, ведущих на их теги (скорость приложение берёт со счётчиков utun). Балансировщики,
+  observatory и остальные правила панели не меняются.
+- Сторож в туннеле (`PacketTunnelProvider`, раздел Memory): `phys_footprint` раз в 10 с, раз в секунду
+  выше 35 МиБ, раз в 200 мс ближе 10 МиБ к лимиту (лимит = footprint + `os_proc_available_memory()`,
+  если iOS его не даёт — 50 МиБ), и события давления памяти. За 5 МиБ до лимита (за 10 МиБ при
+  critical) — мягкий перезапуск: «Подключаемся…», Xray и клиент протокола останавливаются, Go отдаёт
+  память (`titan` `freeMemory`), всё запускается снова с теми же повторами, что при смене сети.
+  Не чаще раза в 30 с, считая и перезапуски при смене сети. Сам туннель сторож не завершает.
+- Маркер: туннель пишет `running.json` в свой Caches при старте и каждые 10 с (каждую секунду выше
+  35 МиБ) и удаляет при остановке. Остался к следующему старту — прошлый процесс убит (или упал):
+  счётчик, время и footprint по маркеру и журнал остановок лежат там же в `memory.json`.
+- Технический режим → «Память туннеля» (обновляется каждые 2 с, есть и в отчёте): занято из лимита,
+  пик, куча и горутины Go (`titan` `memStats`, `runtime/metrics`), перезапуски по памяти и при смене
+  сети, сколько раз туннель был убит, журнал туннеля.
+- JetsamEvent: Настройки iOS → Конфиденциальность и безопасность → Аналитика и улучшения → Данные
+  аналитики, файлы `JetsamEvent-…`. В списке процессов найти `"name" : "TitanTunnel"`: у убитого есть
+  `"reason"` (`per-process-limit` — превышен его собственный лимит; другие — системе не хватало памяти),
+  `rpages` × `pageSize` из начала файла — сколько он занимал. Время события сверить с журналом туннеля.
 
 ## Состояние на момент передачи
 

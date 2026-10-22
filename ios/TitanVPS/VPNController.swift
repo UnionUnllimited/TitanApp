@@ -347,11 +347,16 @@ final class VPNController: ObservableObject {
     }
 
     /// What the tunnel's TCP Fast Open dials did (its answer to "tfoStats"); nil while off.
-    func tunnelTFOStats() async -> [String: Any]? {
+    func tunnelTFOStats() async -> [String: Any]? { await askTunnel("tfoStats") }
+
+    /// The tunnel's memory, restarts and kills (its answer to "mem"); nil while off.
+    func tunnelMem() async -> [String: Any]? { await askTunnel("mem") }
+
+    private func askTunnel(_ message: String) async -> [String: Any]? {
         guard isOn, let session = manager?.connection as? NETunnelProviderSession else { return nil }
         return await withCheckedContinuation { cont in
             do {
-                try session.sendProviderMessage(Data("tfoStats".utf8)) { data in
+                try session.sendProviderMessage(Data(message.utf8)) { data in
                     cont.resume(returning: data.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] })
                 }
             } catch {

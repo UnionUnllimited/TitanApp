@@ -9,6 +9,8 @@ enum XrayRunConfig {
     static let tunTag = "tun-in"
     static let dnsOutTag = "dns-out"
     static let sniffingKey = "_titanSniffing"
+    /// The DNS outbounds' policy level (or the next one the panel's config doesn't use).
+    static let dnsLevel = 9
     private static let blockTag = "titan-block"
     private static let youtube = ["youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "youtubei.googleapis.com",
                                   "youtube.googleapis.com", "ggpht.com", "youtube-nocookie.com"]
@@ -21,7 +23,15 @@ enum XrayRunConfig {
         guard var cfg = (try? JSONSerialization.jsonObject(with: Data(serverJson.utf8))) as? [String: Any] else {
             throw SubscriptionError(message: "Не удалось прочитать настройки сервера")
         }
-        cfg["log"] = ["loglevel": "warning"]
+        // No access or DNS log: a line per connection or query that nobody reads in the tunnel.
+        cfg["log"] = ["loglevel": "warning", "access": "none", "dnsLog": false]
+        // No API, stats or metrics: the app reads the speed from utun's counters. Only the rules
+        // sending traffic to their tags go with them (their inbounds went in parseServers).
+        var serviceTags = Set<String>()
+        for key in ["api", "metrics"] {
+            if let tag = (cfg.removeValue(forKey: key) as? [String: Any])?["tag"] as? String { serviceTags.insert(tag) }
+        }
+        cfg.removeValue(forKey: "stats")
 
         // The panel's sniffing if it had one; by default the destination becomes the sniffed
         // domain, so "direct" re-resolves it (IPv4) instead of dialing an unreachable IPv6.
@@ -40,9 +50,24 @@ enum XrayRunConfig {
         cfg["dns"] = dns
 
         var outbounds = cfg["outbounds"] as? [[String: Any]] ?? []
+        serviceTags.subtract(outbounds.compactMap { $0["tag"] as? String })
         if !outbounds.contains(where: { $0["tag"] as? String == dnsOutTag }) {
             outbounds.append(["tag": dnsOutTag, "protocol": "dns"])
         }
+        // Each DNS query of the phone is its own UDP flow in the TUN, and the DNS outbound keeps
+        // it for connIdle (300 s by default): the tunnel's main use of memory. On a level of its
+        // own a flow ends 10 s after its last query.
+        let level = freeLevel(cfg)
+        for i in outbounds.indices where outbounds[i]["tag"] as? String == dnsOutTag || outbounds[i]["protocol"] as? String == "dns" {
+            var settings = outbounds[i]["settings"] as? [String: Any] ?? [:]
+            settings["userLevel"] = level
+            outbounds[i]["settings"] = settings
+        }
+        var policy = cfg["policy"] as? [String: Any] ?? [:]
+        var levels = policy["levels"] as? [String: Any] ?? [:]
+        levels[String(level)] = ["connIdle": 10, "handshake": 4, "uplinkOnly": 1, "downlinkOnly": 1]
+        policy["levels"] = levels
+        cfg["policy"] = policy
         var block = blockTag
         if let existing = outbounds.first(where: { $0["protocol"] as? String == "blackhole" })?["tag"] as? String {
             block = existing
@@ -58,7 +83,9 @@ enum XrayRunConfig {
             // YouTube over QUIC breaks playback through proxies; blocked, the app falls back to TCP.
             ["type": "field", "network": "udp", "port": "443", "domain": youtube.map { "domain:\($0)" }, "outboundTag": block],
         ]
-        rules += (routing["rules"] as? [[String: Any]] ?? []).compactMap(withoutGeo)
+        rules += (routing["rules"] as? [[String: Any]] ?? [])
+            .filter { !serviceTags.contains($0["outboundTag"] as? String ?? "") }
+            .compactMap(withoutGeo)
         routing["rules"] = rules
         cfg["routing"] = routing
 
@@ -78,6 +105,25 @@ enum XrayRunConfig {
         }
         routing["rules"] = rules
         cfg["routing"] = routing
+    }
+
+    /// dnsLevel, or the next level after it that no policy, outbound or user of the panel's has.
+    private static func freeLevel(_ cfg: [String: Any]) -> Int {
+        let policy = cfg["policy"] as? [String: Any]
+        var used = Set(((policy?["levels"] as? [String: Any]) ?? [:]).keys.compactMap { Int($0) })
+        func scan(_ value: Any) {
+            if let object = value as? [String: Any] {
+                for (key, v) in object {
+                    if key == "level" || key == "userLevel", let n = v as? Int { used.insert(n) } else { scan(v) }
+                }
+            } else if let array = value as? [Any] {
+                for item in array { scan(item) }
+            }
+        }
+        scan(cfg["outbounds"] ?? [])
+        var level = dnsLevel
+        while used.contains(level) { level += 1 }
+        return level
     }
 
     /// A rule without geoip/geosite lists (no geo files on iOS): geoip:private becomes the

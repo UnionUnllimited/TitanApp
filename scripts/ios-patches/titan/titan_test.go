@@ -120,3 +120,13 @@ func TestMieru(t *testing.T) {
 	defer call(t, map[string]any{"method": "stop", "handle": h})
 	roundTrip(t, sport, target)
 }
+
+func TestMemStats(t *testing.T) {
+	call(t, map[string]any{"method": "freeMemory"})
+	m := call(t, map[string]any{"method": "memStats"})
+	for _, k := range []string{"total", "released", "liveHeap", "stacks", "goroutines"} {
+		if n, ok := m[k].(float64); !ok || n <= 0 {
+			t.Fatalf("%s: %v", k, m[k])
+		}
+	}
+}

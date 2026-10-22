@@ -30,12 +30,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             // On the network queue, as restarts and stop: never two of them at once.
             self.queue.async {
+                self.noteLastRun()
                 guard !self.stopped else { completionHandler(Self.error("VPN выключен")); return }
                 do {
                     if let plugin { try self.startPlugin(plugin) }
                     try self.startXray(config)
                     self.running = (config, plugin)
                     self.watchNetwork()
+                    self.watchMemory()
                     completionHandler(nil)
                 } catch {
                     self.log.error("start failed: \(error.localizedDescription, privacy: .public)")
@@ -55,23 +57,34 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             pendingRestart = nil
             pathMonitor?.cancel()
             pathMonitor = nil
+            memoryTimer?.cancel()
+            memoryTimer = nil
+            pressure?.cancel()
+            pressure = nil
             running = nil
             _ = Self.invoke("stopXray")
             stopPlugin()
+            let why = Self.stopReasons[reason.rawValue] ?? "причина \(reason.rawValue)"
+            note("остановлен: \(why)")
+            removeMarker()
             completionHandler()
         }
     }
 
     private var pluginHandle: Int?
 
-    /// Технический режим asks what the tunnel's TCP Fast Open dials did: the kernel's record
-    /// of each one (data in the SYN, taken by the server or not), from the xray-tfo patch.
+    /// Технический режим asks what the tunnel's TCP Fast Open dials did ("tfoStats": the
+    /// kernel's record of each one, from the xray-tfo patch) and its memory ("mem").
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
-        guard String(decoding: messageData, as: UTF8.self) == "tfoStats" else {
+        switch String(decoding: messageData, as: UTF8.self) {
+        case "tfoStats":
+            completionHandler?(Data(TitanInvoke("{\"method\":\"tfoStats\"}").utf8))
+        case "mem":
+            // On the queue: the counters are its.
+            queue.async { [self] in completionHandler?(memoryReport()) }
+        default:
             completionHandler?(nil)
-            return
         }
-        completionHandler?(Data(TitanInvoke("{\"method\":\"tfoStats\"}").utf8))
     }
 
     // MARK: Network changes
@@ -132,33 +145,201 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         queue.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    /// Xray (and the protocol client) again on the network there is now. A failure is tried
-    /// again a little later; the tunnel ends only when it keeps failing.
-    private func restart() {
+    /// Xray (and the protocol client) again on the network there is now, or on the same one
+    /// to free memory (the watchdog). A failure is tried again a little later; the tunnel ends
+    /// only when it keeps failing.
+    private func restart(memory: Bool = false) {
         pendingRestart = nil
         guard let run = running, !stopped else { return }
         reasserting = true
         // No network now: its next report restarts it; not a failure.
         guard network != nil else { return }
+        // A retry isn't another restart.
+        if memory { memoryRestarts += 1 } else if failures == 0 { networkRestarts += 1 }
+        lastRestart = Date()
+        let before = Self.memoryNow().footprint
         _ = Self.invoke("stopXray")
+        stopPlugin()
+        // What the old run held goes back to iOS now (Go keeps freed pages a while).
+        _ = TitanInvoke("{\"method\":\"freeMemory\"}")
         do {
             if let plugin = run.plugin { try startPlugin(plugin) }
             try startXray(run.config)
             failures = 0
             reasserting = false
-            log.info("restarted on the new network")
+            let after = Self.memoryNow().footprint
+            log.info("restarted (\(memory ? "memory" : "network", privacy: .public)): \(before / Self.mib, privacy: .public) -> \(after / Self.mib, privacy: .public) MiB")
+            if memory { note("перезапуск по памяти: \(Self.mb(before)) → \(Self.mb(after))") }
         } catch {
             failures += 1
             let n = failures
             log.error("restart \(n, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             guard n <= Self.retryDelays.count else {
                 stopped = true
+                note("завершён: \(error.localizedDescription)")
+                removeMarker()
                 cancelTunnelWithError(error)
                 return
             }
             scheduleRestart(after: Self.retryDelays[n - 1])
         }
     }
+
+    // MARK: Memory
+
+    /// iOS kills a packet tunnel over its memory limit (about 50 MB) without a word. Close to it
+    /// Xray (and the protocol client) start again on the same network, the VPN reasserting a
+    /// moment: the old run's connections, buffers and UDP flows go. The watchdog never ends the
+    /// tunnel (it can't know if Не отключать VPN would bring it back); a kill is left to that.
+    private var memoryTimer: DispatchSourceTimer?
+    private var pressure: DispatchSourceMemoryPressure?
+    private var checkEvery: TimeInterval = 0
+    /// Any restart, for the network or memory: a memory one comes at most once in 30 s.
+    private var lastRestart = Date.distantPast
+    private var memoryRestarts = 0
+    private var networkRestarts = 0
+    private var peak: Int64 = 0
+    private var lastMarker = Date.distantPast
+    private var record = RunRecord()
+
+    private static let mib: Int64 = 1 << 20
+    /// Above it the checks and the marker come every second.
+    private static let busy = 35 * mib
+
+    private func watchMemory() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.setEventHandler { [weak self] in self?.checkMemory() }
+        memoryTimer = timer
+        checkEvery = 0
+        checkMemory()
+        timer.resume()
+        // System-wide pressure: Go's free pages back at once, and a restart sooner on critical.
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: queue)
+        source.setEventHandler { [weak self] in
+            guard let self, let event = self.pressure?.data else { return }
+            self.log.notice("memory pressure: \(event.contains(.critical) ? "critical" : "warning", privacy: .public)")
+            _ = TitanInvoke("{\"method\":\"freeMemory\"}")
+            self.checkMemory(critical: event.contains(.critical))
+        }
+        source.resume()
+        pressure = source
+    }
+
+    /// Every 10 s, every second above 35 MiB, every 200 ms within 10 MiB of the limit; within
+    /// 5 MiB (or within 10 on critical pressure) Xray starts again.
+    private func checkMemory(critical: Bool = false) {
+        guard !stopped, running != nil else { return }
+        let m = Self.memoryNow()
+        peak = max(peak, m.footprint)
+        let armed = m.footprint >= m.limit - 10 * Self.mib
+        if Date().timeIntervalSince(lastMarker) >= (m.footprint > Self.busy ? 0.9 : 9) { writeMarker(m.footprint) }
+        let every: TimeInterval = armed ? 0.2 : m.footprint > Self.busy ? 1 : 10
+        if every != checkEvery {
+            checkEvery = every
+            memoryTimer?.schedule(deadline: .now() + every, repeating: every, leeway: .milliseconds(every < 1 ? 50 : 500))
+        }
+        guard m.footprint >= m.limit - 5 * Self.mib || (critical && armed) else { return }
+        // A restart waiting (it frees as much), one just now, or no network to start on: not now.
+        guard pendingRestart == nil, network != nil, Date().timeIntervalSince(lastRestart) >= 30 else { return }
+        log.notice("memory: \(m.footprint / Self.mib, privacy: .public) of \(m.limit / Self.mib, privacy: .public) MiB, restarting")
+        restart(memory: true)
+    }
+
+    /// The footprint (what jetsam counts) and the limit: the footprint and what iOS says is left,
+    /// or 50 MiB if it doesn't say.
+    private static func memoryNow() -> (footprint: Int64, limit: Int64, remaining: Int64, available: Int64) {
+        let m = titan_mem_read()
+        let left = m.available > 0 ? m.available : m.remaining
+        return (m.footprint, left > 0 ? m.footprint + left : 50 * mib, m.remaining, m.available)
+    }
+
+    /// Технический режим's «Память туннеля».
+    private func memoryReport() -> Data? {
+        let m = Self.memoryNow()
+        let go = (try? JSONSerialization.jsonObject(with: Data(TitanInvoke("{\"method\":\"memStats\"}").utf8))) as? [String: Any]
+        var out: [String: Any] = [
+            "footprint": m.footprint, "peak": max(peak, m.footprint), "limit": m.limit,
+            "remaining": m.remaining, "available": m.available, "go": go ?? [:],
+            "memoryRestarts": memoryRestarts, "networkRestarts": networkRestarts,
+            "kills": record.kills, "log": record.log,
+        ]
+        if let at = record.lastKill {
+            out["lastKill"] = at.timeIntervalSince1970
+            out["lastKillFootprint"] = record.lastKillFootprint
+        }
+        return try? JSONSerialization.data(withJSONObject: out)
+    }
+
+    // MARK: How runs ended
+
+    /// The tunnel's runs across its processes, in its caches: running.json is there while one
+    /// runs; still there at a start, the last process was killed (by iOS, for memory as a rule:
+    /// a JetsamEvent in Аналитика) or crashed.
+    private struct Marker: Codable {
+        var at: Date
+        var footprint: Int64
+    }
+
+    private struct RunRecord: Codable {
+        var kills = 0
+        var lastKill: Date?
+        var lastKillFootprint: Int64 = 0
+        /// Stops, kills and memory restarts, the newest last.
+        var log: [String] = []
+    }
+
+    private static let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        ?? FileManager.default.temporaryDirectory
+    private static let markerURL = dir.appendingPathComponent("running.json")
+    private static let recordURL = dir.appendingPathComponent("memory.json")
+
+    private func noteLastRun() {
+        if let data = try? Data(contentsOf: Self.recordURL), let saved = try? JSONDecoder().decode(RunRecord.self, from: data) {
+            record = saved
+        }
+        guard let data = try? Data(contentsOf: Self.markerURL) else { return }
+        let marker = try? JSONDecoder().decode(Marker.self, from: data)
+        record.kills += 1
+        record.lastKill = marker?.at ?? Date()
+        record.lastKillFootprint = marker?.footprint ?? 0
+        note("завершён системой или упал, было \(Self.mb(record.lastKillFootprint))", at: record.lastKill ?? Date())
+        removeMarker()
+    }
+
+    private func note(_ text: String, at date: Date = Date()) {
+        record.log = Array((record.log + ["\(Self.stamp.string(from: date)) \(text)"]).suffix(20))
+        if let data = try? JSONEncoder().encode(record) { try? data.write(to: Self.recordURL, options: .atomic) }
+    }
+
+    private func writeMarker(_ footprint: Int64) {
+        lastMarker = Date()
+        if let data = try? JSONEncoder().encode(Marker(at: lastMarker, footprint: footprint)) {
+            try? data.write(to: Self.markerURL, options: .atomic)
+        }
+    }
+
+    private func removeMarker() {
+        try? FileManager.default.removeItem(at: Self.markerURL)
+    }
+
+    private static func mb(_ bytes: Int64) -> String {
+        String(format: "%.1f МБ", Double(bytes) / Double(mib))
+    }
+
+    private static let stamp: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "dd.MM HH:mm:ss"
+        return f
+    }()
+
+    /// NEProviderStopReason, the usual ones.
+    private static let stopReasons: [Int: String] = [
+        1: "выключен", 2: "ошибка туннеля", 3: "нет сети", 4: "смена сети", 5: "профиль выключен",
+        7: "ошибка настроек", 8: "простой", 9: "профиль выключен", 10: "профиль удалён",
+        11: "заменён другим VPN", 12: "выход пользователя", 13: "смена пользователя",
+        14: "не удалось подключиться", 15: "сон", 16: "обновление приложения",
+    ]
 
     private func startPlugin(_ request: String) throws {
         stopPlugin()

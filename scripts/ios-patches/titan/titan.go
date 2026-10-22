@@ -10,9 +10,12 @@
 //	{"method": "stop", "handle": n}                                    -> {}
 //	{"method": "freePort"}                                             -> {"port": p}
 //	{"method": "tfoStats"}                                             -> {"dials": n, ...}
+//	{"method": "memStats"}                                             -> {"liveHeap": n, ...}
+//	{"method": "freeMemory"}                                           -> {}
 //
 // tfoStats is what Xray's TCP Fast Open dials in this process did, by the kernel's own
-// record (the xray-tfo patch: internet.TitanTFOStats).
+// record (the xray-tfo patch: internet.TitanTFOStats). memStats is the Go runtime's memory
+// and freeMemory gives what it can back to the OS at once (memory.go).
 //
 // Errors come back as {"error": "..."}.
 package titan
@@ -73,6 +76,10 @@ func Invoke(requestJSON string) string {
 		return answer(map[string]any{"port": port}, nil)
 	case "tfoStats":
 		return internet.TitanTFOStats()
+	case "memStats":
+		return memStats()
+	case "freeMemory":
+		return freeMemory()
 	}
 	return answer(nil, errors.New("unknown method "+req.Method))
 }

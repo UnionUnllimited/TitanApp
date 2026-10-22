@@ -197,6 +197,38 @@ struct TFOStats {
     static func app() -> TFOStats? { TFOStats(try? Titan.invoke(["method": "tfoStats"])) }
 }
 
+/// The tunnel's memory (its answer to "mem"): its footprint, which iOS's limit is checked
+/// against, the Go runtime's part of it, the watchdog's restarts and the kills it saw.
+struct TunnelMemory {
+    private let o: [String: Any]
+
+    init?(_ obj: [String: Any]?) {
+        guard let obj, obj["footprint"] != nil else { return nil }
+        o = obj
+    }
+
+    func rows(stamp: (Date) -> String) -> [(String, String)] {
+        let go = o["go"] as? [String: Any] ?? [:]
+        func n(_ key: String, _ d: [String: Any]) -> Int64 { (d[key] as? NSNumber)?.int64Value ?? 0 }
+        func mb(_ key: String, _ d: [String: Any]) -> String { String(format: "%.1f МБ", Double(n(key, d)) / 1_048_576) }
+        var rows: [(String, String)] = [
+            ("Занято", "\(mb("footprint", o)) из \(mb("limit", o)), пик \(mb("peak", o))"),
+            ("Go", "живая куча \(mb("liveHeap", go)), всего \(mb("total", go)), из них отдано системе \(mb("released", go)), стеки \(mb("stacks", go))"),
+            ("Горутин", "\(n("goroutines", go))"),
+            ("Перезапуски Xray", "по памяти: \(n("memoryRestarts", o)), при смене сети: \(n("networkRestarts", o))"),
+        ]
+        if n("kills", o) > 0, let at = (o["lastKill"] as? NSNumber)?.doubleValue {
+            rows.append(("Завершён системой или упал", "всего: \(n("kills", o)), последний — \(stamp(Date(timeIntervalSince1970: at))), было \(mb("lastKillFootprint", o))"))
+        } else {
+            rows.append(("Завершён системой или упал", "не было"))
+        }
+        if let log = o["log"] as? [String], !log.isEmpty {
+            rows.append(("Журнал туннеля", log.joined(separator: "\n")))
+        }
+        return rows
+    }
+}
+
 @MainActor
 struct TechModeView: View {
     @EnvironmentObject var store: AppStore
@@ -216,6 +248,8 @@ struct TechModeView: View {
     @State private var udp: Set<String> = []
     @State private var tfoTunnel: TFOStats?
     @State private var tfoApp: TFOStats?
+    @State private var mem: TunnelMemory?
+    @Environment(\.scenePhase) private var scenePhase
     @State private var copied = false
 
     private static let stampFormat: DateFormatter = {
@@ -249,6 +283,8 @@ struct TechModeView: View {
                     Button { Task { await refreshTFO() } } label: { Text("Обновить").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
                 }
+                card("Память туннеля", memRows,
+                     caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 5 МБ до лимита туннель сам перезапускает Xray, не выключая VPN. Обновляется каждые 2 с.")
                 journalCard
             }
             .padding(16)
@@ -262,6 +298,13 @@ struct TechModeView: View {
             udp = Set((store.subscription?.servers ?? []).filter(TechChecks.isUDP).map(\.id))
         }
         .task { await refreshTFO() }
+        // While on screen and the app in front.
+        .task(id: scenePhase) {
+            while scenePhase == .active, !Task.isCancelled {
+                mem = TunnelMemory(await vpn.tunnelMem())
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
     }
 
     private var actions: some View {
@@ -394,6 +437,10 @@ struct TechModeView: View {
         return rows
     }
 
+    private var memRows: [(String, String)] {
+        mem?.rows(stamp: stamp) ?? [("Туннель", vpn.isOn ? "туннель не ответил" : "VPN выключен")]
+    }
+
     /// Why the last pings failed (Xray's errors; TCP Fast Open notes come in [brackets]) and the VPN's own error.
     private var journal: [String] {
         var lines: [String] = []
@@ -457,6 +504,7 @@ struct TechModeView: View {
         add("Доступ (\(accessRoute ?? appRoute))", accessRows)
         add("Серверы" + (tcpNote.map { " (\($0))" } ?? ""), serverRows)
         add("TCP Fast Open", tfoRows)
+        add("Память туннеля", memRows)
         out += "\n== Журнал ==\n" + (journal.isEmpty ? "пусто" : journal.joined(separator: "\n")) + "\n"
         return out
     }

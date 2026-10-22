@@ -45,6 +45,15 @@ PY
 # Real TCP Fast Open on iOS: Xray-core is patched (scripts/ios-patches/xray-tfo) to dial
 # tcpFastOpen hosts through tfo-go, which sends the first data in the SYN via connectx().
 "$ROOT/scripts/ios-patches/xray-tfo/vendor.sh" "$WORK"
+# The TUN's gVisor stack within the tunnel's memory: smaller TCP buffers, UDP flows ended
+# with the stack. iOS only (xray-tfo is Windows' too), on the copy vendor.sh just made.
+XRAY="$(dirname "$WORK")/Xray-core"
+python3 "$ROOT/scripts/ios-patches/xray-mem/apply.py" "$XRAY"
+if grep -qs titanCloseAll "$XRAY/proxy/tun/udp_fullcone.go"; then
+  cp "$ROOT/scripts/ios-patches/xray-mem/titan_udp_close_test.go" "$XRAY/proxy/tun/"
+  (cd "$XRAY" && go test -count=1 -v -run TestTitanUDPClose ./proxy/tun/)
+  rm "$XRAY/proxy/tun/titan_udp_close_test.go"
+fi
 # Our protocol clients (sing-box: TUIC / AnyTLS / ShadowTLS / SSH, and mieru) in the same
 # framework: one Go runtime per app. Package titan, bound next to libXray's.
 "$ROOT/scripts/ios-patches/titan/vendor.sh" "$WORK"
