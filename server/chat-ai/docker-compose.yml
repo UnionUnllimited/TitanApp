@@ -4,14 +4,32 @@ services:
     container_name: vpn-chat-ai
     restart: unless-stopped
     env_file: .env
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # Прочитать базу поддержки, кому бы ни принадлежал файл
+    cap_add: [DAC_OVERRIDE]
     volumes:
       # База бота поддержки: промпт, ключ, модель, типовые ответы. Бот открывает
-      # её только на чтение; папка смонтирована без :ro, потому что SQLite
-      # держит рядом с базой служебные файлы -wal и -shm.
-      - ${SUPPORT_DIR:-/root/vpn_support_bot}/data:/support/data
+      # её только на чтение (mode=ro); сама папка смонтирована на запись,
+      # потому что SQLite держит рядом с базой служебные файлы -wal и -shm.
+      - type: bind
+        source: ${SUPPORT_DIR:?впишите SUPPORT_DIR в .env}/data
+        target: /support/data
+        bind:
+          create_host_path: false
       # Промпт по умолчанию, пока его не меняли в админке
-      - ${SUPPORT_DIR:-/root/vpn_support_bot}/admin_web:/support/admin_web:ro
-      - ./extra.md:/app/extra.md:ro
+      - type: bind
+        source: ${SUPPORT_DIR:?впишите SUPPORT_DIR в .env}/admin_web/ai_settings.py
+        target: /support/admin_web/ai_settings.py
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./extra.md
+        target: /app/extra.md
+        read_only: true
     logging:
       driver: json-file
       options:
