@@ -12,6 +12,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let log = Logger(subsystem: "com.titanvps.ios", category: "tunnel")
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+        // How the last run ended, read before a stop can write over it (a stop may come while
+        // the network settings are still being set).
+        queue.async { self.noteLastRun() }
         let config = (options?["config"] as? String)
             ?? ((protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["config"] as? String)
         guard let config else {
@@ -30,7 +33,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             // On the network queue, as restarts and stop: never two of them at once.
             self.queue.async {
-                self.noteLastRun()
                 guard !self.stopped else { completionHandler(Self.error("VPN выключен")); return }
                 do {
                     if let plugin { try self.startPlugin(plugin) }
@@ -64,6 +66,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             running = nil
             _ = Self.invoke("stopXray")
             stopPlugin()
+            // Already done at the start as a rule; a marker left by a killed run is counted first.
+            noteLastRun()
             let why = Self.stopReasons[reason.rawValue] ?? "причина \(reason.rawValue)"
             note("остановлен: \(why)")
             removeMarker()
@@ -201,6 +205,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var peak: Int64 = 0
     private var lastMarker = Date.distantPast
     private var record = RunRecord()
+    /// memory.json read (noteLastRun): nothing writes it before.
+    private var recordLoaded = false
 
     private static let mib: Int64 = 1 << 20
     /// Above it the checks and the marker come every second.
@@ -294,6 +300,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private static let recordURL = dir.appendingPathComponent("memory.json")
 
     private func noteLastRun() {
+        guard !recordLoaded else { return }
+        recordLoaded = true
         if let data = try? Data(contentsOf: Self.recordURL), let saved = try? JSONDecoder().decode(RunRecord.self, from: data) {
             record = saved
         }

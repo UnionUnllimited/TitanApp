@@ -265,9 +265,16 @@ final class VPNController: ObservableObject {
         try? await m.saveToPreferences()
     }
 
-    /// What a profile's config was built from: the subscription's server as it was then.
+    /// What a profile's config was built from: the subscription's server as it was then, and the
+    /// XrayRunConfig that built it.
     nonisolated static func source(_ server: Server) -> String {
         SHA256.hash(data: Data((server.xrayJson ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
+            + "-v\(XrayRunConfig.version)"
+    }
+
+    /// The profile's config was built by an older XrayRunConfig (or before `source` existed).
+    private static func builtByOlder(_ proto: NETunnelProviderProtocol) -> Bool {
+        !((proto.providerConfiguration?["source"] as? String)?.hasSuffix("-v\(XrayRunConfig.version)") ?? false)
     }
 
     /// The subscription refreshed while off: iOS Settings and Не отключать VPN start the profile
@@ -294,6 +301,19 @@ final class VPNController: ObservableObject {
         try? await m.saveToPreferences()
     }
 
+    /// A server's providerConfiguration as connect builds it, off the main actor (a plugin
+    /// server's DNS lookup); nil if it can't be built.
+    private static func provider(_ server: Server) async -> [String: Any]? {
+        let build = Task.detached(priority: .utility) { () throws -> (PreparedServer, String) in
+            let p = try Plugins.prepare(server, forTunnel: true)
+            return (p, try XrayRunConfig.build(serverJson: p.json))
+        }
+        guard let built = try? await build.value else { return nil }
+        var provider: [String: Any] = ["config": built.1, "source": source(server)]
+        if let plugin = built.0.plugin { provider["plugin"] = plugin }
+        return provider
+    }
+
     /// Технический режим switched: a bypass server's on demand follows it (TunnelSwitch.onDemandRules),
     /// not only from the next connect. Saved with the VPN on or off; a connect under way sets its own.
     func applyOnDemandRules() async {
@@ -309,16 +329,37 @@ final class VPNController: ObservableObject {
     /// connected): applies to the VPN profile at once. Off even while the VPN is down (iOS may be
     /// about to bring a fallen one back); on only while it is on: an off by hand stays off, and a
     /// ping's pause or a connect under way gets it from connect.
-    func setKeepAlive(_ on: Bool) {
+    /// Connected (RootView, with the subscription's servers): a profile an older XrayRunConfig
+    /// built gets today's config too. On demand kept the VPN on across the app's update, and every
+    /// start by iOS (after a kill as well) ran the old one until a connect from the app.
+    func setKeepAlive(_ on: Bool, rebuilding servers: [Server] = []) {
         guard let m = manager, !on || (isOn && connectsInFlight == 0) else { return }
         Task {
             try? await m.loadFromPreferences()
+            var provider: [String: Any]?
+            if on, let proto = m.protocolConfiguration as? NETunnelProviderProtocol, Self.builtByOlder(proto),
+               let server = servers.first(where: { $0.name == proto.serverAddress }),
+               let built = await Self.provider(server) {
+                // The profile as it is now: Siri or iOS Settings may have saved it meanwhile, and a
+                // connect under way saves its own.
+                try? await m.loadFromPreferences()
+                if connectsInFlight == 0, let now = m.protocolConfiguration as? NETunnelProviderProtocol,
+                   now.serverAddress == server.name, Self.builtByOlder(now) { provider = built }
+            }
             // Turned off meanwhile: stays off.
-            guard m.isOnDemandEnabled != on, !on || isOn else { return }
+            guard m.isOnDemandEnabled != on || provider != nil, !on || isOn else { return }
             m.isOnDemandEnabled = on
-            // A profile saved before this switch existed: the rules for its server too.
-            if on, let name = (m.protocolConfiguration as? NETunnelProviderProtocol)?.serverAddress {
-                m.onDemandRules = TunnelSwitch.onDemandRules(name, bypassOnWifi: Self.bypassOnWifi)
+            if on, let proto = m.protocolConfiguration as? NETunnelProviderProtocol {
+                // A profile saved before this switch existed: the rules for its server too.
+                if let name = proto.serverAddress {
+                    m.onDemandRules = TunnelSwitch.onDemandRules(name, bypassOnWifi: Self.bypassOnWifi)
+                }
+                // For the next start only: the tunnel up now keeps the config it runs. Were iOS to
+                // restart it on the save, on demand brings it back on the new one.
+                if let provider {
+                    proto.providerConfiguration = provider
+                    m.protocolConfiguration = proto
+                }
             }
             try? await m.saveToPreferences()
         }

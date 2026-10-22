@@ -54,8 +54,11 @@ struct RootView: View {
                 Task { await Reminders.askOnce(for: store.subscription?.info) }
                 Task { await store.followTunnel() }
                 // Up without the app (iOS Settings) or on a profile saved before Не отключать VPN:
-                // the profile's on demand as switched there. The app's own connects set it.
-                if !vpn.connectsUnderWay, !store.pingBusy, !store.vpnPaused { vpn.setKeepAlive(VPNController.keepAlive) }
+                // the profile's on demand as switched there, and its config as this build makes it.
+                // The app's own connects set both.
+                if !vpn.connectsUnderWay, !store.pingBusy, !store.vpnPaused {
+                    vpn.setKeepAlive(VPNController.keepAlive, rebuilding: store.subscription?.servers ?? [])
+                }
             } else {
                 store.resetCheck()
             }

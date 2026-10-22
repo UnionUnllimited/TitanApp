@@ -9,6 +9,9 @@ enum XrayRunConfig {
     static let tunTag = "tun-in"
     static let dnsOutTag = "dns-out"
     static let sniffingKey = "_titanSniffing"
+    /// Bumped when build() makes a different config: a profile saved by an older one is rebuilt
+    /// (VPNController.source).
+    static let version = 2
     /// The DNS outbounds' policy level (or the next one the panel's config doesn't use).
     static let dnsLevel = 9
     private static let blockTag = "titan-block"
@@ -29,7 +32,7 @@ enum XrayRunConfig {
         // sending traffic to their tags go with them (their inbounds went in parseServers).
         var serviceTags = Set<String>()
         for key in ["api", "metrics"] {
-            if let tag = (cfg.removeValue(forKey: key) as? [String: Any])?["tag"] as? String { serviceTags.insert(tag) }
+            if let tag = ((cfg.removeValue(forKey: key) as? [String: Any])?["tag"] as? String)?.nilIfEmpty { serviceTags.insert(tag) }
         }
         cfg.removeValue(forKey: "stats")
 
@@ -84,7 +87,8 @@ enum XrayRunConfig {
             ["type": "field", "network": "udp", "port": "443", "domain": youtube.map { "domain:\($0)" }, "outboundTag": block],
         ]
         rules += (routing["rules"] as? [[String: Any]] ?? [])
-            .filter { !serviceTags.contains($0["outboundTag"] as? String ?? "") }
+            // Balancer rules (no outboundTag) stay whatever the service tags are.
+            .filter { ($0["outboundTag"] as? String).map { !serviceTags.contains($0) } ?? true }
             .compactMap(withoutGeo)
         routing["rules"] = rules
         cfg["routing"] = routing

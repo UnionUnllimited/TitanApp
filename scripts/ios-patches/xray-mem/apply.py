@@ -2,7 +2,9 @@
 
 - TCP buffers: 32 KiB to start, 128 KiB (send) and 256 KiB (receive) at most, instead of
   1 MiB and 6 / 8 MiB. rcvWnd 0 gave every accepted connection a 1 MiB receive buffer.
-- At most 1024 TCP handshakes in flight, not 65535.
+- At most 1024 TCP connections through the TUN at once, not 65535: Xray completes the
+  forwarder's request only when its connection ends, so maxInFlight counts live connections.
+  Past it new SYNs are dropped until one closes (the memory limit comes well before).
 - The stack's Close ends its UDP flows too: a restart frees them (and the old instance)
   now instead of after connIdle.
 """
