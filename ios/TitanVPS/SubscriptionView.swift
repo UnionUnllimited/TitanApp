@@ -242,6 +242,7 @@ struct ProfileView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("theme") private var theme = "system"
     @AppStorage("autoconnect") private var autoconnect = false
+    @AppStorage(VPNController.keepAliveKey) private var keepAlive = true
     @AppStorage(Reminders.key) private var reminders = true
     @AppStorage(LiveActivityController.key) private var liveActivity = true
     /// Live Activities are off for the app in iOS Settings: the switch alone shows nothing.
@@ -297,7 +298,7 @@ struct ProfileView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Автоподключение").font(.scaled(16, weight: .medium))
                                         .lineLimit(1).minimumScaleFactor(0.75)
-                                    Text("VPN включится сам при запуске приложения, включении и после сна устройства")
+                                    Text("VPN включится сам при открытии приложения")
                                         .font(.scaled(12)).foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
@@ -305,7 +306,23 @@ struct ProfileView: View {
                         }
                         .toggleStyle(TitanToggleStyle())
                         .padding(.horizontal, 16).padding(.vertical, 12)
-                        .onChange(of: autoconnect) { vpn.setAutoconnect($0) }
+                        RowDivider()
+                        // VPN On Demand: on by default, applies to the running VPN at once.
+                        Toggle(isOn: $keepAlive) {
+                            HStack(spacing: 14) {
+                                IconTile(icon: "checkmark.shield.fill", color: Palette.green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Не отключать VPN").font(.scaled(16, weight: .medium))
+                                        .lineLimit(1).minimumScaleFactor(0.75)
+                                    Text("Сам переподключится при смене Wi‑Fi и мобильной сети, после сбоя и перезагрузки")
+                                        .font(.scaled(12)).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                        .toggleStyle(TitanToggleStyle())
+                        .padding(.horizontal, 16).padding(.vertical, 12)
+                        .onChange(of: keepAlive) { vpn.setKeepAlive($0) }
                         RowDivider()
                         Toggle(isOn: $reminders) {
                             HStack(spacing: 14) {
@@ -411,14 +428,16 @@ struct ProfileView: View {
                     store.resetSettings()
                     theme = "system"
                     autoconnect = false
+                    keepAlive = true
                 }
                 Button("Отмена", role: .cancel) {}
             } message: {
-                Text("Тема, избранное, автоподключение и выбранный сервер вернутся к исходным. Ключ останется.")
+                Text("Тема, избранное, автоподключение, «Не отключать VPN» и выбранный сервер вернутся к исходным. Ключ останется.")
             }
             .alert("Выйти из аккаунта?", isPresented: $confirmLogout) {
                 Button("Выйти", role: .destructive) {
-                    if vpn.isOn { vpn.disconnect() }
+                    // Down already: iOS must not bring it back either.
+                    if vpn.isOn { vpn.disconnect() } else { vpn.setKeepAlive(false) }
                     store.logout()
                 }
                 Button("Отмена", role: .cancel) {}

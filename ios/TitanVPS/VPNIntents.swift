@@ -19,12 +19,12 @@ struct TurnOnVPNIntent: AppIntent {
 
 struct TurnOffVPNIntent: AppIntent {
     static var title: LocalizedStringResource = "Выключить Titan VPS"
-    static var description = IntentDescription("Отключает VPN и автоподключение.")
+    static var description = IntentDescription("Отключает VPN — сам он не включится, пока его не включат снова.")
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let wasOn = await TunnelSwitch.isOn()
-        // Off anyway: Автоподключение goes off with it.
+        // Off anyway: Не отключать VPN doesn't bring it back.
         await VPNIntents.turnOff()
         if wasOn { return .result(dialog: "Titan VPS выключен") }
         return .result(dialog: "Titan VPS уже выключен")
@@ -81,9 +81,8 @@ enum VPNIntents {
         // Пункт управления's toggle then shows what the VPN really did, failed or not: run in the
         // background (Siri, Команды), the app has no screen to see the change.
         defer { VPNControl.reload() }
-        let defaults = UserDefaults.standard
-        let name = try await TunnelSwitch.start(picked(), onDemand: defaults.bool(forKey: "autoconnect"),
-                                                bypassOnWifi: defaults.bool(forKey: TechMode.key))
+        let name = try await TunnelSwitch.start(picked(), onDemand: VPNController.keepAlive,
+                                                bypassOnWifi: UserDefaults.standard.bool(forKey: TechMode.key))
         await LiveActivityController.turnedOn()
         return name.splitFlag.1
     }
@@ -208,9 +207,8 @@ enum VPNIntents {
 
     /// Launched in the background for the tap: the VPN profile, as Siri turns it on.
     @MainActor private static func switchProfile(to server: Server, gen: Int) async {
-        let defaults = UserDefaults.standard
-        let onDemand = defaults.bool(forKey: "autoconnect")
-        let bypassOnWifi = defaults.bool(forKey: TechMode.key)
+        let onDemand = VPNController.keepAlive
+        let bypassOnWifi = UserDefaults.standard.bool(forKey: TechMode.key)
         // Can't be run: the VPN stays as it is, the activity back to what runs.
         guard runnable(server) else {
             await settle(gen)
@@ -231,7 +229,7 @@ enum VPNIntents {
             // Not built after all: the profile's last server again.
             _ = try? await TunnelSwitch.start(nil, onDemand: onDemand, bypassOnWifi: bypassOnWifi)
         }
-        // Turned off while the profile was saved: stays off (and Автоподключение with it).
+        // Turned off while the profile was saved: stays off (and Не отключать VPN with it).
         // Not on a newer tap: that one restarts the tunnel itself.
         if offs != offsBefore {
             await TunnelSwitch.stop()

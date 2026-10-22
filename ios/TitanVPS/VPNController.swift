@@ -25,6 +25,12 @@ final class VPNController: ObservableObject {
     /// The app's own, while it runs: the Live Activity's ‹ › switch through it (VPNIntents).
     static weak var current: VPNController?
 
+    /// Настройки → Не отключать VPN (on unless turned off there): VPN On Demand, so iOS itself
+    /// brings the VPN back after a network change, a failure or a restart of the phone, until
+    /// it is turned off by hand.
+    nonisolated static let keepAliveKey = "keepAlive"
+    nonisolated static var keepAlive: Bool { UserDefaults.standard.object(forKey: keepAliveKey) as? Bool ?? true }
+
     init() {
         loading = Task { await load() }
         Self.current = self
@@ -135,10 +141,12 @@ final class VPNController: ObservableObject {
             m.protocolConfiguration = proto
             m.localizedDescription = "Titan VPS"
             m.isEnabled = true
-            // Автоподключение: iOS itself brings the VPN back (after a restart, sleep, network
-            // change) until it is turned off by hand.
-            m.onDemandRules = [NEOnDemandRuleConnect()]
-            m.isOnDemandEnabled = UserDefaults.standard.bool(forKey: "autoconnect")
+            // Не отключать VPN: iOS itself brings the VPN back (after a failure, a restart, sleep,
+            // a network change) until it is turned off by hand.
+            let rule = NEOnDemandRuleConnect()
+            rule.interfaceTypeMatch = .any
+            m.onDemandRules = [rule]
+            m.isOnDemandEnabled = Self.keepAlive
             // Still wanted: Подключаемся… again if a late status of the tunnel stopped before (a
             // switch) put it off meanwhile. Выкл or a ping's pause meanwhile keep theirs.
             if wantOn { state = .connecting }
@@ -154,7 +162,7 @@ final class VPNController: ObservableObject {
                     m.isOnDemandEnabled = false
                     try? await m.saveToPreferences()
                 }
-                // Автоподключение may have started it on the save already.
+                // Не отключать VPN may have started it on the save already.
                 m.connection.stopVPNTunnel()
                 state = .off
                 update()
@@ -178,15 +186,19 @@ final class VPNController: ObservableObject {
         state = .disconnecting
         guard let m = manager else { return }
         Task {
-            // The profile as saved now (see connect). Turned off by hand: iOS must not bring it
-            // back on its own.
-            try? await m.loadFromPreferences()
-            if m.isOnDemandEnabled {
-                m.isOnDemandEnabled = false
-                try? await m.saveToPreferences()
-            }
+            // Turned off by hand: iOS must not bring it back on its own.
+            await holdOnDemand(m)
             m.connection.stopVPNTunnel()
         }
+    }
+
+    /// On demand off in the profile as saved now (see connect), before the tunnel is stopped:
+    /// else iOS starts it again at once.
+    private func holdOnDemand(_ m: NETunnelProviderManager) async {
+        try? await m.loadFromPreferences()
+        guard m.isOnDemandEnabled else { return }
+        m.isOnDemandEnabled = false
+        try? await m.saveToPreferences()
     }
 
     /// What a profile's config was built from: the subscription's server as it was then.
@@ -194,7 +206,7 @@ final class VPNController: ObservableObject {
         SHA256.hash(data: Data((server.xrayJson ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The subscription refreshed while off: iOS Settings and Автоподключение start the profile
+    /// The subscription refreshed while off: iOS Settings and Не отключать VPN start the profile
     /// with no options, so its config follows the subscription (the picked server if its own is
     /// gone). Only an existing profile, never while on or while a connect is under way.
     func refreshProfile(_ servers: [Server], picked: Server?) async {
@@ -217,27 +229,27 @@ final class VPNController: ObservableObject {
         try? await m.saveToPreferences()
     }
 
-    /// Автоподключение switched in the settings: applies to the VPN profile at once.
-    func setAutoconnect(_ on: Bool) {
-        guard let m = manager, isOn else { return }
+    /// Не отключать VPN switched in the settings: applies to the VPN profile at once. Off even
+    /// while the VPN is down (iOS may be about to bring a fallen one back); on only while it is
+    /// on: an off by hand stays off, and a ping's pause or a connect under way gets it from connect.
+    func setKeepAlive(_ on: Bool) {
+        guard let m = manager, !on || (isOn && connectsInFlight == 0) else { return }
         Task {
             try? await m.loadFromPreferences()
+            // Turned off meanwhile: stays off.
+            guard m.isOnDemandEnabled != on, !on || isOn else { return }
             m.isOnDemandEnabled = on
             try? await m.saveToPreferences()
         }
     }
 
     /// Turns the tunnel off for a ping: through it nearly every probe times out (the app's own
-    /// traffic goes into the VPN). Автоподключение is held off so iOS doesn't bring it back
+    /// traffic goes into the VPN). Не отключать VPN is held off so iOS doesn't bring it back
     /// meanwhile; `connect` restores it. Returns once the tunnel is down; false if it was off.
     func pauseForPing() async -> Bool {
         guard isOn, let m = manager else { return false }
         wantOn = false
-        try? await m.loadFromPreferences()
-        if m.isOnDemandEnabled {
-            m.isOnDemandEnabled = false
-            try? await m.saveToPreferences()
-        }
+        await holdOnDemand(m)
         m.connection.stopVPNTunnel()
         for _ in 0..<50 {
             let status = m.connection.status
@@ -273,6 +285,9 @@ final class VPNController: ObservableObject {
         connectsInFlight += 1
         defer { connectsInFlight -= 1 }
         wantOn = true
+        // Не отключать VPN off first: iOS would bring the old server back at once. connect turns
+        // it on again.
+        if let m = manager { await holdOnDemand(m) }
         manager?.connection.stopVPNTunnel()
         try? await Task.sleep(nanoseconds: 700_000_000)
         // Turned off meanwhile (Выкл, Пункт управления, Siri): stays off, as the tunnel is now.

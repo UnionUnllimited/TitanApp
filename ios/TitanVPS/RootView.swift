@@ -61,6 +61,9 @@ struct RootView: View {
             if store.subscription != nil { tab = .subscription }
         }
         .onChange(of: scenePhase) { phase in
+            // Left mid-ping: the VPN back now, while the app may still run. The profile saved
+            // with on demand again, iOS brings it up even if the app is suspended.
+            if phase == .background, store.pingBusy { store.stopPing() }
             guard phase == .active else { return }
             // Back in the app: the VPN may have changed while it was away (the tunnel fell, iOS
             // Settings); the Live Activity and Пункт управления's toggle follow it again.
@@ -79,7 +82,7 @@ struct RootView: View {
             let inBackground = UIApplication.shared.applicationState == .background
             withAnimation { splash = false }
             await store.refresh(quiet: true)
-            // Автоподключение: on at launch too (iOS brings it back after sleep itself).
+            // Автоподключение: on when the app is opened (Не отключать VPN keeps it on after that).
             if autoconnect, !vpn.isOn, !inBackground, let s = store.selected, !store.blockedOnWifi(s) { await vpn.connect(s) }
         }
         // titanvps://import/<key>, titanvps://add?url=<key> (same as Android): add and connect.

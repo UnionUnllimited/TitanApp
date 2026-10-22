@@ -28,7 +28,7 @@ struct SwitchServerIntent: LiveActivityIntent {
     }
 }
 
-/// The Dynamic Island's ⏻: the VPN off, as Siri's «Выключить» (Автоподключение off too, the
+/// The Dynamic Island's ⏻: the VPN off, as Siri's «Выключить» (Не отключать VPN held off, the
 /// activity closes). A LiveActivityIntent in both targets, so it runs in the app's process.
 @available(iOS 18.0, *)
 struct StopVPNIntent: LiveActivityIntent {

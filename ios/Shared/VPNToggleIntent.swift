@@ -18,7 +18,7 @@ struct SetVPNIntent: SetValueIntent, LiveActivityIntent {
         // The toggle then shows what the VPN really did, failed or not.
         defer { VPNControl.reload() }
         #if TITAN_APP
-        // As Siri does: the server picked in the app, Автоподключение, the Live Activity.
+        // As Siri does: the server picked in the app, Не отключать VPN, the Live Activity.
         if value { _ = try await VPNIntents.turnOn() } else { await VPNIntents.turnOff() }
         #else
         // The extension's copy (iOS runs it in the app): the profile as the app saved it.

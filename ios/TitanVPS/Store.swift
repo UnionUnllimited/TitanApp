@@ -102,12 +102,14 @@ final class AppStore: ObservableObject {
         return regular.first(where: isFavorite) ?? regular.first
     }
 
-    /// Theme, favourites and the picked server back to the start; the key stays.
+    /// Theme, favourites, Автоподключение, Не отключать VPN and the picked server back to the
+    /// start; the key stays.
     func resetSettings() {
         favorites = []
         UserDefaults.standard.removeObject(forKey: favKey)
         UserDefaults.standard.set("system", forKey: "theme")
         UserDefaults.standard.set(false, forKey: "autoconnect")
+        UserDefaults.standard.set(true, forKey: VPNController.keepAliveKey)
         select(subscription?.servers.first?.id)
         message = "Настройки сброшены"
     }
@@ -195,7 +197,7 @@ final class AppStore: ObservableObject {
             Task { await Reminders.update(for: sub.info) }
             if let data = try? JSONEncoder().encode(sub) { UserDefaults.standard.set(data, forKey: subKey) }
             if !sub.servers.contains(where: { $0.id == selectedId }) { select(sub.servers.first?.id) }
-            // While off: what iOS Settings and Автоподключение start follows it too (a ping's
+            // While off: what iOS Settings and Не отключать VPN start follows it too (a ping's
             // pause reconnects with a fresh config anyway).
             if let vpn, !pingBusy, !vpnPaused {
                 let picked = selected
@@ -215,7 +217,7 @@ final class AppStore: ObservableObject {
         UserDefaults.standard.set(id, forKey: selKey)
     }
 
-    /// Connected: the VPN may have come up without the app (iOS Settings, Автоподключение) on
+    /// Connected: the VPN may have come up without the app (iOS Settings, Не отключать VPN) on
     /// the profile's last server, not the one picked here. The pick follows what really runs.
     func followTunnel() async {
         let picked = selectedId

@@ -44,7 +44,7 @@ enum TunnelSwitch {
 
     /// Starts the tunnel and waits until it is up; throws the tunnel's reason if it falls.
     /// Returns the server's name. Already on: nothing changes.
-    /// onDemand: Автоподключение as set in the app (nil: as the profile has it).
+    /// onDemand: Не отключать VPN as set in the app (nil: as the profile has it).
     /// bypassOnWifi: Технический режим lets bypass servers run on Wi-Fi.
     @discardableResult
     static func start(_ target: Target? = nil, onDemand: Bool? = nil, bypassOnWifi: Bool = false) async throws -> String {
@@ -83,14 +83,14 @@ enum TunnelSwitch {
             guard m.connection.status == .disconnecting else { break }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
-        // No options: the tunnel takes the config from the profile. Автоподключение may have
+        // No options: the tunnel takes the config from the profile. Не отключать VPN may have
         // started it on the save already.
         if !isOn(m.connection.status) { try m.connection.startVPNTunnel() }
         try await waitUntilUp(m.connection)
         return name
     }
 
-    /// Off, and Автоподключение with it (turned off by hand: iOS must not bring it back).
+    /// Off, and on demand with it (turned off by hand: Не отключать VPN must not bring it back).
     static func stop() async {
         guard let m = try? await manager() else { return }
         if m.isOnDemandEnabled {
