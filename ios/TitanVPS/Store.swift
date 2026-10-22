@@ -52,6 +52,9 @@ final class AppStore: ObservableObject {
     /// The reconnect after the last ping; a new ping waits for it before pausing again.
     private var resuming: Task<Void, Never>?
     private var resumeOn: Server?
+    /// VPNController.offsByHand when the pause began: an off by hand since (Siri, ⏻, Выйти)
+    /// keeps the VPN off after the ping.
+    private var offsAtPause = 0
 
     private let subKey = "titan.subscription"
     private let selKey = "titan.selected"
@@ -233,6 +236,8 @@ final class AppStore: ObservableObject {
     }
 
     func logout() {
+        // A ping's pause doesn't bring the VPN back behind the welcome screen.
+        stopPing()
         Reminders.reset()
         subscription = nil
         account = nil
@@ -379,6 +384,7 @@ final class AppStore: ObservableObject {
         if holds.count == 1, let vpn, vpn.isOn || resuming != nil {
             let previous = resuming
             let server = selected
+            offsAtPause = vpn.offsByHand
             vpnPaused = true
             pausing = Task {
                 await previous?.value
@@ -390,7 +396,7 @@ final class AppStore: ObservableObject {
     }
 
     /// The last hold given back: the VPN back on the server it was on (unless it was turned on
-    /// by hand meanwhile). A hold already given back by Стоп is ignored.
+    /// or off by hand meanwhile). A hold already given back by Стоп is ignored.
     private func endPing(_ hold: UUID) {
         guard holds.remove(hold) != nil else { return }
         if pingAllHold == hold { pingAllHold = nil }
@@ -402,6 +408,14 @@ final class AppStore: ObservableObject {
         guard let server = resumeOn else { vpnPaused = false; return }
         resumeOn = nil
         guard let vpn, !vpn.isOn else { vpnPaused = false; return }
+        // Turned off by hand during the pause (Siri, ⏻, Выйти): stays off, and the activity
+        // left saying "Переключаемся…" goes. The pause may have ended after the off, so not
+        // resumeOn alone.
+        guard vpn.offsByHand == offsAtPause else {
+            vpnPaused = false
+            LiveActivityController.sync(vpn.state, server: selected?.name, paused: false)
+            return
+        }
         // "Пауза" stays on screen until connect has taken over (Подключаемся…).
         resuming = Task {
             var target = selected ?? server

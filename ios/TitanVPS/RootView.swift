@@ -6,8 +6,11 @@ struct RootView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var vpn: VPNController
     @AppStorage("autoconnect") private var autoconnect = false
+    @AppStorage(TechMode.key) private var techMode = false
     @State private var tab: Tab = .home
     @State private var splash = true
+    /// The app went to the background: back in it is an opening for Автоподключение.
+    @State private var wasInBackground = false
     /// The phone's text size: the screens are built again when it changes (Font.scaled).
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.scenePhase) private var scenePhase
@@ -67,11 +70,19 @@ struct RootView: View {
             // Left mid-ping (or mid-check): those stop and the VPN comes back now, in background
             // time. Once the profile is saved with on demand again, iOS keeps it up even if the
             // app is suspended.
-            if phase == .background { store.leftApp() }
+            if phase == .background {
+                store.leftApp()
+                wasInBackground = true
+            }
             guard phase == .active else { return }
             // Back in the app: the VPN may have changed while it was away (the tunnel fell, iOS
             // Settings); the Live Activity and Пункт управления's toggle follow it again.
             LiveActivityController.sync(vpn.state, server: store.selected?.name, paused: store.vpnPaused)
+            // Opened again (not just Пункт управления pulled down over it): Автоподключение too.
+            // During the splash the launch's own check below does it.
+            let opened = wasInBackground
+            wasInBackground = false
+            if opened, !splash { Task { await autoconnectOnOpen() } }
             // After a while: the subscription again (renewed in the bot meanwhile?), which also
             // moves the reminders.
             guard let sub = store.subscription, Date().timeIntervalSince(sub.fetchedAt) > 1800 else { return }
@@ -84,11 +95,14 @@ struct RootView: View {
             // Read after the splash, when a tap's launch is in the foreground (a scene-based app
             // starts in the background), and before the refresh: leaving the app meanwhile still connects.
             let inBackground = UIApplication.shared.applicationState == .background
+            // Opened later: then Автоподключение (scenePhase above).
+            if inBackground { wasInBackground = true }
             withAnimation { splash = false }
             await store.refresh(quiet: true)
-            // Автоподключение: on when the app is opened (Не отключать VPN keeps it on after that).
-            if autoconnect, !vpn.isOn, !inBackground, let s = store.selected, !store.blockedOnWifi(s) { await vpn.connect(s) }
+            if !inBackground { await autoconnectOnOpen() }
         }
+        // Технический режим switched: a bypass server's on demand follows it (Wi-Fi or not).
+        .onChange(of: techMode) { _ in Task { await vpn.applyOnDemandRules() } }
         // titanvps://import/<key>, titanvps://add?url=<key> (same as Android): add and connect.
         .onOpenURL { url in
             Task {
@@ -103,6 +117,17 @@ struct RootView: View {
         .alert(store.message ?? "", isPresented: Binding(get: { store.message != nil }, set: { if !$0 { store.message = nil } })) {
             Button("OK", role: .cancel) {}
         }
+    }
+
+    /// Автоподключение: on each time the app is opened, at launch or back from the background
+    /// (Не отключать VPN keeps it on after that). Not while it is on, going off, being connected
+    /// or paused for a ping; the profile's own status first, as the app's may lag after a
+    /// suspension (iOS may have brought it back meanwhile).
+    private func autoconnectOnOpen() async {
+        guard autoconnect, !vpn.isOn, !(await TunnelSwitch.isOn()) else { return }
+        guard autoconnect, !vpn.isOn, vpn.state != .disconnecting, !vpn.connectsUnderWay,
+              !store.pingBusy, !store.vpnPaused, let s = store.selected, !store.blockedOnWifi(s) else { return }
+        await vpn.connect(s)
     }
 }
 

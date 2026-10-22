@@ -24,9 +24,11 @@ struct TurnOffVPNIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let wasOn = await TunnelSwitch.isOn()
-        // Off anyway: Не отключать VPN doesn't bring it back.
+        // Off for a ping in the app: it would have come back after it.
+        let paused = await MainActor.run { AppStore.current?.vpnPaused == true }
+        // Off anyway: Не отключать VPN doesn't bring it back, nor does the ping's end.
         await VPNIntents.turnOff()
-        if wasOn { return .result(dialog: "Titan VPS выключен") }
+        if wasOn || paused { return .result(dialog: "Titan VPS выключен") }
         return .result(dialog: "Titan VPS уже выключен")
     }
 }

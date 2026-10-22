@@ -436,8 +436,14 @@ struct ProfileView: View {
             }
             .alert("Выйти из аккаунта?", isPresented: $confirmLogout) {
                 Button("Выйти", role: .destructive) {
-                    // Down already: iOS must not bring it back either.
-                    if vpn.isOn { vpn.disconnect() } else { vpn.setKeepAlive(false) }
+                    // Down already (maybe paused for a ping): iOS and the ping's end must not bring
+                    // it back either.
+                    if vpn.isOn {
+                        vpn.disconnect()
+                    } else {
+                        vpn.cancelConnects()
+                        vpn.setKeepAlive(false)
+                    }
                     store.logout()
                 }
                 Button("Отмена", role: .cancel) {}

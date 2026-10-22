@@ -31,6 +31,24 @@ enum TunnelSwitch {
         return isOn(m.connection.status)
     }
 
+    /// Same rule as in the app (ServerGroup.isBypass): bypass servers only over mobile internet.
+    static func isBypass(_ name: String) -> Bool { name.lowercased().contains("обход") }
+
+    /// Не отключать VPN's rules for a server: iOS starts it on any network; a bypass server
+    /// (without Технический режим) only on mobile internet. Ignore leaves one already running
+    /// on Wi-Fi be, so nothing drops.
+    static func onDemandRules(_ name: String, bypassOnWifi: Bool) -> [NEOnDemandRule] {
+        let connect = NEOnDemandRuleConnect()
+        guard !bypassOnWifi, isBypass(name) else {
+            connect.interfaceTypeMatch = .any
+            return [connect]
+        }
+        connect.interfaceTypeMatch = .cellular
+        let ignore = NEOnDemandRuleIgnore()
+        ignore.interfaceTypeMatch = .any
+        return [connect, ignore]
+    }
+
     /// The server the profile runs, by its name in the subscription (with the flag).
     static func serverName() async -> String? {
         ((try? await manager())?.protocolConfiguration as? NETunnelProviderProtocol)?.serverAddress
@@ -54,8 +72,7 @@ enum TunnelSwitch {
         }
         let name = target?.name ?? proto.serverAddress ?? "Titan VPS"
         if isOn(m.connection.status) { return proto.serverAddress ?? name }
-        // Same rule as in the app (ServerGroup.isBypass): bypass servers only over mobile internet.
-        if !bypassOnWifi, name.lowercased().contains("обход"), await onWifi() {
+        if !bypassOnWifi, isBypass(name), await onWifi() {
             throw TunnelSwitchError("Обходы работают только через мобильный интернет. На Wi-Fi выберите другой сервер в приложении")
         }
         var changed = false
@@ -75,6 +92,8 @@ enum TunnelSwitch {
             changed = true
         }
         if changed {
+            // On demand's rules for the server it runs now.
+            m.onDemandRules = onDemandRules(name, bypassOnWifi: bypassOnWifi)
             try await m.saveToPreferences()
             try await m.loadFromPreferences()
         }
@@ -86,7 +105,7 @@ enum TunnelSwitch {
         // No options: the tunnel takes the config from the profile. Не отключать VPN may have
         // started it on the save already.
         if !isOn(m.connection.status) { try m.connection.startVPNTunnel() }
-        try await waitUntilUp(m.connection)
+        try await waitUntilUp(m)
         return name
     }
 
@@ -113,22 +132,37 @@ enum TunnelSwitch {
 
     /// Up to 12 s: enough for the tunnel to start, short enough for Siri. Still connecting
     /// after that is no error; never started (no network, say) is.
-    private static func waitUntilUp(_ connection: NEVPNConnection) async throws {
+    private static func waitUntilUp(_ m: NETunnelProviderManager) async throws {
+        let connection = m.connection
         var started = false
+        var connecting = false
         for _ in 0..<60 {
             switch connection.status {
             case .connected: return
+            case .connecting, .reasserting: started = true; connecting = true
             // Disconnecting too: start let the old session end, so this is the new one.
-            case .connecting, .reasserting, .disconnecting: started = true
+            case .disconnecting: started = true
             case .disconnected, .invalid:
                 // It fell while starting: the tunnel's reason.
-                if started { throw await lastError(connection) }
+                if started {
+                    if connecting { await giveUpOnDemand(m) }
+                    throw await lastError(connection)
+                }
             default: break
             }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
         let status = connection.status
         if status == .disconnected || status == .invalid { throw await lastError(connection) }
+    }
+
+    /// Fell before it was ever up (a config the tunnel can't run, say): on demand would start it
+    /// again and again, so it goes off, as VPNController.startFailed does.
+    private static func giveUpOnDemand(_ m: NETunnelProviderManager) async {
+        try? await m.loadFromPreferences()
+        guard m.isOnDemandEnabled else { return }
+        m.isOnDemandEnabled = false
+        try? await m.saveToPreferences()
     }
 
     private static func lastError(_ connection: NEVPNConnection) async -> TunnelSwitchError {

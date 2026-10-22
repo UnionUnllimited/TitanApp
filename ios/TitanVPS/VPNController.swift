@@ -27,6 +27,19 @@ final class VPNController: ObservableObject {
     private var observer: NSObjectProtocol?
     /// The profile's first load: an intent may come right at launch.
     private var loading: Task<Void, Never>?
+    /// Bumped by each connect and each stop of ours: a failed start acts only if none came since.
+    private var attempts = 0
+    /// Our own start until the tunnel is up (seen once it says connecting: a late status of the
+    /// session before doesn't count). Falling before that is a failed start, not a drop. Every
+    /// stop of ours clears it.
+    private var starting: Start?
+    private struct Start {
+        let attempt: Int
+        var seen: Bool
+    }
+    /// Bumped by each off by hand (Выкл, Выйти, Пункт управления, Siri, ⏻): a ping's resume
+    /// that would bring the VPN back after one doesn't run (AppStore.endPing).
+    private(set) var offsByHand = 0
 
     /// The app's own, while it runs: the Live Activity's ‹ › switch through it (VPNIntents).
     static weak var current: VPNController?
@@ -36,6 +49,8 @@ final class VPNController: ObservableObject {
     /// it is turned off by hand.
     nonisolated static let keepAliveKey = "keepAlive"
     nonisolated static var keepAlive: Bool { UserDefaults.standard.object(forKey: keepAliveKey) as? Bool ?? true }
+    /// Технический режим lets bypass servers run on Wi-Fi (and on demand start them there).
+    private static var bypassOnWifi: Bool { UserDefaults.standard.bool(forKey: TechMode.key) }
 
     init() {
         loading = Task { await load() }
@@ -89,22 +104,52 @@ final class VPNController: ObservableObject {
         guard let connection = manager?.connection else { set(.off); return }
         let wasConnecting = state == .connecting
         switch connection.status {
-        case .connected: set(.connected(since: connection.connectedDate ?? Date()))
-        case .connecting, .reasserting: set(.connecting)
+        case .connected:
+            starting = nil
+            set(.connected(since: connection.connectedDate ?? Date()))
+        case .connecting, .reasserting:
+            starting?.seen = true
+            set(.connecting)
         case .disconnecting: set(.disconnecting)
         default:
             if case .error = state {} else { set(.off) }
+            // Our own start fell before it was ever up (a config the tunnel can't run, say).
+            let failed = starting?.seen == true ? starting?.attempt : nil
+            starting = nil
             // It fell while starting: show the tunnel's reason instead of a plain "Не подключено".
-            if wasConnecting {
+            if wasConnecting || failed != nil {
                 connection.fetchLastDisconnectError { [weak self] error in
                     guard let error else { return }
                     Task { @MainActor in
-                        guard let self, case .off = self.state else { return }
+                        guard let self else { return }
+                        if let failed { self.startFailed(failed) }
+                        guard case .off = self.state else { return }
                         self.state = .error(Self.describe(error))
                     }
                 }
             }
         }
+    }
+
+    /// A start of ours fell before the tunnel was up: Не отключать VPN would start the same
+    /// config again and again (Подключаемся… / Не подключено with no end, which Выкл can't stop
+    /// from Не подключено). On demand goes off with it; a fall once it was up keeps it (iOS
+    /// brings the VPN back). Not once a newer connect has begun.
+    private func startFailed(_ attempt: Int) {
+        guard attempt == attempts, let m = manager else { return }
+        wantOn = false
+        Task {
+            try? await m.loadFromPreferences()
+            guard attempt == attempts, m.isOnDemandEnabled else { return }
+            m.isOnDemandEnabled = false
+            try? await m.saveToPreferences()
+        }
+    }
+
+    /// A stop of ours or a newer connect: the start under way is no longer watched.
+    private func forgetStart() {
+        attempts += 1
+        starting = nil
     }
 
     /// Status notifications come for any VPN and again for the same status (a ping's pause and
@@ -115,6 +160,9 @@ final class VPNController: ObservableObject {
 
     func connect(_ server: Server) async {
         wantOn = true
+        // An older connect's start still under way is this one's to watch now.
+        forgetStart()
+        let attempt = attempts
         connectsInFlight += 1
         defer { connectsInFlight -= 1 }
         guard let tunnelId = Self.tunnelBundleId else {
@@ -148,11 +196,10 @@ final class VPNController: ObservableObject {
             m.localizedDescription = "Titan VPS"
             m.isEnabled = true
             // Не отключать VPN: iOS itself brings the VPN back (after a failure, a restart, sleep,
-            // a network change) until it is turned off by hand.
-            let rule = NEOnDemandRuleConnect()
-            rule.interfaceTypeMatch = .any
-            m.onDemandRules = [rule]
-            m.isOnDemandEnabled = Self.keepAlive
+            // a network change) until it is turned off by hand. Not if Выкл or a ping's pause came
+            // meanwhile: iOS would start it on the save.
+            m.onDemandRules = TunnelSwitch.onDemandRules(server.name, bypassOnWifi: Self.bypassOnWifi)
+            m.isOnDemandEnabled = wantOn && Self.keepAlive
             // Still wanted: Подключаемся… again if a late status of the tunnel stopped before (a
             // switch) put it off meanwhile. Выкл or a ping's pause meanwhile keep theirs.
             if wantOn { state = .connecting }
@@ -177,6 +224,9 @@ final class VPNController: ObservableObject {
             var options: [String: NSObject] = ["config": config as NSString]
             if let plugin = prepared.plugin { options["plugin"] = plugin as NSString }
             try m.connection.startVPNTunnel(options: options)
+            // Watched until it is up: falling before that is a failed start (startFailed). Already
+            // connecting: on demand started it on the save.
+            if attempt == attempts { starting = Start(attempt: attempt, seen: m.connection.status == .connecting) }
             // Не отключать VPN switched while the profile was saving (setKeepAlive leaves that to
             // connect): as switched now.
             while wantOn, m.isOnDemandEnabled != Self.keepAlive {
@@ -195,6 +245,8 @@ final class VPNController: ObservableObject {
 
     func disconnect() {
         wantOn = false
+        offsByHand += 1
+        forgetStart()
         state = .disconnecting
         guard let m = manager else { return }
         Task {
@@ -238,6 +290,18 @@ final class VPNController: ObservableObject {
         proto.serverAddress = server.name
         proto.providerConfiguration = provider
         m.protocolConfiguration = proto
+        m.onDemandRules = TunnelSwitch.onDemandRules(server.name, bypassOnWifi: Self.bypassOnWifi)
+        try? await m.saveToPreferences()
+    }
+
+    /// Технический режим switched: a bypass server's on demand follows it (TunnelSwitch.onDemandRules),
+    /// not only from the next connect. Saved with the VPN on or off; a connect under way sets its own.
+    func applyOnDemandRules() async {
+        guard let m = manager, connectsInFlight == 0 else { return }
+        try? await m.loadFromPreferences()
+        guard connectsInFlight == 0, let name = (m.protocolConfiguration as? NETunnelProviderProtocol)?.serverAddress,
+              TunnelSwitch.isBypass(name) else { return }
+        m.onDemandRules = TunnelSwitch.onDemandRules(name, bypassOnWifi: Self.bypassOnWifi)
         try? await m.saveToPreferences()
     }
 
@@ -252,6 +316,10 @@ final class VPNController: ObservableObject {
             // Turned off meanwhile: stays off.
             guard m.isOnDemandEnabled != on, !on || isOn else { return }
             m.isOnDemandEnabled = on
+            // A profile saved before this switch existed: the rules for its server too.
+            if on, let name = (m.protocolConfiguration as? NETunnelProviderProtocol)?.serverAddress {
+                m.onDemandRules = TunnelSwitch.onDemandRules(name, bypassOnWifi: Self.bypassOnWifi)
+            }
             try? await m.saveToPreferences()
         }
     }
@@ -262,6 +330,7 @@ final class VPNController: ObservableObject {
     func pauseForPing() async -> Bool {
         guard isOn, let m = manager else { return false }
         wantOn = false
+        forgetStart()
         await holdOnDemand(m)
         m.connection.stopVPNTunnel()
         for _ in 0..<50 {
@@ -298,6 +367,8 @@ final class VPNController: ObservableObject {
         connectsInFlight += 1
         defer { connectsInFlight -= 1 }
         wantOn = true
+        // The old session's end is no failed start.
+        forgetStart()
         // Не отключать VPN off first: iOS would bring the old server back at once. connect turns
         // it on again.
         if let m = manager { await holdOnDemand(m) }
@@ -311,10 +382,13 @@ final class VPNController: ObservableObject {
         await connect(server)
     }
 
-    /// Turned off outside the app's screen (Пункт управления, Siri): a connect or a server
-    /// switch under way gives up instead of bringing the VPN back.
+    /// Turned off outside the app's screen (Пункт управления, Siri, ⏻), or Выйти while off: a
+    /// connect, a server switch or a ping's resume under way gives up instead of bringing the
+    /// VPN back.
     func cancelConnects() {
         wantOn = false
+        offsByHand += 1
+        forgetStart()
     }
 
     private static func describe(_ error: Error) -> String {
