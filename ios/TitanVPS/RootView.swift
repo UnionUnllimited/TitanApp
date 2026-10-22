@@ -50,6 +50,9 @@ struct RootView: View {
                 store.checkConnection(auto: true)
                 Task { await Reminders.askOnce(for: store.subscription?.info) }
                 Task { await store.followTunnel() }
+                // Up without the app (iOS Settings) or on a profile saved before Не отключать VPN:
+                // the profile's on demand as switched there. The app's own connects set it.
+                if !vpn.connectsUnderWay, !store.pingBusy, !store.vpnPaused { vpn.setKeepAlive(VPNController.keepAlive) }
             } else {
                 store.resetCheck()
             }
@@ -61,9 +64,10 @@ struct RootView: View {
             if store.subscription != nil { tab = .subscription }
         }
         .onChange(of: scenePhase) { phase in
-            // Left mid-ping: the VPN back now, while the app may still run. The profile saved
-            // with on demand again, iOS brings it up even if the app is suspended.
-            if phase == .background, store.pingBusy { store.stopPing() }
+            // Left mid-ping (or mid-check): those stop and the VPN comes back now, in background
+            // time. Once the profile is saved with on demand again, iOS keeps it up even if the
+            // app is suspended.
+            if phase == .background { store.leftApp() }
             guard phase == .active else { return }
             // Back in the app: the VPN may have changed while it was away (the tunnel fell, iOS
             // Settings); the Live Activity and Пункт управления's toggle follow it again.

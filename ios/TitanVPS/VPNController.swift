@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import NetworkExtension
+import UIKit
 
 /// Turns the VPN on and off through our packet tunnel extension (TitanTunnel.appex).
 /// The config to run is handed over when the tunnel starts (and kept in the VPN profile for
@@ -16,7 +17,12 @@ final class VPNController: ObservableObject {
     /// What was asked for last: Выкл while connect is still saving the profile wins.
     private var wantOn = false
     /// Connects (and server switches) under way: the profile is theirs to save until they end.
-    private var connectsInFlight = 0
+    /// They run on in the background: the app left mid-switch (the VPN down, on demand held off)
+    /// would else be suspended with the VPN off until it is opened again.
+    private var connectsInFlight = 0 {
+        didSet { if connectsInFlight > 0 { connectTime.begin() } else { connectTime.end() } }
+    }
+    private let connectTime = BackgroundTime("VPN connect")
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
     /// The profile's first load: an intent may come right at launch.
@@ -171,6 +177,12 @@ final class VPNController: ObservableObject {
             var options: [String: NSObject] = ["config": config as NSString]
             if let plugin = prepared.plugin { options["plugin"] = plugin as NSString }
             try m.connection.startVPNTunnel(options: options)
+            // Не отключать VPN switched while the profile was saving (setKeepAlive leaves that to
+            // connect): as switched now.
+            while wantOn, m.isOnDemandEnabled != Self.keepAlive {
+                m.isOnDemandEnabled = Self.keepAlive
+                try? await m.saveToPreferences()
+            }
         } catch {
             fail(Self.describe(error))
         }
@@ -229,9 +241,10 @@ final class VPNController: ObservableObject {
         try? await m.saveToPreferences()
     }
 
-    /// Не отключать VPN switched in the settings: applies to the VPN profile at once. Off even
-    /// while the VPN is down (iOS may be about to bring a fallen one back); on only while it is
-    /// on: an off by hand stays off, and a ping's pause or a connect under way gets it from connect.
+    /// Не отключать VPN switched in the settings (or the profile found not as set there once
+    /// connected): applies to the VPN profile at once. Off even while the VPN is down (iOS may be
+    /// about to bring a fallen one back); on only while it is on: an off by hand stays off, and a
+    /// ping's pause or a connect under way gets it from connect.
     func setKeepAlive(_ on: Bool) {
         guard let m = manager, !on || (isOn && connectsInFlight == 0) else { return }
         Task {
@@ -311,5 +324,30 @@ final class VPNController: ObservableObject {
         }
         if let e = error as? SubscriptionError { return e.message }
         return "Не удалось подключиться: \(error.localizedDescription)"
+    }
+}
+
+/// Background time for work that brings the VPN back (a connect, a ping's pause until its
+/// resume): iOS suspends a left app soon, and such work cut short leaves the VPN off with on
+/// demand held off until the app is opened again. Asked for when the work starts (free in the
+/// foreground), given back when it ends or when iOS says the time is up.
+@MainActor
+final class BackgroundTime {
+    private let name: String
+    private var task: UIBackgroundTaskIdentifier = .invalid
+
+    init(_ name: String) {
+        self.name = name
+    }
+
+    func begin() {
+        guard task == .invalid else { return }
+        task = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in self?.end() }
+    }
+
+    func end() {
+        guard task != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(task)
+        task = .invalid
     }
 }

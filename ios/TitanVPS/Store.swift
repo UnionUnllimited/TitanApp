@@ -21,8 +21,12 @@ final class AppStore: ObservableObject {
     @Published private(set) var check: ConnectionCheck.Status = .idle
     /// A ping (or another check that needs the VPN off) is running: Выкл | Вкл can't be moved.
     @Published private(set) var pingBusy = false
-    /// The VPN was turned off for a ping and comes back by itself after it.
-    @Published private(set) var vpnPaused = false
+    /// The VPN was turned off for a ping and comes back by itself after it. Until it is back the
+    /// app has background time: left meanwhile, it still brings the VPN back.
+    @Published private(set) var vpnPaused = false {
+        didSet { if vpnPaused { pauseTime.begin() } else { pauseTime.end() } }
+    }
+    private let pauseTime = BackgroundTime("VPN back after a ping")
     /// Servers in the running "Пинг" (for its progress ring).
     @Published private(set) var pingTotal = 0
 
@@ -42,6 +46,8 @@ final class AppStore: ObservableObject {
     private var holds: Set<UUID> = []
     private var pingAllHold: UUID?
     private var oneHolds: [String: UUID] = [:]
+    /// withVPNPaused's, once the VPN is off for them (leftApp gives them back).
+    private var checkHolds: Set<UUID> = []
     private var pausing: Task<Void, Never>?
     /// The reconnect after the last ping; a new ping waits for it before pausing again.
     private var resuming: Task<Void, Never>?
@@ -344,7 +350,20 @@ final class AppStore: ObservableObject {
     func withVPNPaused(_ work: () async -> Void) async {
         let hold = await beginPing()
         defer { endPing(hold) }
+        // The app left while the VPN was going off: not run, the VPN comes back.
+        guard UIApplication.shared.applicationState != .background else { return }
+        checkHolds.insert(hold)
         await work()
+    }
+
+    /// The app left: pings stop and checks give their holds back, so the VPN comes back now, in
+    /// the background time pauseTime holds, not after them (a check's rest goes through the VPN).
+    /// A pause still under way brings it back as soon as it is done (its task's defer).
+    func leftApp() {
+        if pingBusy { stopPing() }
+        let checks = checkHolds
+        checkHolds = []
+        for hold in checks { endPing(hold) }
     }
 
     /// The VPN coming back after a ping: that reconnect goes over to a server picked meanwhile
@@ -376,6 +395,7 @@ final class AppStore: ObservableObject {
         guard holds.remove(hold) != nil else { return }
         if pingAllHold == hold { pingAllHold = nil }
         if let key = oneHolds.first(where: { $0.value == hold })?.key { oneHolds[key] = nil }
+        checkHolds.remove(hold)
         guard holds.isEmpty else { return }
         pingBusy = false
         pausing = nil
