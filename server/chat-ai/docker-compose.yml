@@ -1,0 +1,19 @@
+services:
+  chat-ai:
+    build: .
+    container_name: vpn-chat-ai
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # База бота поддержки: промпт, ключ, модель, типовые ответы. Бот открывает
+      # её только на чтение; папка смонтирована без :ro, потому что SQLite
+      # держит рядом с базой служебные файлы -wal и -shm.
+      - ${SUPPORT_DIR:-/root/vpn_support_bot}/data:/support/data
+      # Промпт по умолчанию, пока его не меняли в админке
+      - ${SUPPORT_DIR:-/root/vpn_support_bot}/admin_web:/support/admin_web:ro
+      - ./extra.md:/app/extra.md:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

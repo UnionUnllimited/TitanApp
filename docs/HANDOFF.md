@@ -26,6 +26,7 @@
 | `scripts/ios-patches/xray-tfo/` | Патч Xray-core для TCP Fast Open на iOS и Windows (`apply.py` и Go-файлы) |
 | `scripts/ios-patches/titan/` | Go-пакет `titan` в xcframework: клиенты sing-box (TUIC, AnyTLS, ShadowTLS, SSH, Naive) и Mieru для iOS |
 | `server/` | Скрипты установки и удаления ноды (`install-node.sh`, `remove-node.sh`) |
+| `server/chat-ai/` | ИИ в общем чате клиентов: отдельный бот с промптом и базой знаний бота поддержки (читает его базу), см. README там |
 | `.github/workflows/` | CI: `android.yml`, `windows.yml`, `ios.yml` |
 
 ## Сборки
