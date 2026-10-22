@@ -272,7 +272,7 @@ def load_knowledge() -> Knowledge:
         key = settings.get(f"api_key_{provider}") or ""
         if not key and provider == "openai":
             key = settings.get("openai_api_key") or ""  # before the panel had providers
-        key_origin = "админка поддержки"
+        key_origin = "админки поддержки"
     model = (
         AI_MODEL
         or settings.get(f"model_{provider}")
