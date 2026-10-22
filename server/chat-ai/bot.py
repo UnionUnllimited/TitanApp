@@ -541,7 +541,7 @@ async def cmd_status(message: Message) -> None:
         f"{'из ' + k.key_origin if k.key else '⚠️ не задан'}\n"
         f"Промпт: {k.prompt_origin}, {k.prompt_chars} симв.\n"
         f"Типовых ответов: {k.qa_count}, текстов справочника: {k.faq_count}\n"
-        f"extra.md: {k.extra_chars} симв.\n"
+        f"<code>extra.md</code>: {k.extra_chars} симв.\n"
         f"Чаты: {', '.join(str(c) for c in CHAT_IDS) or '⚠️ CHAT_IDS пуст'}\n"
         f"Запросов к модели за час: {calls} из {MAX_CALLS_PER_HOUR}"
     )
