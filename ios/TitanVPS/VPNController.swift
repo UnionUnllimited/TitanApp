@@ -225,8 +225,16 @@ final class VPNController: ObservableObject {
             if let plugin = prepared.plugin { options["plugin"] = plugin as NSString }
             try m.connection.startVPNTunnel(options: options)
             // Watched until it is up: falling before that is a failed start (startFailed). Already
-            // connecting: on demand started it on the save.
-            if attempt == attempts { starting = Start(attempt: attempt, seen: m.connection.status == .connecting) }
+            // connecting: on demand started it on the save. Already up (on demand had it up
+            // before the reload ended): nothing to watch, a later fall is a drop that on demand
+            // brings back; the state as the status is (on a first connect it came with no
+            // manager yet and read as off).
+            let status = m.connection.status
+            if status == .connected || status == .reasserting {
+                update()
+            } else if attempt == attempts {
+                starting = Start(attempt: attempt, seen: status == .connecting)
+            }
             // Не отключать VPN switched while the profile was saving (setKeepAlive leaves that to
             // connect): as switched now.
             while wantOn, m.isOnDemandEnabled != Self.keepAlive {
