@@ -26,9 +26,11 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # Папка целиком, а не extra.md: файл, заменённый редактором или git, иначе
+      # остался бы в контейнере старым
       - type: bind
-        source: ./extra.md
-        target: /app/extra.md
+        source: .
+        target: /app/conf
         read_only: true
     logging:
       driver: json-file

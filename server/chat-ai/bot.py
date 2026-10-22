@@ -61,7 +61,7 @@ CHAT_IDS = _ids("CHAT_IDS")
 ADMIN_IDS = _ids("ADMIN_IDS")
 SUPPORT_DB = _env("SUPPORT_DB", "/support/data/vpn_support.db")
 SUPPORT_SETTINGS_PY = _env("SUPPORT_SETTINGS_PY", "/support/admin_web/ai_settings.py")
-EXTRA_FILE = _env("EXTRA_FILE", "/app/extra.md")
+EXTRA_FILE = _env("EXTRA_FILE", "/app/conf/extra.md")
 OPENAI_API_KEY = _env("OPENAI_API_KEY")
 AI_MODEL = _env("AI_MODEL")
 AI_BASE_URL = _env("AI_BASE_URL")
@@ -91,7 +91,8 @@ PROVIDERS = {
 # What the support AI's answers carry for the support bot; in the chat they mean nothing
 ESCALATE = "[ESCALATE]"
 PHOTO_RE = re.compile(r"\s*\[PHOTO:[^\]]*\]")
-SKIP_RE = re.compile(r"[\W_]*SKIP\b", re.I)
+# «SKIP», «SKIP — болтовня», «skip.»; but not an English answer «Skip the manual setup…»
+SKIP_RE = re.compile(r"[\W_]*(?:(?-i:SKIP)\b|skip[\W_]*$)", re.I)
 
 # Links and @handles in an answer: a chat member can talk the model into posting a phishing
 # link or a fake bot from the bot's name, so only those the knowledge base itself has go out.
@@ -188,13 +189,18 @@ def _fill(text: str) -> str:
 
 
 def _strip_tags(text: str) -> str:
-    return re.sub(r"<[^>]+>", "", text or "")
+    # Only what looks like a tag: «пинг <50 мс» keeps its text
+    return re.sub(r"</?[a-z][a-z0-9-]*(?:\s[^>]*)?>", "", text or "", flags=re.I)
 
 
 def _rows(db: sqlite3.Connection, sql: str) -> list[tuple]:
     try:
         return db.execute(sql).fetchall()
-    except sqlite3.Error as e:
+    except sqlite3.OperationalError as e:
+        # An older support bot may lack a table; a locked base fails the whole reload instead,
+        # so the last good copy stays rather than one without the knowledge base
+        if "no such" not in str(e):
+            raise
         log.warning("база поддержки: %s", e)
         return []
 
@@ -206,7 +212,7 @@ def _default_prompt() -> str:
     """
     try:
         tree = ast.parse(Path(SUPPORT_SETTINGS_PY).read_text(encoding="utf-8"))
-    except (OSError, SyntaxError):
+    except (OSError, SyntaxError, ValueError):
         return ""
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
@@ -226,7 +232,10 @@ _unfilled: list[str] = []
 def _read_extra() -> str:
     try:
         text = Path(EXTRA_FILE).read_text(encoding="utf-8")
-    except OSError:
+    except FileNotFoundError:
+        return ""
+    except (OSError, ValueError) as e:
+        log.warning("не прочитал %s (нужен UTF-8): %s", EXTRA_FILE, e)
         return ""
     return re.sub(r"<!--.*?-->", "", text, flags=re.S).strip()
 
@@ -367,7 +376,7 @@ async def ask(text: str, *, direct: bool = False, prev: str | None = None,
         notes.append(DIRECT_NOTE.format(
             support=f", и предложи написать в поддержку @{SUPPORT_BOT}" if SUPPORT_BOT else ""
         ))
-    content = "".join(f"({n})\n" for n in notes) + ("\n" if notes else "") + text[:2000]
+    content = "\n\n".join(p for p in ("\n".join(f"({n})" for n in notes), text[:2000]) if p)
     messages = [{"role": "system", "content": k.system}]
     if prev:
         messages.append({"role": "assistant", "content": prev[:2000]})
@@ -418,6 +427,7 @@ async def ask(text: str, *, direct: bool = False, prev: str | None = None,
 
 _calls: deque[float] = deque()
 _user_calls: dict[int, deque[float]] = {}
+_answered_at: dict[int, float] = {}
 _cap_logged_at = float("-inf")
 
 
@@ -427,11 +437,14 @@ def _expire(calls: deque[float], now: float) -> deque[float]:
     return calls
 
 
-def _take_call(user_id: int, admin: bool) -> bool:
+def _take_call(user_id: int, admin: bool, direct: bool) -> bool:
     """Count a model call against the limits; False when one is reached.
 
-    Per user first, so that one account cannot use up the hourly cap and silence the bot
-    for everyone. Admins are not limited.
+    The pause runs from the bot's last answer to this person and only for messages not
+    addressed to the bot: a follow-up to its answer gets through, and so does a question
+    right after chatter the model skipped. Every call counts against the per-user cap,
+    so that one account cannot use up the hourly cap and silence the bot for everyone.
+    Admins are not limited.
     """
     global _cap_logged_at
     now = time.monotonic()
@@ -439,8 +452,10 @@ def _take_call(user_id: int, admin: bool) -> bool:
     if admin:
         _calls.append(now)
         return True
+    if not direct and now - _answered_at.get(user_id, float("-inf")) < USER_COOLDOWN:
+        return False
     mine = _expire(_user_calls.setdefault(user_id, deque()), now)
-    if (mine and now - mine[-1] < USER_COOLDOWN) or len(mine) >= USER_CALLS_PER_HOUR:
+    if len(mine) >= USER_CALLS_PER_HOUR:
         return False
     if len(_calls) >= MAX_CALLS_PER_HOUR:
         if now - _cap_logged_at > 600:
@@ -452,6 +467,8 @@ def _take_call(user_id: int, admin: bool) -> bool:
     if len(_user_calls) > 10000:
         for uid in [u for u, c in _user_calls.items() if not _expire(c, now)]:
             del _user_calls[uid]
+        for uid in [u for u, t in _answered_at.items() if now - t >= USER_COOLDOWN]:
+            del _answered_at[uid]
     return True
 
 
@@ -573,21 +590,24 @@ async def on_group(message: Message, bot: Bot) -> None:
     if reply_to and reply_to.forum_topic_created:
         reply_to = None  # in a forum every message "replies" to its topic
     if reply_to:
-        quoted = reply_to.text or reply_to.caption or ""
+        quoted = (reply_to.text or reply_to.caption or "")[:1000]
         if reply_to.from_user and reply_to.from_user.id == me.id:
             direct, prev = True, quoted
         elif reply_to.is_automatic_forward:
             if quoted:
-                context = f"Это комментарий к посту канала: «{quoted[:1000]}»"
+                context = f"Это комментарий к посту канала: «{quoted}»"
         elif not direct:
             return  # people answering each other
+        elif quoted:
+            # «@бот» under someone's question: the question is in the quoted message
+            context = f"Тебя позвали ответить на это сообщение: «{quoted}»"
 
-    if not text:
+    if not text and not (direct and context):
         return
-    if not direct and (len(text) < 8 or (QUESTIONS_ONLY and not QUESTION_RE.search(text))):
+    if not direct and (len(text) < 4 or (QUESTIONS_ONLY and not QUESTION_RE.search(text))):
         return
     admin = await _is_admin(bot, message.chat.id, user.id)
-    if (admin and not direct) or not _take_call(user.id, admin):
+    if (admin and not direct) or not _take_call(user.id, admin, direct):
         return
 
     try:
@@ -596,6 +616,7 @@ async def on_group(message: Message, bot: Bot) -> None:
         log.error("%s", e)
         return
     if answer:
+        _answered_at[user.id] = time.monotonic()
         await _reply(message, answer)
 
 
