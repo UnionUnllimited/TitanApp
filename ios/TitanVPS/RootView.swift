@@ -75,7 +75,17 @@ struct RootView: View {
                 tab = .subscription
             }
         }
+        // The pick moved in the app with the VPN off (Главная, a refreshed subscription): the
+        // activity's «Выключено» names it, so its ⏻ connects to the server shown.
+        .onChange(of: store.selectedId) { _ in
+            guard !vpn.isOn, !vpn.connectsUnderWay, !store.vpnPaused, store.subscription != nil else { return }
+            Task { await LiveActivityController.pickChanged() }
+        }
         .onChange(of: scenePhase) { phase in
+            // Leaving with the VPN up: the Live Activity gets the numbers of this moment (the
+            // island shows it only once the app is left, and nothing updates it once suspended);
+            // with it still coming up, the activity follows it until it settles.
+            if phase != .active { LiveActivityController.leaving() }
             // Left mid-ping (or mid-check): those stop and the VPN comes back now, in background
             // time. Once the profile is saved with on demand again, iOS keeps it up even if the
             // app is suspended.
