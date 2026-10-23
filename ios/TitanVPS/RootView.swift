@@ -46,6 +46,8 @@ struct RootView: View {
             }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: store.toast)
+        // Выйти or Удалить аккаунт (from Профиль): the next key starts on Главная.
+        .onChange(of: store.subscription == nil) { if $0 { tab = .home } }
         // Проверить соединение: once right after connecting; the old result goes with the connection.
         .onChange(of: vpn.state) { state in
             if case .connected = state {
@@ -117,7 +119,7 @@ struct RootView: View {
         .alert(store.message ?? "", isPresented: Binding(get: { store.message != nil }, set: { if !$0 { store.message = nil } })) {
             Button("OK", role: .cancel) {}
         }
-        // Тарифы: from Главная, Подписка and the «Добавить ГБ» buttons.
+        // Тарифы: from Главная, Подписка, the «Добавить ГБ» buttons and the key entry.
         .sheet(item: $store.paywall) { reason in
             PaywallView(reason: reason).environmentObject(store)
         }
@@ -332,10 +334,12 @@ struct PrivacyNoticeView: View {
     private var points: some View {
         VStack(alignment: .leading, spacing: 16) {
             point("hand.raised.fill", "Titan VPS не собирает, не хранит и не продаёт ваши личные данные и историю посещений.")
+            point("lock.shield.fill", "Никакие данные мы не продаём, не используем ни для чего, кроме работы VPN, и не передаём третьим лицам.")
             point("network", "Трафик идёт через VPN-серверы только для того, чтобы попасть в интернет.")
             point("eye.slash.fill", "В приложении нет аналитики и трекеров.")
             point("key.fill", "Ключ подписки хранится только на этом устройстве.")
             point("iphone", "Для лимита устройств сервер подписки получает только модель устройства, версию iOS и идентификатор Titan VPS на этом устройстве.")
+            point("creditcard.fill", "При покупке в App Store сервер получает запись Apple о покупке вместе с ключом (если он уже есть), чтобы продлить подписку или выдать ключ. Данные карты видит только Apple.")
             point("checkmark.shield.fill", "Нажимая «Принимаю», вы соглашаетесь с этим и разрешаете Titan VPS добавить VPN-конфигурацию на устройство. iOS спросит разрешение при первом подключении.")
         }
         .padding(18)
@@ -366,6 +370,7 @@ struct WelcomeView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var key = ""
     @State private var appeared = false
+    @State private var restoring = false
     @FocusState private var editing: Bool
 
     /// The key as typed has our subscription link in it.
@@ -390,6 +395,10 @@ struct WelcomeView: View {
                 keyCard
                     .opacity(appeared ? 1 : 0)
                     .offset(y: appeared ? 0 : 24)
+
+                appStore
+                    .opacity(appeared ? 1 : 0)
+                    .offset(y: appeared ? 0 : 28)
 
                 steps
                     .opacity(appeared ? 1 : 0)
@@ -479,12 +488,53 @@ struct WelcomeView: View {
         return valid ? Palette.green : .orange
     }
 
-    /// Где взять ключ: the bot, the subscription, the link.
+    /// Нет ключа: the App Store's subscription (its key comes by itself), or the one bought on
+    /// another iPhone or iPad back by Восстановить покупки (App Review 3.1.1, 3.1.3(b)).
+    private var appStore: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Нет ключа?").font(.scaled(16, weight: .bold))
+            Text("Оформите подписку через App Store — ключ появится в приложении сам. Уже оформляли с этим Apple ID — восстановите покупки.")
+                .font(.scaled(14)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                Haptics.tap()
+                editing = false
+                store.paywall = .start
+            } label: {
+                Label("Подписка через App Store", systemImage: "checkmark.seal.fill")
+            }
+            .buttonStyle(SecondaryButtonStyle(height: 50))
+            Button(action: restore) {
+                if restoring { ProgressView() } else { Text("Восстановить покупки") }
+            }
+            .buttonStyle(SecondaryButtonStyle(height: 46, tint: .secondary))
+            .disabled(restoring || store.busy)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 1))
+    }
+
+    /// Восстановить покупки without a key: the bot sends back the key the subscription is
+    /// for, and the app signs in with it (AppStorePurchases.deliver).
+    private func restore() {
+        guard !restoring else { return }
+        restoring = true
+        Task {
+            let outcome = await AppStorePurchases.shared.restore()
+            restoring = false
+            guard let n = outcome.note(restored: true, keyless: true) else { return }
+            store.showToast(n.text, n.warning ? .warning : outcome == .delivered ? .success : .info)
+        }
+    }
+
+    /// Где взять ключ: the bot, its key, the link.
     private var steps: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Где взять ключ").font(.scaled(16, weight: .bold))
             step(1, "Откройте нашего бота в Telegram")
-            step(2, "Оформите подписку или продлите её")
+            step(2, "Получите в нём ключ подписки")
             step(3, "Скопируйте ссылку-ключ и вставьте её выше")
             Link(destination: Config.telegram) {
                 Label("Открыть бота", systemImage: "paperplane.fill")

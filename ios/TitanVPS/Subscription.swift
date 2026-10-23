@@ -23,6 +23,26 @@ enum Config {
     /// Where App Store purchases go to extend the subscription (docs/BACKEND-APPSTORE.md). Nil
     /// until the bot has it: purchases then stay unfinished and StoreKit hands them over again.
     static let purchaseEndpoint: URL? = nil
+    /// Удалить аккаунт through the bot (docs/BACKEND-APPSTORE.md). Nil until the bot has it:
+    /// the request is then copied for support.
+    static let deletionEndpoint: URL? = nil
+}
+
+/// The bot's JSON endpoints (purchases, account deletion): HTTPS only, our User-Agent.
+enum BotAPI {
+    /// [body] POSTed to [url]: the answer's body and status, nil without one.
+    static func post(_ url: URL, _ body: [String: Any]) async -> (Data, Int)? {
+        guard url.scheme?.lowercased() == "https", let json = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        var req = URLRequest(url: url, timeoutInterval: 20)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue(Config.userAgent, forHTTPHeaderField: "User-Agent")
+        req.httpBody = json
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let code = (resp as? HTTPURLResponse)?.statusCode else { return nil }
+        return (data, code)
+    }
 }
 
 struct SubscriptionInfo: Codable, Equatable {

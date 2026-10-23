@@ -1,12 +1,15 @@
 import SwiftUI
 
 /// Подписка: expiry, bypass traffic, «Продлить подписку» (Тарифы) and a "Личный кабинет"
-/// button with what it offers.
+/// button with what it shows.
 struct SubscriptionView: View {
     @EnvironmentObject var store: AppStore
+    @ObservedObject private var purchases = AppStorePurchases.shared
     @Environment(\.openURL) private var openURL
     @State private var showCabinet = false
     @State private var showDevices = false
+    /// Продлить подписку in the cabinet: Тарифы once its sheet is down.
+    @State private var renewAfterCabinet = false
 
     var body: some View {
         ScrollView {
@@ -68,7 +71,7 @@ struct SubscriptionView: View {
                         }
                         .padding(16)
                     }
-                    Button { store.paywall = active ? .renew : .expired } label: {
+                    Button { store.paywall = renewReason } label: {
                         Label("Продлить подписку", systemImage: "crown.fill")
                     }
                     .buttonStyle(PrimaryButtonStyle())
@@ -89,23 +92,25 @@ struct SubscriptionView: View {
                             .buttonStyle(RowButtonStyle())
                         }
                     }
+                    // What the in-app cabinet shows (read only: renewing is Тарифы).
                     Card {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("В личном кабинете").fontWeight(.semibold)
-                            feature("arrow.triangle.2.circlepath", "Продление подписки")
-                            feature("chart.pie", "Гигабайты для обходов")
-                            feature("tag", "Коды на продление")
+                            feature("calendar", "Сколько дней осталось")
+                            feature("chart.pie", "Трафик на обходах")
+                            feature("person.text.rectangle", "Устройства и ваш ID")
                         }
                         .padding(16)
                     }
-                    // What the in-app cabinet can't do: the bot or the full cabinet on the site.
+                    // What the in-app cabinet can't do: the bot, or (United States storefront
+                    // only, App Review 3.1.1(a)) the full cabinet on the site, where it is sold too.
                     Card {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Расширенные функции").fontWeight(.semibold)
-                            Text("Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте или в полном кабинете на сайте (вход по почте или через Telegram).")
+                            Text("Отвязка устройств, рефералы и другие настройки аккаунта — в боте" + (purchases.linksOut ? " или в полном кабинете на сайте (вход по почте или через Telegram)." : "."))
                                 .font(.scaled(13)).foregroundStyle(.secondary)
                             let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
-                                guard let scheme = u.scheme, let host = u.host else { return nil }
+                                guard purchases.linksOut, let scheme = u.scheme, let host = u.host else { return nil }
                                 return URL(string: "\(scheme)://\(host)/auth")
                             })
                             // Side by side where both fit, one under the other on a narrow phone.
@@ -128,12 +133,26 @@ struct SubscriptionView: View {
         .sheet(isPresented: $showDevices) {
             if let acc = store.account { DevicesView(account: acc) }
         }
-        .sheet(isPresented: $showCabinet) {
+        // One sheet at a time: Тарифы (RootView's) once the cabinet is down.
+        .sheet(isPresented: $showCabinet, onDismiss: {
+            guard renewAfterCabinet else { return }
+            renewAfterCabinet = false
+            store.paywall = renewReason
+        }) {
             if let link = store.subscription?.info.webPageUrl {
-                CabinetView(link: link, devices: store.account.map { ($0.devices.count, $0.deviceLimit) })
-                    .environmentObject(store)
+                CabinetView(link: link, devices: store.account.map { ($0.devices.count, $0.deviceLimit) }) {
+                    renewAfterCabinet = true
+                    showCabinet = false
+                }
+                .environmentObject(store)
             }
         }
+    }
+
+    /// Продлить подписку: Тарифы, saying whether it is still running.
+    private var renewReason: PaywallReason {
+        let expire = store.subscription?.info.expire ?? 0
+        return expire <= 0 || expire > Int64(Date().timeIntervalSince1970) ? .renew : .expired
     }
 
     @ViewBuilder private func linkButtons(_ site: URL?) -> some View {
@@ -200,7 +219,7 @@ struct DevicesView: View {
                         .padding(.vertical, 2)
                     }
                 } footer: {
-                    Text("Отвязать лишнее устройство или изменить лимит можно в боте.")
+                    Text("Отвязать лишнее устройство можно в боте.")
                 }
                 Section {
                     Button { openURL(Config.telegram) } label: { Label("Открыть бота", systemImage: "paperplane") }
@@ -265,6 +284,9 @@ struct ProfileView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var confirmLogout = false
     @State private var confirmDelete = false
+    /// Удалить аккаунт found an App Store subscription: Apple keeps billing it until cancelled.
+    @State private var appleSubscribed = false
+    @State private var deleting = false
     @State private var confirmReset = false
     @State private var about = false
     /// Технический режим: 7 taps on the version (under 3 s apart) ask for the code.
@@ -395,6 +417,13 @@ struct ProfileView: View {
                         }
                         .buttonStyle(RowButtonStyle())
                         RowDivider()
+                        Button { openURL(Config.privacyPolicy) } label: {
+                            SettingsRow(icon: "hand.raised.fill", color: Palette.primary, title: "Политика конфиденциальности") {
+                                Image(systemName: "arrow.up.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
+                            }
+                        }
+                        .buttonStyle(RowButtonStyle())
+                        RowDivider()
                         SettingsRow(icon: "number", color: .gray, title: "Версия") {
                             Text(wrongCode ? "Неверный код" : version)
                                 .font(.scaled(15).monospacedDigit())
@@ -424,11 +453,15 @@ struct ProfileView: View {
                             SettingsRow(icon: "rectangle.portrait.and.arrow.right", color: .red, title: "Выйти из аккаунта", titleColor: .red)
                         }
                         .buttonStyle(RowButtonStyle())
+                        .disabled(deleting)
                         RowDivider()
-                        Button { confirmDelete = true } label: {
-                            SettingsRow(icon: "trash.fill", color: .red, title: "Удалить аккаунт", titleColor: .red)
+                        Button { askDelete() } label: {
+                            SettingsRow(icon: "trash.fill", color: .red, title: "Удалить аккаунт", titleColor: .red) {
+                                if deleting { ProgressView() }
+                            }
                         }
                         .buttonStyle(RowButtonStyle())
+                        .disabled(deleting)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -468,10 +501,14 @@ struct ProfileView: View {
                 Text("VPN отключится, ключ, избранное и VPN-профиль удалятся с этого устройства. Ключ нужно будет вставить заново.")
             }
             .alert("Удалить аккаунт?", isPresented: $confirmDelete) {
+                // Apple's rule: say billing goes on, and ask to cancel first.
+                if appleSubscribed {
+                    Button("Управление подпиской") { Task { await AppStorePurchases.shared.manageSubscriptions() } }
+                }
                 Button("Удалить", role: .destructive) { deleteAccount() }
                 Button("Отмена", role: .cancel) {}
             } message: {
-                Text("Мы отправим запрос на удаление аккаунта в поддержку и удалим ключ и все данные с этого устройства. Подписка в боте будет удалена после обработки запроса.")
+                Text(deleteMessage)
             }
         }
     }
@@ -483,16 +520,45 @@ struct ProfileView: View {
         store.logout()
     }
 
-    /// Удалить аккаунт: the bot's subscription is removed by support (the app can't), so the
-    /// request is copied for the support chat, which opens a moment after the note; this device
-    /// is signed out as by Выйти.
+    /// Удалить аккаунт? asked once it is known whether an App Store subscription runs.
+    private func askDelete() {
+        Task {
+            appleSubscribed = await AppStorePurchases.shared.hasSubscription()
+            confirmDelete = true
+        }
+    }
+
+    /// What Удалить аккаунт does, as it will happen: through the bot if it has the endpoint,
+    /// else a request for the support chat.
+    private var deleteMessage: String {
+        let how = Config.deletionEndpoint != nil
+            ? "Аккаунт и подписка в боте удалятся сразу, ключ и все данные — с этого устройства. Если сервер не ответит, мы скопируем запрос и откроем чат поддержки."
+            : "Мы скопируем запрос на удаление и откроем чат поддержки — отправьте его там. Аккаунт и подписку в боте удалим в течение 7 дней, поддержка ответит, когда всё будет удалено. Ключ и все данные с этого устройства удалятся сразу."
+        let apple = appleSubscribed
+            ? "У вас есть подписка App Store: Apple продолжит её списывать, пока вы её не отмените. Сначала отмените её в «Управлении подпиской»."
+            : "Подписку App Store, если она есть, удаление не отменяет: её отменяют в настройках Apple ID."
+        return how + "\n\n" + apple
+    }
+
+    /// Удалить аккаунт: through the bot (Config.deletionEndpoint) when it can; else the bot's
+    /// subscription is removed by support, so the request is copied for the support chat,
+    /// which opens a moment after the note. Either way this device is signed out as by Выйти,
+    /// its own App Store token goes too.
     private func deleteAccount() {
         let request = store.deletionRequest
         let support = store.supportURL
-        UIPasteboard.general.string = request
-        signOut()
-        store.showToast("Запрос скопирован — отправьте его в поддержку", .success)
+        deleting = true
         Task {
+            let done = await store.deleteOnServer()
+            deleting = false
+            if !done { UIPasteboard.general.string = request }
+            AppStorePurchases.shared.forgetKeylessToken()
+            signOut()
+            guard !done else {
+                store.showToast("Аккаунт удалён", .success)
+                return
+            }
+            store.showToast("Запрос скопирован — отправьте его в поддержку", .success)
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             _ = await UIApplication.shared.open(support)
         }
@@ -699,6 +765,13 @@ struct AboutSheet: View {
                     Label("Поддержка", systemImage: "headphones")
                 }
                 .buttonStyle(SecondaryButtonStyle())
+                Button { openURL(Config.privacyPolicy) } label: {
+                    Text("Политика конфиденциальности")
+                        .font(.scaled(15, weight: .semibold))
+                        .foregroundStyle(Palette.primary)
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(PressableStyle())
             }
             openSource.padding(.top, 8)
         }

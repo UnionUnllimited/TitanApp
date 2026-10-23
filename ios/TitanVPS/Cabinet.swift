@@ -3,26 +3,9 @@ import SwiftSoup
 
 /// The site's limited personal cabinet, read natively (same as Android's CabinetApi): signed
 /// in by the link the subscription brings (profile-web-page-url → /auth/magic/<portal token>),
-/// the /cabinet page is parsed for the subscription and the tariffs; payments and payment
-/// codes go to the endpoints the page's buttons use.
+/// the /cabinet page is parsed for the subscription. Read only on iOS: its tariffs, payments
+/// and codes aren't used (App Store purchases are in Purchases.swift).
 final class CabinetAPI {
-    struct Tariff: Identifiable, Equatable {
-        let kind: String
-        let id: String
-        let name: String
-        let price: Double
-        let limit: Int?
-        let limitLabel: String
-        let trafficLabel: String
-        let methods: [String]
-        let shown: Bool
-    }
-
-    struct Method: Equatable {
-        let id: String
-        let title: String
-    }
-
     struct Snapshot: Equatable {
         var active = false
         var status = ""
@@ -36,10 +19,6 @@ final class CabinetAPI {
         var trafficNote: String?
         var clientId: String?
         var deviceLimit: Int?
-        var limits: [Int] = []
-        var tariffs: [Tariff] = []
-        var methods: [String: [Method]] = [:]
-        var promo = false
     }
 
     struct Failure: LocalizedError {
@@ -74,24 +53,7 @@ final class CabinetAPI {
         return (api, try await api.page(url))
     }
 
-    /// The site's host: PaymentView ends a payment when the provider sends it back here.
-    var host: String? { base.host }
-
     func load() async throws -> Snapshot { try await page(base.appendingPathComponent("cabinet")) }
-
-    func pay(_ tariff: Tariff, method: String) async throws -> URL {
-        let path = tariff.kind == "traffic" ? "pay/traffic/\(tariff.id)" : "pay/\(tariff.id)"
-        let json = try await post(path, field: "method", value: method)
-        if json["ok"] as? Bool == true, let r = json["redirect"] as? String,
-           let url = URL(string: r, relativeTo: base)?.absoluteURL { return url }
-        throw Failure(message: (json["error"] as? String) ?? "Не удалось создать платёж")
-    }
-
-    func applyCode(_ code: String) async throws -> String {
-        let json = try await post("pay/promo-code", field: "code", value: code)
-        if json["ok"] as? Bool == true { return (json["message"] as? String) ?? "Код применён" }
-        throw Failure(message: (json["error"] as? String) ?? "Не удалось применить код")
-    }
 
     private func page(_ url: URL) async throws -> Snapshot {
         var req = URLRequest(url: url)
@@ -104,23 +66,8 @@ final class CabinetAPI {
         return try Self.parse(String(decoding: body, as: UTF8.self))
     }
 
-    private func post(_ path: String, field: String, value: String) async throws -> [String: Any] {
-        let boundary = "titan-\(UUID().uuidString)"
-        var req = URLRequest(url: base.appendingPathComponent(path))
-        req.httpMethod = "POST"
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.httpBody = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(field)\"\r\n\r\n\(value)\r\n--\(boundary)--\r\n".utf8)
-        let (body, resp) = try await send(req)
-        guard let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
-            let code = resp.statusCode
-            throw Failure(message: (200..<300).contains(code) ? "Неожиданный ответ сайта" : "Ошибка сайта (\(code))")
-        }
-        return json
-    }
-
-    /// Sends [request] with the session cookie, following redirects (a POST answered with
-    /// 301/302/303 goes on as a GET) and keeping every cookie set on the way.
+    /// Sends [request] with the session cookie, following redirects and keeping every cookie
+    /// set on the way.
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         var req = request
         for _ in 0..<10 {
@@ -179,38 +126,6 @@ final class CabinetAPI {
            let r = Range(m.range(at: 1), in: scripts), let n = Int(scripts[r]), n > 0 {
             d.deviceLimit = n
         }
-        if let raw = try? doc.select(".limit-slider[data-limits]").first()?.attr("data-limits") {
-            d.limits = raw.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
-        }
-        for b in (try? doc.select("button.tariff-pick").array()) ?? [] {
-            guard let tid = try? b.attr("data-tid"), !tid.isEmpty else { continue }
-            let name = (try? b.attr("data-name")).flatMap { $0.isEmpty ? nil : $0 } ?? ((try? b.select(".tariff-pick-name").first()?.text()) ?? "")
-            d.tariffs.append(Tariff(
-                kind: (try? b.attr("data-kind")).flatMap { $0.isEmpty ? nil : $0 } ?? "sub",
-                id: tid,
-                name: name,
-                price: Double((try? b.attr("data-price")) ?? "") ?? 0,
-                limit: Int((try? b.attr("data-limit")) ?? ""),
-                limitLabel: (try? b.attr("data-limit-label")) ?? "",
-                trafficLabel: (try? b.attr("data-traffic-label")) ?? "",
-                methods: ((try? b.attr("data-methods")) ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
-                shown: !((try? b.attr("style")) ?? "").replacingOccurrences(of: " ", with: "").contains("display:none")
-            ))
-        }
-        for kind in ["sub", "traffic"] {
-            d.methods[kind] = ((try? doc.select("#payMethodsList-\(kind) [data-pm]").array()) ?? []).map { m in
-                let marks = ((try? m.select("img.pay-mark").array()) ?? []).compactMap { img -> String? in
-                    if img.hasClass("pay-mark-sbp") { return "СБП" }
-                    if img.hasClass("pay-mark-mir") { return "МИР" }
-                    if img.hasClass("pay-mark-btc") { return "Крипта" }
-                    return nil
-                }
-                let id = (try? m.attr("data-pm")) ?? ""
-                let fallback = ((try? m.text()) ?? "").trimmingCharacters(in: .whitespaces)
-                return Method(id: id, title: marks.isEmpty ? (fallback.isEmpty ? id : fallback) : marks.joined(separator: " · "))
-            }
-        }
-        d.promo = (try? doc.select("#promoCodeInput").first()) != nil
         return d
     }
 }

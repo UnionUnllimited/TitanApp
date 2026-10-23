@@ -4,13 +4,16 @@ import SwiftUI
 /// Why Тарифы opened: the line under its title says so.
 enum PaywallReason: String, Identifiable {
     case renew, expired, traffic
+    /// From the key entry, before a key: a subscription bought here brings its key.
+    case start
     var id: String { rawValue }
 }
 
-/// Тарифы: the App Store's subscriptions first (Оплатить через Apple, Восстановить покупки,
-/// Управление подпиской, the auto-renewal terms), then Другие методы: the site's cabinet in
-/// the browser, without a price beside it. Opened from Главная's «Подписка истекла»,
-/// Подписка's «Продлить подписку» and the «Добавить ГБ» buttons.
+/// Тарифы: the App Store first (its subscriptions, and for «Добавить ГБ» its packs of
+/// гигабайты; Оплатить через Apple, Восстановить покупки, Управление подпиской, its offer
+/// codes, the auto-renewal terms), then, in the United States storefront only, Другие методы: the site's
+/// cabinet in the browser, without a price beside it. Opened from Главная's «Подписка
+/// истекла», Подписка's «Продлить подписку», the «Добавить ГБ» buttons and the key entry.
 struct PaywallView: View {
     let reason: PaywallReason
     @EnvironmentObject var store: AppStore
@@ -18,17 +21,15 @@ struct PaywallView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var picked: String?
-    @State private var buying = false
+    @State private var pickedPack: String?
+    /// The product being bought: its card's button spins, every other waits.
+    @State private var buying: String?
     @State private var restoring = false
     @State private var note: Note?
 
     private struct Note: Equatable {
         let text: String
         var warning = false
-    }
-
-    private var selected: Product? {
-        purchases.products.first { $0.id == picked } ?? purchases.products.first
     }
 
     var body: some View {
@@ -39,8 +40,10 @@ struct PaywallView: View {
                     if let note {
                         banner(note).transition(.opacity.combined(with: .move(edge: .top)))
                     }
-                    apple
-                    other
+                    // Гигабайты go to a key.
+                    if reason == .traffic && store.subscription != nil { packsCard }
+                    subscriptionsCard
+                    if purchases.linksOut { other }
                 }
                 .padding(16)
                 .frame(maxWidth: 560)
@@ -65,7 +68,7 @@ struct PaywallView: View {
             }
         }
         // A purchase under way isn't dropped by a pull down.
-        .interactiveDismissDisabled(buying || restoring)
+        .interactiveDismissDisabled(buying != nil || restoring)
         .task { await purchases.loadProducts() }
     }
 
@@ -100,59 +103,124 @@ struct PaywallView: View {
             guard let info, info.expire > 0 else { return ("Продление подписки", .secondary) }
             let active = info.expire > Int64(Date().timeIntervalSince1970)
             return (active ? "Подписка активна до " + Fmt.date(info.expire) : "Подписка истекла", active ? .secondary : .red)
+        case .start:
+            return ("Подписка через App Store — ключ появится в приложении сам", .secondary)
         }
     }
 
     /// The App Store's subscriptions: the first and main way.
-    private var apple: some View {
+    private var subscriptionsCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    IconTile(icon: "checkmark.seal.fill", color: Palette.primary, size: 38)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Подписка через App Store").font(.scaled(17, weight: .bold))
-                        Text("Продлевается сама, отменить можно в любой момент")
-                            .font(.scaled(12)).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                if !purchases.loaded {
-                    // The shapes of the cards to come, with a shine.
-                    VStack(spacing: 10) {
-                        ForEach(0..<3, id: \.self) { _ in
-                            RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.track).frame(height: 62)
-                        }
-                    }
-                    .shimmer(tint: Palette.outline, duration: 1.3)
-                    .accessibilityLabel("Загрузка")
-                } else if purchases.products.isEmpty {
-                    HStack(spacing: 10) {
-                        Image(systemName: "clock").foregroundStyle(.secondary)
-                        Text("Тарифы App Store скоро появятся").foregroundStyle(.secondary)
-                    }
-                    .font(.scaled(15, weight: .medium))
-                    .frame(maxWidth: .infinity, minHeight: 56)
-                    .background(Palette.track.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                } else {
-                    ForEach(purchases.products) { productRow($0) }
-                    Button(action: buy) {
-                        if buying {
-                            ProgressView().tint(.white)
-                        } else {
-                            Text("Оплатить через Apple").lineLimit(1).minimumScaleFactor(0.8)
-                        }
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(buying || restoring || selected == nil || store.subscription == nil)
-                    .padding(.top, 2)
-                }
+                cardTitle("checkmark.seal.fill", Palette.primary, "Подписка через App Store",
+                          "Продлевается сама, отменить можно в любой момент")
+                // What a plan gives (App Review 3.1.2(c)); the rest is in each one's description.
+                Text("Подписка открывает все серверы Titan VPS с безлимитным трафиком на обычных серверах. Лимит устройств и гигабайты на обходах — как в описании тарифа.")
+                    .font(.scaled(12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                products(purchases.subscriptions, picked: $picked, empty: "Тарифы App Store скоро появятся")
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) { appleButtons }
                     VStack(spacing: 10) { appleButtons }
                 }
-                if !purchases.products.isEmpty { terms }
+                // Codes are the App Store's offer codes; what they give goes to a key.
+                if store.subscription != nil && !purchases.subscriptions.isEmpty {
+                    Button { Task { await purchases.redeemCode() } } label: {
+                        Label("Ввести код предложения", systemImage: "ticket.fill").lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .buttonStyle(SecondaryButtonStyle(height: 44, tint: .secondary))
+                    .disabled(buying != nil || restoring)
+                }
+                if !purchases.subscriptions.isEmpty { terms }
+                // Always: the privacy policy stays a tap away without products too.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) { legalLinks }
+                    VStack(alignment: .leading, spacing: 6) { legalLinks }
+                }
+                .font(.scaled(12, weight: .semibold))
             }
             .padding(18)
+        }
+    }
+
+    /// Гигабайты для обходов (consumables), for «Добавить ГБ».
+    private var packsCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                cardTitle("chart.pie.fill", Palette.violet, "Гигабайты для обходов",
+                          "Разовая покупка: добавятся к трафику на обходах")
+                products(purchases.packs, picked: $pickedPack, empty: "Пакеты гигабайт в App Store скоро появятся")
+            }
+            .padding(18)
+        }
+    }
+
+    private func cardTitle(_ icon: String, _ color: Color, _ title: String, _ subtitle: String) -> some View {
+        HStack(spacing: 12) {
+            IconTile(icon: icon, color: color, size: 38)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.scaled(17, weight: .bold))
+                Text(subtitle)
+                    .font(.scaled(12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The products as cards and Оплатить через Apple; while they load, their shapes; a load
+    /// that failed, Повторить; none in the App Store (its answer), [empty].
+    @ViewBuilder private func products(_ list: [Product], picked: Binding<String?>, empty: String) -> some View {
+        if !list.isEmpty {
+            let selected = list.first { $0.id == picked.wrappedValue } ?? list.first
+            ForEach(list) { p in
+                productRow(p, on: selected?.id == p.id) { picked.wrappedValue = p.id }
+            }
+            Button { buy(selected) } label: {
+                if let buying, list.contains(where: { $0.id == buying }) {
+                    ProgressView().tint(.white)
+                } else {
+                    Text("Оплатить через Apple").lineLimit(1).minimumScaleFactor(0.8)
+                }
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(buying != nil || restoring || selected == nil)
+            .padding(.top, 2)
+        } else if purchases.loading || !(purchases.loaded || purchases.loadFailed) {
+            // The shapes of the cards to come, with a shine.
+            VStack(spacing: 10) {
+                ForEach(0..<3, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.track).frame(height: 62)
+                }
+            }
+            .shimmer(tint: Palette.outline, duration: 1.3)
+            .accessibilityLabel("Загрузка")
+        } else if purchases.loadFailed {
+            // No network or no App Store: not «скоро», and another try right here.
+            VStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "wifi.exclamationmark").foregroundStyle(.orange)
+                    Text("Не удалось загрузить тарифы App Store").foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.scaled(15, weight: .medium))
+                Button { Task { await purchases.loadProducts() } } label: {
+                    Label("Повторить", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(SecondaryButtonStyle(height: 44))
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity)
+            .background(Palette.track.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        } else {
+            HStack(spacing: 10) {
+                Image(systemName: "clock").foregroundStyle(.secondary)
+                Text(empty).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.scaled(15, weight: .medium))
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .background(Palette.track.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
@@ -161,8 +229,8 @@ struct PaywallView: View {
             if restoring { ProgressView() } else { Text("Восстановить покупки").lineLimit(1).minimumScaleFactor(0.8) }
         }
         .buttonStyle(SecondaryButtonStyle(height: 44))
-        .disabled(buying || restoring)
-        Button(action: manage) {
+        .disabled(buying != nil || restoring)
+        Button { Task { await purchases.manageSubscriptions() } } label: {
             Text("Управление подпиской").lineLimit(1).minimumScaleFactor(0.8)
         }
         .buttonStyle(SecondaryButtonStyle(height: 44))
@@ -170,17 +238,9 @@ struct PaywallView: View {
 
     /// What App Review asks next to an auto-renewable subscription.
     private var terms: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Подписка продлевается автоматически, пока вы её не отмените. Оплата списывается с Apple ID при подтверждении покупки и затем в течение 24 часов до конца каждого периода, если автопродление не отключено хотя бы за 24 часа до его конца. Отключить автопродление можно в настройках Apple ID («Управление подпиской»).")
-                .font(.scaled(11)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            // Side by side where both fit, one under the other on a narrow phone.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 14) { legalLinks }
-                VStack(alignment: .leading, spacing: 6) { legalLinks }
-            }
-            .font(.scaled(12, weight: .semibold))
-        }
+        Text("Подписка продлевается автоматически, пока вы её не отмените. Оплата списывается с Apple ID при подтверждении покупки и затем в течение 24 часов до конца каждого периода, если автопродление не отключено хотя бы за 24 часа до его конца. Отключить автопродление можно в настройках Apple ID («Управление подпиской»).")
+            .font(.scaled(11)).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private var legalLinks: some View {
@@ -188,12 +248,11 @@ struct PaywallView: View {
         Button("Политика конфиденциальности") { openURL(Config.privacyPolicy) }
     }
 
-    private func productRow(_ p: Product) -> some View {
-        let on = selected?.id == p.id
-        return Button {
+    private func productRow(_ p: Product, on: Bool, pick: @escaping () -> Void) -> some View {
+        Button {
             guard !on else { return }
             Haptics.selection()
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { picked = p.id }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { pick() }
         } label: {
             HStack(spacing: 12) {
                 ZStack {
@@ -203,7 +262,14 @@ struct PaywallView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(p.displayName.isEmpty ? p.periodName : p.displayName)
                         .font(.scaled(16, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
-                    Text("Продлевается " + p.renewal).font(.scaled(12)).foregroundStyle(.secondary)
+                    if p.subscription != nil {
+                        Text("Продлевается " + p.renewal).font(.scaled(12)).foregroundStyle(.secondary)
+                    }
+                    // What it gives, as App Store Connect has it.
+                    if !p.description.isEmpty {
+                        Text(p.description).font(.scaled(12)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 8)
                 Text(p.displayPrice)
@@ -219,12 +285,13 @@ struct PaywallView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableStyle(scale: 0.98))
-        .disabled(buying)
+        .disabled(buying != nil)
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
-    /// Другие методы: the site's cabinet (signed in by the subscription's link) in the browser,
-    /// where a bank's own certificates work; the bot if the subscription has no link.
+    /// Другие методы (United States storefront only): the site's cabinet (signed in by the
+    /// subscription's link) in the browser, where a bank's own certificates work; the bot if
+    /// the subscription has no link.
     private var other: some View {
         VStack(spacing: 6) {
             Button(action: openOther) {
@@ -247,63 +314,46 @@ struct PaywallView: View {
         .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func buy() {
-        guard let product = selected, let sub = store.subscription, !buying else { return }
+    private func buy(_ product: Product?) {
+        guard let product, buying == nil else { return }
+        let sub = store.subscription
+        let pack = ProductIDs.packs.contains(product.id)
+        guard sub != nil || !pack else { return }
         Haptics.tap(.medium)
-        buying = true
+        buying = product.id
         note = nil
         Task {
             let outcome = await purchases.purchase(product, for: sub)
-            buying = false
-            show(outcome)
+            buying = nil
+            show(outcome, keyless: sub == nil, pack: pack)
         }
     }
 
     private func restore() {
         guard !restoring else { return }
+        let keyless = store.subscription == nil
         restoring = true
         note = nil
         Task {
             let outcome = await purchases.restore()
             restoring = false
-            show(outcome, restored: true)
+            show(outcome, restored: true, keyless: keyless)
         }
     }
 
-    private func show(_ outcome: AppStorePurchases.Outcome, restored: Bool = false) {
-        switch outcome {
-        case .delivered:
-            store.showToast(restored ? "Покупки восстановлены" : "Подписка продлена", .success)
-            Task { await store.refresh(quiet: true) }
+    private func show(_ outcome: AppStorePurchases.Outcome, restored: Bool = false, keyless: Bool, pack: Bool = false) {
+        guard let n = outcome.note(restored: restored, keyless: keyless, pack: pack) else { return }
+        if case .delivered = outcome {
+            store.showToast(n.text, .success)
+            // Without a key it has just signed in with the new one, fresh already.
+            if !keyless { Task { await store.refresh(quiet: true) } }
             dismiss()
-        case .held:
-            Haptics.success()
-            note = Note(text: "Покупка получена — подписка продлится после проверки")
-        case .pending:
-            note = Note(text: "Покупка ждёт подтверждения — подписка продлится, когда App Store её одобрит")
-        case .nothing:
-            note = Note(text: "Покупок в App Store не найдено")
-        case .otherKey:
-            note = Note(text: "Подписка App Store оформлена с другим ключом — напишите в поддержку", warning: true)
-        case .cancelled:
-            break
-        case .failed(let why):
-            Haptics.warning()
-            note = Note(text: "Покупка не прошла: " + why, warning: true)
+            return
         }
-    }
-
-    /// StoreKit's own sheet over the app; the App Store's page if it doesn't open.
-    private func manage() {
-        Task {
-            if let scene = AppStorePurchases.activeScene {
-                do {
-                    try await StoreKit.AppStore.showManageSubscriptions(in: scene)
-                    return
-                } catch {}
-            }
-            openURL(Config.manageSubscriptions)
-        }
+        if n.warning { Haptics.warning() } else if case .held = outcome { Haptics.success() }
+        note = Note(text: n.text, warning: n.warning)
+        // The note is at the top, away from the button VoiceOver is on.
+        VoiceOver.announce(n.text)
     }
 
     private func openOther() {

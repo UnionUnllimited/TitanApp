@@ -12,6 +12,17 @@ enum Haptics {
     static func error() { UINotificationFeedbackGenerator().notificationOccurred(.error) }
 }
 
+enum VoiceOver {
+    /// VoiceOver says [text] (a moment later, so the tap's own speech doesn't cut it off): a
+    /// note that shows up away from the focus is otherwise not heard.
+    static func announce(_ text: String) {
+        guard UIAccessibility.isVoiceOverRunning else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            UIAccessibility.post(notification: .announcement, argument: text)
+        }
+    }
+}
+
 // MARK: - Buttons
 
 /// Any custom button: shrinks a little while pressed.

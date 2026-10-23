@@ -64,6 +64,9 @@ final class AppStore: ObservableObject {
     /// The cabinet's «Ваш ID» and the key it is for (its keyHash).
     private let clientIdKey = "titan.clientId"
     private let pathMonitor = NWPathMonitor()
+    /// Bumped by each new key and by Выйти: a fetch begun before either is dropped when it
+    /// answers, so a deleted or replaced key doesn't come back.
+    private var generation = 0
 
     /// The app's own, while it runs: the Live Activity's ‹ › move the pick here (VPNIntents).
     static weak var current: AppStore?
@@ -110,6 +113,16 @@ final class AppStore: ObservableObject {
     var deletionRequest: String {
         let id = clientId ?? account?.username ?? subscription.map { "\($0.keyHash) (хеш ключа)" } ?? "—"
         return "Прошу удалить мой аккаунт Titan VPS. ID: \(id)"
+    }
+
+    /// Удалить аккаунт through the bot (Config.deletionEndpoint, docs/BACKEND-APPSTORE.md): true
+    /// once it answered 2xx. No endpoint yet or no answer: false, the request goes to support.
+    func deleteOnServer() async -> Bool {
+        guard let endpoint = Config.deletionEndpoint, let sub = subscription else { return false }
+        var body: [String: Any] = ["key": sub.url, "appAccountToken": sub.appAccountToken.uuidString.lowercased()]
+        if let id = clientId { body["clientId"] = id }
+        guard let (_, code) = await BotAPI.post(endpoint, body) else { return false }
+        return (200..<300).contains(code)
     }
 
     private func indexServers() {
@@ -159,6 +172,8 @@ final class AppStore: ObservableObject {
             message = "Это не ключ Titan VPS"
             return false
         }
+        // A fetch of the old key still under way doesn't overwrite this one.
+        generation += 1
         guard await load(url) else { return false }
         await loadAccount()
         return true
@@ -169,11 +184,15 @@ final class AppStore: ObservableObject {
     @discardableResult
     func refresh(quiet: Bool = false) async -> Bool {
         guard let url = subscription?.url else { return false }
+        let started = generation
         var ok = await load(url, quiet: quiet)
-        if !ok && quiet {
+        if !ok && quiet && started == generation {
             try? await Task.sleep(nanoseconds: 4_000_000_000)
+            // Signed out or another key during the wait: not the old one again.
+            guard started == generation else { return false }
             ok = await load(url, quiet: true)
         }
+        guard started == generation else { return false }
         await loadAccount()
         return ok
     }
@@ -181,7 +200,11 @@ final class AppStore: ObservableObject {
     /// Обновить подписку by hand: says how it went in a note at the top (no alert to dismiss).
     func refreshByHand() async {
         guard !busy, let url = subscription?.url else { return }
-        if await load(url, quiet: true) {
+        let started = generation
+        let ok = await load(url, quiet: true)
+        // Signed out or another key meanwhile: nothing to say about the old one.
+        guard started == generation else { return }
+        if ok {
             showToast("Подписка обновлена", .success)
         } else if !Task.isCancelled {
             showToast("Не удалось обновить подписку: " + (lastLoadError ?? "сервер не ответил"), .warning)
@@ -203,17 +226,14 @@ final class AppStore: ObservableObject {
         case .info: break
         }
         toast = Toast(text: text, kind: kind)
-        // VoiceOver says it too (a moment later, so the tap's own speech doesn't cut it off).
-        if UIAccessibility.isVoiceOverRunning {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                UIAccessibility.post(notification: .announcement, argument: text)
-            }
-        }
+        VoiceOver.announce(text)
     }
 
     func loadAccount() async {
         guard let url = subscription?.url else { return }
-        if let info = await AccountAPI.fetch(url) { account = info }
+        let started = generation
+        // Signed out or another key meanwhile: not the old key's account.
+        if let info = await AccountAPI.fetch(url), started == generation { account = info }
     }
 
     /// Why the last load failed (for the note after Обновить подписку).
@@ -221,11 +241,17 @@ final class AppStore: ObservableObject {
 
     @discardableResult
     private func load(_ url: String, quiet: Bool = false) async -> Bool {
+        let started = generation
         busy = true
-        defer { busy = false }
+        // Dropped: busy is the newer key's (or Выйти has reset it).
+        defer { if started == generation { busy = false } }
         lastLoadError = nil
         do {
             let sub = try await SubscriptionAPI.fetch(url)
+            // Signed out or another key since it began: this answer is for a key that's gone.
+            guard started == generation else { return false }
+            // Another key: the old one's account (devices, username) isn't this one's.
+            if subscription?.keyToken != sub.keyToken { account = nil }
             subscription = sub
             Task { await Reminders.update(for: sub.info) }
             if let data = try? JSONEncoder().encode(sub) { UserDefaults.standard.set(data, forKey: subKey) }
@@ -238,6 +264,7 @@ final class AppStore: ObservableObject {
             }
             return true
         } catch {
+            guard started == generation else { return false }
             let text = error.localizedDescription
             lastLoadError = text.prefix(1).lowercased() + text.dropFirst()
             if !quiet || subscription == nil { message = text }
@@ -263,6 +290,9 @@ final class AppStore: ObservableObject {
     /// favourites, pings, reminders, the cabinet's ID). The VPN and its profile:
     /// VPNController.removeProfile. The app's own settings stay.
     func logout() {
+        // A fetch of this key still under way is dropped when it answers.
+        generation += 1
+        busy = false
         // A ping's pause doesn't bring the VPN back behind the welcome screen.
         stopPing()
         Reminders.reset()
