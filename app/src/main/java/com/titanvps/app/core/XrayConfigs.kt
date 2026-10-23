@@ -1,6 +1,7 @@
 package com.titanvps.app.core
 
 import com.titanvps.app.data.Server
+import com.titanvps.app.data.ServerGroups
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -20,6 +21,8 @@ object XrayConfigs {
     const val ACCESS_LOG = "xray-access.log"
     const val ERROR_LOG = "xray-error.log"
     private const val PROXY_TAG = "proxy"
+    /** Id of «⚡ Безлимитные · все серверы»: the same after every refresh. */
+    const val UNLIMITED_ID = "json-unlimited"
     private const val BLOCK_TAG = "titan-block"
     private val YOUTUBE_DOMAINS = listOf(
         "youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "youtubei.googleapis.com",
@@ -46,7 +49,13 @@ object XrayConfigs {
         } else {
             listOf(JSONObject(t))
         }
-        return configs.mapIndexedNotNull { i, cfg -> serverFromConfig(cfg, i) }
+        var unlimited = false
+        val servers = configs.mapIndexedNotNull { i, cfg ->
+            serverFromConfig(cfg, i, mayBeUnlimited = !unlimited)?.also { if (it.id == UNLIMITED_ID) unlimited = true }
+        }
+        // «Безлимитные · все серверы» first: on top of Серверы and the pick for a new key.
+        val (first, rest) = servers.partition { it.id == UNLIMITED_ID }
+        return first + rest
     }
 
     /** Wraps outbounds produced by libXray's `convertShareLinksToXrayJson`. */
@@ -69,7 +78,8 @@ object XrayConfigs {
         sockopt.put("tcpFastOpen", true)
     }
 
-    private fun serverFromConfig(src: JSONObject, index: Int): Server? {
+    /** [mayBeUnlimited]: no earlier row was taken as «Безлимитные · все серверы». */
+    private fun serverFromConfig(src: JSONObject, index: Int, mayBeUnlimited: Boolean = true): Server? {
         val cfg = JSONObject(src.toString())
         val outbounds = cfg.optJSONArray("outbounds") ?: return null
         val proxy = (0 until outbounds.length())
@@ -79,7 +89,7 @@ object XrayConfigs {
         // Remnawave may omit the tag; ping and routing need one.
         if (proxy.optString("tag").isEmpty()) proxy.put("tag", PROXY_TAG)
         val proxyTag = proxy.getString("tag")
-        val name = cfg.optString("remarks").ifBlank { "Сервер ${index + 1}" }
+        val remarks = cfg.optString("remarks").ifBlank { "Сервер ${index + 1}" }
         cfg.remove("remarks")
         // Our TUN inbound replaces the config's inbounds; rules bound to those inbound
         // tags (e.g. "socks") must follow, or the panel's routing never matches.
@@ -92,8 +102,14 @@ object XrayConfigs {
             ?.let { cfg.put(SNIFFING_KEY, it) }
         cfg.remove("inbounds")
         retargetInboundRules(cfg, oldTags)
-        applyTfo(name, proxy)
-        return Server(id = "json-$index-${name.hashCode()}", name = name, xrayJson = cfg.toString(), proxyTag = proxyTag)
+        applyTfo(remarks, proxy)
+        val json = cfg.toString()
+        // «👇БЕЗЛИМИТНЫЕ👇» with a real config (the first such row; another stays a hidden header):
+        // one name on every screen, one id wherever the panel puts it.
+        if (mayBeUnlimited && ServerGroups.isUnlimitedRow(Server(id = "", name = remarks, xrayJson = json, proxyTag = proxyTag))) {
+            return Server(id = UNLIMITED_ID, name = ServerGroups.UNLIMITED_NAME, xrayJson = json, proxyTag = proxyTag)
+        }
+        return Server(id = "json-$index-${remarks.hashCode()}", name = remarks, xrayJson = json, proxyTag = proxyTag)
     }
 
     /**
@@ -105,7 +121,8 @@ object XrayConfigs {
         val cfg = runCatching { JSONObject(serverJson) }.getOrNull() ?: return listOf(proxyTag)
         val routing = cfg.optJSONObject("routing") ?: return listOf(proxyTag)
         val rules = routing.optJSONArray("rules") ?: return listOf(proxyTag)
-        // The last rule that sends traffic to a balancer without domain/ip conditions.
+        // The last rule that sends traffic to a balancer without domain/ip conditions
+        // ("network": "tcp,udp" still catches everything: Безлимитные, АВТО).
         val balancerTag = (0 until rules.length()).mapNotNull { rules.optJSONObject(it) }
             .lastOrNull { r ->
                 r.optString("balancerTag").isNotEmpty() && !r.has("domain") && !r.has("ip") &&

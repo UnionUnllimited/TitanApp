@@ -6,16 +6,41 @@ object ServerGroups {
     enum class Group(val title: String) { SERVERS("Серверы"), BYPASS("Обходы") }
 
     /**
-     * Not servers: section headers ("👇БЕЗЛИМИТНЫЕ👇", "ЛИМИТНЫЕ ОСТ: …") and info entries
-     * the panel sends with a dummy address ("СЕРВЕР ДЛЯ", "ОБНОВЛЕНИЯ ПОДПИСКИ", …).
+     * The panel's «👇БЕЗЛИМИТНЫЕ👇» row is a working config (a balancer over every regular
+     * server, YouTube through its own nodes); it is shown under this name everywhere.
+     */
+    const val UNLIMITED_NAME = "⚡ Безлимитные · все серверы"
+
+    /** What screen readers say for its bolt. */
+    const val UNLIMITED_LABEL = "Безлимитные, все серверы"
+
+    /**
+     * Not servers: section headers ("👇БЕЗЛИМИТНЫЕ👇" without a real config, "ЛИМИТНЫЕ ОСТ: …")
+     * and info entries the panel sends with a dummy address ("СЕРВЕР ДЛЯ", "ОБНОВЛЕНИЯ ПОДПИСКИ", …).
      */
     fun isHidden(server: Server): Boolean {
         val n = server.name.lowercase()
-        return "лимитн" in n || NOTICES.any { it in n } || isPlaceholder(server)
+        val header = "лимитн" in n && !isUnlimited(server)
+        return header || NOTICES.any { it in n } || isPlaceholder(server)
     }
 
     /** Notices that come with a real address, so the dummy-address check misses them. */
     private val NOTICES = listOf("сервер для", "обновления подписки")
+
+    /**
+     * The «👇БЕЗЛИМИТНЫЕ👇» row as the panel sends it (any emoji or flag round the word) with a
+     * real address: the config, not just a header. Checked once, when the subscription is parsed
+     * (XrayConfigs renames it, gives it a fixed id and puts it first).
+     */
+    fun isUnlimitedRow(server: Server): Boolean {
+        val n = server.name.lowercase()
+        return "безлимитн" in n && "обход" !in n && NOTICES.none { it in n } && hasRealAddress(server)
+    }
+
+    /** «⚡ Безлимитные · все серверы» (renamed so on parsing). */
+    fun isUnlimited(server: Server): Boolean = isUnlimitedName(server.name)
+
+    fun isUnlimitedName(name: String): Boolean = name.trim() == UNLIMITED_NAME
 
     /** "Обходы" are exactly the servers with "обход" in the name (Обход 5, АВТО | Быстрые обходы). */
     fun isBypass(server: Server): Boolean = "обход" in server.name.lowercase()
@@ -45,16 +70,31 @@ object ServerGroups {
     }
 
     /** The proxy outbound points nowhere (127.0.0.1, 0.0.0.0, port 0/1): an info entry. */
-    private fun isPlaceholder(server: Server): Boolean = runCatching {
-        val outbounds = org.json.JSONObject(server.xrayJson).optJSONArray("outbounds") ?: return false
+    private fun isPlaceholder(server: Server): Boolean = target(server, flat = false)?.let(::isDummy) ?: false
+
+    /** The proxy outbound has an address and it is not a dummy one. */
+    private fun hasRealAddress(server: Server): Boolean =
+        target(server, flat = true)?.let { it.optString("address").isNotBlank() && !isDummy(it) } ?: false
+
+    /**
+     * The proxy outbound's server entry: vnext[0] / servers[0]; with [flat] also the settings
+     * themselves when they carry the address (hysteria, the short vless form).
+     */
+    private fun target(server: Server, flat: Boolean): org.json.JSONObject? = runCatching {
+        val outbounds = org.json.JSONObject(server.xrayJson).optJSONArray("outbounds") ?: return null
         val ob = (0 until outbounds.length()).mapNotNull { outbounds.optJSONObject(it) }
-            .firstOrNull { it.optString("tag") == server.proxyTag } ?: return false
-        val settings = ob.optJSONObject("settings") ?: return false
-        val target = settings.optJSONArray("vnext")?.optJSONObject(0) ?: settings.optJSONArray("servers")?.optJSONObject(0)
-            ?: return false
+            .firstOrNull { it.optString("tag") == server.proxyTag } ?: return null
+        val settings = ob.optJSONObject("settings") ?: return null
+        settings.optJSONArray("vnext")?.optJSONObject(0) ?: settings.optJSONArray("servers")?.optJSONObject(0)
+            ?: settings.takeIf { flat && it.has("address") }
+    }.getOrNull()
+
+    private fun isDummy(target: org.json.JSONObject): Boolean {
         val address = target.optString("address").lowercase()
-        address in setOf("127.0.0.1", "0.0.0.0", "localhost", "::1") || (target.has("port") && target.optInt("port") <= 1)
-    }.getOrDefault(false)
+        return address in DUMMY_ADDRESSES || (target.has("port") && target.optInt("port") <= 1)
+    }
+
+    private val DUMMY_ADDRESSES = setOf("127.0.0.1", "0.0.0.0", "localhost", "::1")
 
     /** Leading flag emoji (two regional indicators) and the rest of the name. */
     fun splitFlag(name: String): Pair<String?, String> {
