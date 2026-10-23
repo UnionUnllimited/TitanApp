@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.Inet4Address
 import java.util.concurrent.atomic.AtomicInteger
@@ -67,6 +68,8 @@ class TitanVpnService : VpnService() {
     private var tunApps: Set<String> = emptySet()
     /** The copy of [tun] the running core reads: a raw fd, owned by nobody on our side; -1 when none. */
     private var coreFd = -1
+    /** Go got [coreFd] (XrayCore.start was called with it), so it may still hold the number. */
+    private var coreFdGiven = false
     /** The same for the life of [tun]. */
     private var localProxy: LocalProxy? = null
     /** The server the core runs; null while the core is stopped. */
@@ -89,33 +92,45 @@ class TitanVpnService : VpnService() {
     @Volatile private var stepJob: Job? = null
     /** The server ‹ › stepped to and not connected yet: quick taps step on from it. */
     @Volatile private var stepTarget: String? = null
+    /** The last off by hand (its stop under [lock]); later commands end the service after it. */
+    @Volatile private var stopJob: Job? = null
+    /** Plugin clients that exited soon after their start, in a row (see [watchPlugin]). */
+    @Volatile private var pluginDeaths = 0
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         when (action) {
             ACTION_SWITCH_BYPASS -> {
-                KeepAlive.setWanted(this, true)
                 if (tun == null) showStatus(Status.CONNECTING, null) else showStatus(status, statusServer, statusSince)
                 val gen = generation.get()
                 scope.launch {
                     // Measured outside the lock: an off by hand never waits for the pings.
                     val best = TitanApp.get(this@TitanVpnService).repository.subscription.value?.servers
                         ?.let { watcher.bestBypass(it) }
-                    lock.withLock {
+                    val stopped = lock.withLock {
                         // Turned off while measuring: stays off.
-                        if (gen != generation.get() || !KeepAlive.wanted(this@TitanVpnService)) return@withLock
+                        if (gen != generation.get()) return@withLock true
                         when {
-                            best != null -> switchToBypass(best, auto = false)
+                            best != null -> {
+                                // Wanted only now: a stale «Переключить на обход» with nothing to
+                                // switch to leaves an off by hand off, also for keep-alive.
+                                KeepAlive.setWanted(this@TitanVpnService, true)
+                                switchToBypass(best, auto = false)
+                            }
                             // Nothing to switch to and nothing on: no "Подключение…" left behind.
                             tun == null -> { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
                         }
+                        false
                     }
+                    if (stopped) finishIfOff(startId)
                 }
                 return START_STICKY
             }
             // The status notification was swiped away (Android 14+ lets users): back while on.
             ACTION_RESHOW -> {
+                // Off by hand (perhaps still on its way): not shown again, the service ends after it.
+                if (!KeepAlive.wanted(this)) { finishIfOff(startId); return START_NOT_STICKY }
                 val st = VpnStatus.state.value
                 if (st !is VpnState.Connected && st != VpnState.Connecting) { stopSelf(startId); return START_NOT_STICKY }
                 showStatus(status, statusServer, statusSince)
@@ -126,11 +141,13 @@ class TitanVpnService : VpnService() {
                 KeepAlive.setWanted(this, false)
                 cancelQueued()
                 warnAlwaysOn()
-                scope.launch { lock.withLock { stopVpn() }; stopSelf(startId) }
+                stopJob = scope.launch { lock.withLock { stopVpn() }; stopSelf(startId) }
                 return START_NOT_STICKY
             }
             ACTION_PREV, ACTION_NEXT -> {
                 onStep(forward = action == ACTION_NEXT)
+                // Off by hand (perhaps still on its way): only the pick moved, the service ends after it.
+                if (!KeepAlive.wanted(this)) { finishIfOff(startId); return START_NOT_STICKY }
                 val st = VpnStatus.state.value
                 if (st is VpnState.Disconnected || st is VpnState.Error) { stopSelf(startId); return START_NOT_STICKY }
                 return START_STICKY
@@ -187,6 +204,8 @@ class TitanVpnService : VpnService() {
      */
     private fun startVpn(revive: Boolean) {
         stepTarget = null
+        // A connect or switch asked for: a plugin client's quick exits count from zero again.
+        pluginDeaths = 0
         val app = TitanApp.get(this)
         val repo = app.repository
         var server: Server? = null
@@ -316,17 +335,19 @@ class TitanVpnService : VpnService() {
         // Resolver for "direct" traffic: the carrier's/router's own DNS (like Happ), since
         // foreign resolvers such as 1.1.1.1 are often blocked on Russian mobile networks.
         val dns = underlyingDnsServer(network)
-        // Go gets its own fd number; detached at once, so Android's fd owner checks never
-        // see Go close a descriptor a ParcelFileDescriptor still owns.
-        coreFd = pfd.dup().detachFd()
         try {
             // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound points
             // at it; MASQUE: Xray's own client.
             val (serverJson, p) = Plugins.prepare(this, server.name, server.xrayJson, server.proxyTag)
             plugin = p
+            // Go gets its own fd number, only once the client is up (a failed start closes
+            // it again); detached at once, so Android's fd owner checks never see Go close
+            // a descriptor a ParcelFileDescriptor still owns.
+            coreFd = pfd.dup().detachFd()
             val config = XrayConfigs.buildRunConfig(
                 serverJson, coreFd, TitanApp.get(this).assetDir, MTU, cacheDir.absolutePath, server.proxyTag, localProxy,
             )
+            coreFdGiven = true
             XrayCore.start(config, dns) { fd -> protect(fd) }
         } catch (e: Exception) {
             stopCore()
@@ -359,13 +380,16 @@ class TitanVpnService : VpnService() {
      * system, so Go closing it later (iOS: when the stopped instance is garbage-collected)
      * can't hit a reused number such as the next tun; it now points at a pipe nobody writes
      * to, which never reads as ready, so an old reader can't spin or take our packets.
-     * Libxray v26.9.30 doesn't close it at all: one parked fd per core run.
+     * Libxray v26.9.30 doesn't close it at all: one parked fd per core run. A number Go
+     * never got (the start failed before) is simply closed.
      */
     private fun releaseCoreFd() {
         val fd = coreFd
         if (fd < 0) return
         coreFd = -1
-        if (FD_SWAP && runCatching { Os.dup2(parking[0].fileDescriptor, fd) }.isSuccess) return
+        val given = coreFdGiven
+        coreFdGiven = false
+        if (FD_SWAP && given && runCatching { Os.dup2(parking[0].fileDescriptor, fd) }.isSuccess) return
         // Without the swap (or if it failed): closed, so the tun never outlives an off.
         runCatching { ParcelFileDescriptor.adoptFd(fd).close() }
     }
@@ -440,17 +464,18 @@ class TitanVpnService : VpnService() {
     private fun watchNetwork() {
         if (networkCallback != null) return
         val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        // The network the core starts on (launchCore reads the same one). None (on at boot or
+        // in the car before Wi-Fi / LTE is up): the first network to come is a change too.
+        val start = cm.activeNetwork
         val callback = object : ConnectivityManager.NetworkCallback() {
-            private var current: Network? = null
+            private var current: Network? = start
             private var key: String? = null
 
             override fun onAvailable(network: Network) {
                 if (network == current) return
-                // The first one is the network we connected on.
-                val first = current == null
                 current = network
                 key = null
-                if (!first) restartCore(network, NETWORK_SETTLE_MS)
+                restartCore(network, NETWORK_SETTLE_MS)
             }
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
@@ -483,18 +508,46 @@ class TitanVpnService : VpnService() {
         return addresses.joinToString(",") + "|" + dns.joinToString(",")
     }
 
-    /** A Naive / Mieru / sing-box client that exits takes the server with it: restart both. */
+    /**
+     * A Naive / Mieru / sing-box client that exits takes the server with it: restart both.
+     * After a minute up, at once; one that keeps exiting soon after its start waits like a
+     * failed restart ([KeepAlive.BACKOFF_SEC], then every 30 s while keep-alive is on; without
+     * it the VPN goes off after the list).
+     */
     private fun watchPlugin() {
         watchdogJob?.cancel()
         val p = plugin ?: return
+        val gen = generation.get()
+        val started = launchedAt
         watchdogJob = scope.launch {
             while (true) {
                 delay(PLUGIN_CHECK_MS)
-                if (!p.isAlive) {
-                    Log.w("Titan", "plugin client exited")
-                    restartCore(null, 0)
-                    return@launch
+                val lived = SystemClock.elapsedRealtime() - started
+                if (p.isAlive) {
+                    if (lived >= PLUGIN_STABLE_MS) pluginDeaths = 0
+                    continue
                 }
+                Log.w("Titan", "plugin client exited")
+                lock.withLock {
+                    // Stopped, turned off or restarted since.
+                    if (!stillOn(gen) || plugin !== p) return@launch
+                    pluginDeaths = if (lived < PLUGIN_STABLE_MS) pluginDeaths + 1 else 0
+                    val deaths = pluginDeaths
+                    val waitSec = when {
+                        deaths == 0 -> 0
+                        deaths <= KeepAlive.BACKOFF_SEC.size -> KeepAlive.BACKOFF_SEC[deaths - 1]
+                        TitanApp.get(this@TitanVpnService).settings.keepAlive.value -> 30
+                        else -> {
+                            giveUp("Не удалось подключиться. Попробуйте другой сервер")
+                            return@launch
+                        }
+                    }
+                    // The server is down while it waits: the app and the notification say so.
+                    VpnStatus.set(VpnState.Connecting)
+                    showStatus(Status.RECONNECTING, running?.name)
+                    restartCore(null, waitSec * 1000L, firstBackoff = deaths)
+                }
+                return@launch
             }
         }
     }
@@ -510,7 +563,8 @@ class TitanVpnService : VpnService() {
         val from = stepTarget ?: repo.selectedServer()?.id
         val target = ServerOrder.neighbor(all, from, forward, app.settings.favorites.value, wifiLocked()) ?: return
         repo.select(target.id)
-        if (tun == null) return
+        // Off, or an off by hand on its way: only the pick moves.
+        if (tun == null || !KeepAlive.wanted(this)) return
         stepTarget = target.id
         showStatus(Status.SWITCHING, target.name)
         stepJob?.cancel()
@@ -539,6 +593,24 @@ class TitanVpnService : VpnService() {
         stepTarget = null
         restartJob?.cancel()
         restartJob = null
+    }
+
+    /**
+     * Ends the service for command [startId] once the off by hand on its way (if any) is done:
+     * that off's own stopSelf has an older id by then and would leave the service, and its
+     * notification, behind. A START since keeps it; checked on the main thread, where
+     * onStartCommand sets wanted.
+     */
+    private fun finishIfOff(startId: Int) {
+        val off = stopJob
+        scope.launch {
+            off?.join()
+            withContext(Dispatchers.Main) {
+                if (tun != null || KeepAlive.wanted(this@TitanVpnService)) return@withContext
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf(startId)
+            }
+        }
     }
 
     /** Android's own Always-on VPN starts us again right after an off by hand. */
@@ -722,7 +794,10 @@ class TitanVpnService : VpnService() {
         restartJob = null
         updateJob?.cancel()
         updateJob = null
+        pluginDeaths = 0
         unwatchNetwork()
+        // «Переключить на обход» belongs to the session that ended.
+        runCatching { getSystemService(NotificationManager::class.java).cancel(ALERT_ID) }
         VpnStatus.localProxy = null
         if (tun != null) VpnStatus.set(VpnState.Disconnecting)
         stopCore()
@@ -893,6 +968,8 @@ class TitanVpnService : VpnService() {
         /** Quick ‹ › taps step on; the VPN reconnects once they pause. */
         private const val STEP_SETTLE_MS = 400L
         private const val PLUGIN_CHECK_MS = 5_000L
+        /** A plugin client up this long has started fine: its next exit restarts it at once. */
+        private const val PLUGIN_STABLE_MS = 60_000L
 
         /** Kill switch: false closes a stopped core's fd copy instead of parking it ([releaseCoreFd]). */
         private const val FD_SWAP = true
