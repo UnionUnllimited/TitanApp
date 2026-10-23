@@ -7,8 +7,10 @@ import WidgetKit
 /// ends it: LiveActivity.swift): the server with its flag, ‹ › for the previous and the next one
 /// (SwitchServerIntent, run in the app) and ⏻. On: «Подключено» with the timer, the speed, the
 /// ping and the session's traffic as Главная shows them, until they go stale (the app isn't open
-/// to send new ones). Off: «Выключено» with the server ⏻ starts; ‹ › only move the pick. No
-/// widgetURL: a tap elsewhere just opens the app (titanvps:// links are for keys).
+/// to send new ones). The island shows it only while the app isn't open: its speed is the one
+/// sent on leaving the app, for 15 s (a live one in the background would need server pushes).
+/// Off: «Выключено» with the server ⏻ starts; ‹ › only move the pick. No widgetURL: a tap
+/// elsewhere just opens the app (titanvps:// links are for keys).
 struct VPNLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: VPNActivityAttributes.self) { context in
@@ -30,7 +32,7 @@ struct VPNLiveActivity: Widget {
                             .foregroundStyle(.white)
                             .lineLimit(2)
                             .minimumScaleFactor(0.8)
-                        StatusLine(state: state, size: 12)
+                        StatusLine(state: state, stale: context.isStale, size: 12)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 2)
@@ -54,7 +56,7 @@ struct VPNLiveActivity: Widget {
             } minimal: {
                 ServerCircle(state: state, size: 20)
             }
-            .keylineTint(state.shown.color)
+            .keylineTint(StatusLook(state, stale: context.isStale).color)
         }
     }
 }
@@ -81,7 +83,7 @@ private struct ActivityBanner: View {
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
-                StatusLine(state: state)
+                StatusLine(state: state, stale: stale)
                 if !numbers.isEmpty { NumbersLines(numbers: numbers).padding(.top, 1) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -136,20 +138,37 @@ private extension VPNActivityAttributes.ContentState.Phase {
     }
 }
 
+/// What the activity says: its phase, or, for a "Подключаемся…" / "Переключаемся…" that went
+/// stale (an intent's, with no update for a minute: the app was suspended before the VPN
+/// settled), that it doesn't know, in grey, rather than a connect that never ends.
+private struct StatusLook {
+    let phase: VPNActivityAttributes.ContentState.Phase
+    let unknown: Bool
+
+    init(_ state: VPNActivityAttributes.ContentState, stale: Bool) {
+        phase = state.shown
+        unknown = stale && (phase == .connecting || phase == .switching)
+    }
+
+    var title: String { unknown ? "Состояние неизвестно" : phase.title }
+    var color: Color { unknown ? Color.white.opacity(0.55) : phase.color }
+}
+
 /// The state in its colour; up, with the time since it came up (the system counts it: no
 /// updates needed).
 private struct StatusLine: View {
     let state: VPNActivityAttributes.ContentState
+    let stale: Bool
     var size: CGFloat = 13
 
     var body: some View {
-        let phase = state.shown
+        let status = StatusLook(state, stale: stale)
         HStack(spacing: 6) {
-            Circle().fill(phase.color).frame(width: 7, height: 7)
-            Text(phase.title)
+            Circle().fill(status.color).frame(width: 7, height: 7)
+            Text(status.title)
                 .font(.system(size: size, weight: .semibold))
-                .foregroundStyle(phase.color)
-            if phase == .on, let since = state.since {
+                .foregroundStyle(status.color)
+            if status.phase == .on, let since = state.since {
                 Text(timerInterval: since...Date.distantFuture, countsDown: false)
                     .font(.system(size: size, weight: .medium).monospacedDigit())
                     .foregroundStyle(Color.white.opacity(0.6))
@@ -336,22 +355,22 @@ private struct CompactTrailing: View {
                 .minimumScaleFactor(0.7)
                 .accessibilityLabel("Пинг \(ping) мс")
         } else {
-            StatusDot(phase: numbers.state.shown)
+            StatusDot(status: StatusLook(numbers.state, stale: numbers.stale))
         }
     }
 }
 
 /// The compact island's state: a dot in the state's colour.
 private struct StatusDot: View {
-    let phase: VPNActivityAttributes.ContentState.Phase
+    let status: StatusLook
 
     var body: some View {
         Circle()
-            .fill(phase.color)
+            .fill(status.color)
             .frame(width: 8, height: 8)
             .padding(3)
-            .background(Circle().fill(phase.color.opacity(0.22)))
-            .accessibilityLabel(phase.title)
+            .background(Circle().fill(status.color.opacity(0.22)))
+            .accessibilityLabel(status.title)
     }
 }
 

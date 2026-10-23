@@ -77,24 +77,39 @@ extension TurnOnVPNIntent: LiveActivityIntent {}
 @available(iOS 18.0, *)
 extension ToggleVPNIntent: LiveActivityIntent {}
 
+// Off keeps the activity («Выключено»): one the system ended after 8 h starts again.
+@available(iOS 18.0, *)
+extension TurnOffVPNIntent: LiveActivityIntent {}
+
 enum VPNIntents {
     /// Returns the server's name without its flag (for Siri to say).
     static func turnOn() async throws -> String {
         // Пункт управления's toggle then shows what the VPN really did, failed or not: run in the
         // background (Siri, Команды), the app has no screen to see the change.
         defer { VPNControl.reload() }
+        // An off meanwhile (the activity's red ⏻ during "Подключаемся…", Пункт управления) wins,
+        // as in switchProfile: start may still be saving the profile, and would turn it on after.
+        let offsBefore = await MainActor.run { offs }
         // The activity's «Выключено» says "Подключаемся…" at once: the tunnel takes a few seconds.
         await LiveActivityController.comingOn()
+        let name: String
         do {
-            let name = try await TunnelSwitch.start(picked(), onDemand: VPNController.keepAlive,
-                                                    bypassOnWifi: UserDefaults.standard.bool(forKey: TechMode.key))
-            await LiveActivityController.turnedOn()
-            return name.splitFlag.1
+            name = try await TunnelSwitch.start(picked(), onDemand: VPNController.keepAlive,
+                                                bypassOnWifi: UserDefaults.standard.bool(forKey: TechMode.key))
         } catch {
             // Didn't come up: «Выключено» again.
             if !(await TunnelSwitch.isOn()) { await LiveActivityController.turnedOff() }
             throw error
         }
+        let offMeanwhile = await MainActor.run { offs != offsBefore }
+        if offMeanwhile {
+            // Off again, Не отключать VPN with it; the activity says «Выключено».
+            await TunnelSwitch.stop()
+            await LiveActivityController.turnedOff()
+            throw TunnelSwitchError("Titan VPS выключен")
+        }
+        await LiveActivityController.turnedOn()
+        return name.splitFlag.1
     }
 
     @MainActor
