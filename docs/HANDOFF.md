@@ -28,6 +28,8 @@
 | `scripts/ios-patches/titan/` | Go-пакет `titan` в xcframework: клиенты sing-box (TUIC, AnyTLS, ShadowTLS, SSH, Naive) и Mieru для iOS |
 | `server/` | Скрипты установки и удаления ноды (`install-node.sh`, `remove-node.sh`) |
 | `.github/workflows/` | CI: `android.yml`, `windows.yml`, `ios.yml` |
+| `docs/PRIVACY.md` | Политика конфиденциальности (ссылка из приложения: `Config.privacyPolicy`) |
+| `docs/BACKEND-APPSTORE.md` | Что нужно боту и панели для покупок App Store и удаления аккаунта |
 
 ## Сборки
 
@@ -94,6 +96,28 @@
   ползунок «Выкл | Вкл» (перетаскивание, блокировка на время пинга) — `PowerSlider.swift`;
   «Проверить соединение» (запрос через работающий VPN: задержка, страна и IP выхода) — `ConnectionCheck.swift`.
 - Оплата тарифа из «Личного кабинета» iOS открывается внутри приложения (WKWebView, не Safari) — `ios/TitanVPS/PaymentView.swift`.
+  На этом пути и в кабинете нет слов «Оплатить», «Оплата», «Купить», «Докупить» на кнопках и в заголовках
+  (вкладка «Тарифы», кнопка «Продолжить · <способ>», экран «Тариф»); названия тарифов остаются.
+- Требования App Review (iOS):
+  - «Конфиденциальность» при первом запуске, после заставки и до ввода ключа (`PrivacyNoticeView` в `RootView.swift`,
+    ключ `privacyAccepted`): что приложение делает с данными и трафиком, согласие на VPN-конфигурацию, ссылка на
+    `docs/PRIVACY.md`. Пока не принято, ссылки `titanvps://` ждут, подписка не обновляется, «Автоподключение»
+    не срабатывает.
+  - «Тарифы» (`PaywallView.swift`) открываются со строки «Подписка истекла · Продлить» на Главной, кнопкой
+    «Продлить подписку» на вкладке «Подписка» и кнопками «Добавить ГБ». Сначала подписки App Store (StoreKit 2,
+    `Purchases.swift`: `ProductIDs` — заглушки до App Store Connect, `AppStorePurchases`): «Оплатить через Apple»,
+    «Восстановить покупки», «Управление подпиской», условия автопродления, ссылки на EULA Apple и политику. Нет
+    продуктов в App Store — «Тарифы App Store скоро появятся». Ниже «Другие методы» без цены: кабинет сайта
+    (`profile-web-page-url`) во внешнем браузере. Транзакция завершается только после того, как бот её принял
+    (`AppStorePurchases.deliver` → `Config.purchaseEndpoint`, пока `nil`); до этого StoreKit отдаёт её снова
+    при каждом запуске (`Transaction.updates`). Протокол — `docs/BACKEND-APPSTORE.md`.
+  - Профиль → Аккаунт: «Выйти» и «Удалить аккаунт». Оба выключают VPN, удаляют VPN-профиль (`VPNController.removeProfile`),
+    ключ, избранное, пинги, напоминания и ID кабинета (`AppStore.logout`). «Удалить аккаунт» ещё копирует запрос
+    «Прошу удалить мой аккаунт Titan VPS. ID: …» (ID кабинета, `username` бота или хеш ключа) и открывает поддержку.
+  - «О приложении» → «Открытый исходный код» (`OpenSource` в `SubscriptionView.swift`): репозиторий, Xray-core и патчи,
+    libXray, sing-box (и cronet-go), mieru, flag-icons. При смене версии ядра или клиентов обновить и этот список.
+  - В App Store Connect в «Конфиденциальности приложения» указать то, что описано в `docs/PRIVACY.md`: идентификатор
+    устройства (лимит устройств) и покупки, связанные с аккаунтом, для работы приложения; трекинга нет.
 - Круглые флаги на iOS, как на Windows (список серверов, строка под статусом, Настройки, «Проверить соединение»,
   Live Activity и Dynamic Island) — `FlagCircle` в `ios/Shared/FlagCircle.swift`: флаг из `flag-icons` (PNG, нарисованные librsvg),
   залитый в круг. Каталог `Flags.xcassets` собирает шаг CI «Download flag images» (`ios.yml`, `testflight.yml`)

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Подписка: expiry, bypass traffic and a "Личный кабинет" button with what it offers.
+/// Подписка: expiry, bypass traffic, «Продлить подписку» (Тарифы) and a "Личный кабинет"
+/// button with what it offers.
 struct SubscriptionView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.openURL) private var openURL
@@ -53,17 +54,30 @@ struct SubscriptionView: View {
                                 Text("Безлимит").font(.scaled(26, weight: .bold))
                             }
                             Text("На обычных серверах — безлимит").font(.scaled(13)).foregroundStyle(.secondary)
-                            Text("Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные серверы не работают. Гигабайты списываются только пока вы подключены к обходу. На Wi-Fi обходы не нужны и недоступны. Закончились ГБ — докупите в личном кабинете.")
+                            Text("Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные серверы не работают. Гигабайты списываются только пока вы подключены к обходу. На Wi-Fi обходы не нужны и недоступны. Закончились ГБ — добавьте их в «Тарифах».")
                                 .font(.scaled(12)).foregroundStyle(.secondary).padding(.top, 4)
+                            if info.total > 0 {
+                                // Тарифы (the App Store first); orange once less than 10 % is left.
+                                let low = info.remaining * 10 < info.total
+                                Button { store.paywall = .traffic } label: {
+                                    Label("Добавить ГБ", systemImage: "plus.circle.fill").lineLimit(1)
+                                }
+                                .buttonStyle(SecondaryButtonStyle(height: 44, tint: low ? Color.orange : Palette.primary))
+                                .padding(.top, 4)
+                            }
                         }
                         .padding(16)
                     }
+                    Button { store.paywall = active ? .renew : .expired } label: {
+                        Label("Продлить подписку", systemImage: "crown.fill")
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
                     Button {
                         if info.webPageUrl != nil { showCabinet = true } else { openURL(Config.telegram) }
                     } label: {
                         Label("Личный кабинет", systemImage: "person.crop.circle.fill")
                     }
-                    .buttonStyle(PrimaryButtonStyle())
+                    .buttonStyle(SecondaryButtonStyle())
                     if let acc = store.account, acc.devicesEnabled {
                         Card {
                             Button { showDevices = true } label: {
@@ -79,8 +93,8 @@ struct SubscriptionView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("В личном кабинете").fontWeight(.semibold)
                             feature("arrow.triangle.2.circlepath", "Продление подписки")
-                            feature("chart.pie", "Докупка ГБ для обходов")
-                            feature("tag", "Коды оплаты")
+                            feature("chart.pie", "Гигабайты для обходов")
+                            feature("tag", "Коды на продление")
                         }
                         .padding(16)
                     }
@@ -117,6 +131,7 @@ struct SubscriptionView: View {
         .sheet(isPresented: $showCabinet) {
             if let link = store.subscription?.info.webPageUrl {
                 CabinetView(link: link, devices: store.account.map { ($0.devices.count, $0.deviceLimit) })
+                    .environmentObject(store)
             }
         }
     }
@@ -249,6 +264,7 @@ struct ProfileView: View {
     @State private var activitiesOff = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var confirmLogout = false
+    @State private var confirmDelete = false
     @State private var confirmReset = false
     @State private var about = false
     /// Технический режим: 7 taps on the version (under 3 s apart) ask for the code.
@@ -374,7 +390,8 @@ struct ProfileView: View {
                         .disabled(store.busy)
                         RowDivider()
                         Button { about = true } label: {
-                            SettingsRow(icon: "info.circle.fill", color: Palette.violet, title: "О приложении", chevron: true)
+                            SettingsRow(icon: "info.circle.fill", color: Palette.violet, title: "О приложении",
+                                        subtitle: "Версия и открытый исходный код", chevron: true)
                         }
                         .buttonStyle(RowButtonStyle())
                         RowDivider()
@@ -398,13 +415,21 @@ struct ProfileView: View {
                             SettingsRow(icon: "arrow.counterclockwise", color: .orange, title: "Сброс настроек")
                         }
                         .buttonStyle(RowButtonStyle())
-                        RowDivider()
+                    }
+                    .padding(.top, 18)
+
+                    SectionTitle("Аккаунт")
+                    Card {
                         Button { confirmLogout = true } label: {
                             SettingsRow(icon: "rectangle.portrait.and.arrow.right", color: .red, title: "Выйти из аккаунта", titleColor: .red)
                         }
                         .buttonStyle(RowButtonStyle())
+                        RowDivider()
+                        Button { confirmDelete = true } label: {
+                            SettingsRow(icon: "trash.fill", color: .red, title: "Удалить аккаунт", titleColor: .red)
+                        }
+                        .buttonStyle(RowButtonStyle())
                     }
-                    .padding(.top, 18)
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
@@ -437,21 +462,39 @@ struct ProfileView: View {
                 Text("Тема, избранное, автоподключение, «Не отключать VPN» и выбранный сервер вернутся к исходным. Ключ останется.")
             }
             .alert("Выйти из аккаунта?", isPresented: $confirmLogout) {
-                Button("Выйти", role: .destructive) {
-                    // Down already (maybe paused for a ping): iOS and the ping's end must not bring
-                    // it back either.
-                    if vpn.isOn {
-                        vpn.disconnect()
-                    } else {
-                        vpn.cancelConnects()
-                        vpn.setKeepAlive(false)
-                    }
-                    store.logout()
-                }
+                Button("Выйти", role: .destructive) { signOut() }
                 Button("Отмена", role: .cancel) {}
             } message: {
-                Text("VPN отключится, ключ нужно будет вставить заново.")
+                Text("VPN отключится, ключ, избранное и VPN-профиль удалятся с этого устройства. Ключ нужно будет вставить заново.")
             }
+            .alert("Удалить аккаунт?", isPresented: $confirmDelete) {
+                Button("Удалить", role: .destructive) { deleteAccount() }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Мы отправим запрос на удаление аккаунта в поддержку и удалим ключ и все данные с этого устройства. Подписка в боте будет удалена после обработки запроса.")
+            }
+        }
+    }
+
+    /// Выйти: the VPN off for good, its profile and everything of the key off this device. Down
+    /// already (maybe paused for a ping): iOS and the ping's end don't bring it back either.
+    private func signOut() {
+        vpn.removeProfile()
+        store.logout()
+    }
+
+    /// Удалить аккаунт: the bot's subscription is removed by support (the app can't), so the
+    /// request is copied for the support chat, which opens a moment after the note; this device
+    /// is signed out as by Выйти.
+    private func deleteAccount() {
+        let request = store.deletionRequest
+        let support = store.supportURL
+        UIPasteboard.general.string = request
+        signOut()
+        store.showToast("Запрос скопирован — отправьте его в поддержку", .success)
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            _ = await UIApplication.shared.open(support)
         }
     }
 
@@ -617,7 +660,7 @@ struct ThemePicker: View {
     }
 }
 
-/// О приложении: the logo, the version and where to write.
+/// О приложении: the logo, the version, where to write and what the app is built from.
 struct AboutSheet: View {
     let version: String
     let support: URL
@@ -629,6 +672,7 @@ struct AboutSheet: View {
             content
                 .padding(.horizontal, 24)
                 .padding(.bottom, 20)
+                .frame(maxWidth: 560)
                 .frame(maxWidth: .infinity)
         }
         .background(Palette.background.ignoresSafeArea())
@@ -656,6 +700,57 @@ struct AboutSheet: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
             }
+            openSource.padding(.top, 8)
+        }
+    }
+
+    /// Открытый исходный код: the app and what it runs, each with its repository.
+    private var openSource: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Открытый исходный код").font(.scaled(17, weight: .bold))
+            Text("Код приложения и всего, на чём оно работает, открыт: что Titan VPS делает с трафиком, можно проверить.")
+                .font(.scaled(13)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Card {
+                ForEach(Array(OpenSource.all.enumerated()), id: \.offset) { i, part in
+                    if i > 0 { RowDivider(inset: 16) }
+                    row(part)
+                }
+            }
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func row(_ part: OpenSource) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(part.name).font(.scaled(15, weight: .semibold))
+            Text(part.detail).font(.scaled(12)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            // Several links of one part side by side, wrapped by ViewThatFits on a narrow phone.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { links(part) }
+                VStack(alignment: .leading, spacing: 6) { links(part) }
+            }
+            .padding(.top, 4)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func links(_ part: OpenSource) -> some View {
+        ForEach(part.links, id: \.title) { link in
+            Button { openURL(link.url) } label: {
+                Label(link.title, systemImage: "arrow.up.right")
+                    .labelStyle(TrailingIconLabel())
+                    .font(.scaled(12, weight: .semibold))
+                    .foregroundStyle(Palette.primary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Palette.primary.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(PressableStyle())
+            .accessibilityLabel("\(link.title), открыть на GitHub")
         }
     }
 
@@ -666,4 +761,45 @@ struct AboutSheet: View {
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(Palette.primary.opacity(0.12), in: Capsule())
     }
+}
+
+/// A link's arrow after its title.
+private struct TrailingIconLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.title
+            configuration.icon.imageScale(.small)
+        }
+    }
+}
+
+/// What the app is built from (О приложении → Открытый исходный код; docs/HANDOFF.md).
+struct OpenSource {
+    struct Link {
+        let title: String
+        let url: URL
+    }
+
+    let name: String
+    let detail: String
+    let links: [Link]
+
+    private static func github(_ path: String) -> URL { URL(string: "https://github.com/" + path)! }
+
+    static let all = [
+        OpenSource(name: "Titan VPS", detail: "Это приложение и версии для Android и Windows",
+                   links: [Link(title: "UnionUnllimited/TitanApp", url: Config.repository)]),
+        OpenSource(name: "Ядро VPN", detail: "Xray-core v26.9.30 (через libXray), с нашими патчами для iOS",
+                   links: [Link(title: "XTLS/Xray-core", url: github("XTLS/Xray-core")),
+                           Link(title: "Патчи для iOS", url: Config.iosPatches)]),
+        OpenSource(name: "libXray", detail: "Xray-core для мобильных приложений",
+                   links: [Link(title: "XTLS/libXray", url: github("XTLS/libXray"))]),
+        OpenSource(name: "sing-box", detail: "Клиенты протоколов TUIC, AnyTLS, ShadowTLS, SSH и Naive (Naive — на Cronet из Chromium)",
+                   links: [Link(title: "SagerNet/sing-box", url: github("SagerNet/sing-box")),
+                           Link(title: "SagerNet/cronet-go", url: github("SagerNet/cronet-go"))]),
+        OpenSource(name: "mieru", detail: "Клиент протокола Mieru",
+                   links: [Link(title: "enfein/mieru", url: github("enfein/mieru"))]),
+        OpenSource(name: "flag-icons", detail: "Флаги стран в списке серверов",
+                   links: [Link(title: "lipis/flag-icons", url: github("lipis/flag-icons"))]),
+    ]
 }

@@ -10,8 +10,10 @@ enum Reminders {
     /// The traffic total the "running out" note was shown for (once per paid amount).
     private static let warnedKey = "titan.trafficWarned"
     private static let askedKey = "titan.remindersAsked"
-    /// A tap on a reminder opens Подписка (RootView listens).
+    /// A tap on a reminder opens Подписка (RootView listens); the traffic one Тарифы over it.
+    /// The notification's object is the reminder's id.
     static let openSubscription = Notification.Name("titan.openSubscription")
+    static let trafficId = "titan.traffic"
 
     static var enabled: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
 
@@ -54,7 +56,7 @@ enum Reminders {
                 guard let fire = Calendar.current.date(from: when), fire > Date(), fire < end else { continue }
                 let content = UNMutableNotificationContent()
                 content.title = "Подписка Titan VPS"
-                content.body = "Подписка закончится \(endText(end)). Если ещё не продлили — продлите в личном кабинете, чтобы VPN не отключился."
+                content.body = "Подписка закончится \(endText(end)). Если ещё не продлили — продлите её на вкладке «Подписка», чтобы VPN не отключился."
                 content.sound = .default
                 let request = UNNotificationRequest(identifier: id, content: content,
                                                     trigger: UNCalendarNotificationTrigger(dateMatching: when, repeats: false))
@@ -68,9 +70,9 @@ enum Reminders {
             defaults.set(NSNumber(value: info.total), forKey: warnedKey)
             let content = UNMutableNotificationContent()
             content.title = "Трафик на обходах заканчивается"
-            content.body = "Осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total)). Докупить ГБ можно в личном кабинете."
+            content.body = "Осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total)). Добавить ГБ можно на вкладке «Подписка»."
             content.sound = .default
-            try? await center.add(UNNotificationRequest(identifier: "titan.traffic", content: content,
+            try? await center.add(UNNotificationRequest(identifier: trafficId, content: content,
                                                         trigger: UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)))
         } else if info.total > 0 {
             defaults.removeObject(forKey: warnedKey)
@@ -87,7 +89,7 @@ enum Reminders {
 
     /// The switch turned off: nothing more comes.
     static func cancelAll() {
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: expiryIds + ["titan.traffic"])
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: expiryIds + [trafficId])
     }
 
     /// Signed out: no reminders for a subscription that isn't here any more.
@@ -108,7 +110,8 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        DispatchQueue.main.async { NotificationCenter.default.post(name: Reminders.openSubscription, object: nil) }
+        let id = response.notification.request.identifier
+        DispatchQueue.main.async { NotificationCenter.default.post(name: Reminders.openSubscription, object: id) }
         completionHandler()
     }
 }

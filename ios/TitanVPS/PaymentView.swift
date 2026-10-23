@@ -3,10 +3,10 @@ import SwiftUI
 import UIKit
 import WebKit
 
-/// Оплата inside the app: the payment provider's pages in a web view under the app's own bar.
-/// Bank apps (СБП), mail and phone links open in the system; once the provider sends the
-/// payment back to the site and the site has answered, the screen closes by itself
-/// (the cabinet then reloads).
+/// A tariff's page inside the app (titled «Тариф», no payment words on the app's own bar): the
+/// payment provider's pages in a web view under the app's own bar. Bank apps (СБП), mail and
+/// phone links open in the system; once the provider sends the payment back to the site and
+/// the site has answered, the screen closes by itself (the cabinet then reloads).
 struct PaymentView: View {
     /// The tariff and its price, under the title.
     let subtitle: String
@@ -83,7 +83,7 @@ struct PaymentView: View {
     private var bar: some View {
         ZStack {
             VStack(spacing: 1) {
-                Text("Оплата").font(.scaled(17, weight: .semibold))
+                Text("Тариф").font(.scaled(17, weight: .semibold))
                 if !subtitle.isEmpty {
                     Text(subtitle).font(.scaled(12, weight: .medium)).foregroundStyle(.secondary)
                         .lineLimit(1).minimumScaleFactor(0.8)
@@ -127,7 +127,7 @@ struct PaymentView: View {
                 .foregroundStyle(Palette.primary)
                 .frame(width: 88, height: 88)
                 .background(Palette.primary.opacity(0.12), in: Circle())
-            Text("Страница оплаты не открылась").font(.scaled(19, weight: .bold)).multilineTextAlignment(.center)
+            Text("Страница не открылась").font(.scaled(19, weight: .bold)).multilineTextAlignment(.center)
             Text(techMode ? detail : "Проверьте интернет и попробуйте ещё раз")
                 .font(.scaled(14)).multilineTextAlignment(.center).foregroundStyle(.secondary)
             Button { page.retry() } label: { Label("Повторить", systemImage: "arrow.clockwise") }
@@ -372,7 +372,7 @@ final class PaymentPage: NSObject, ObservableObject, WKNavigationDelegate, WKUID
         let host = frame.securityOrigin.host
         dialogText = text
         self.reply = reply
-        dialog = PageDialog(kind: kind, title: host.isEmpty ? "Оплата" : host, message: message)
+        dialog = PageDialog(kind: kind, title: host.isEmpty ? "Тариф" : host, message: message)
     }
 
     /// A page for a new window: http(s) here, bank apps and the like to the system.

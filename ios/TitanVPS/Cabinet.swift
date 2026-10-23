@@ -240,6 +240,8 @@ enum AccountAPI {
         let devices: [Device]
         let deviceLimit: Int
         let devicesEnabled: Bool
+        /// The account's name in the bot, if it says (a request to support names it).
+        let username: String?
     }
 
     /// "Titan(IOS/0.2.29)" → "Titan VPS · iOS 0.2.29"; "Happ/5.9.0/ios/…" → "Happ 5.9.0".
@@ -277,7 +279,8 @@ enum AccountAPI {
                        app: $0["userAgent"] as? String ?? "", lastSeen: $0["accessTime"] as? String ?? "")
             }
             return Info(status: o["userStatus"] as? String ?? "ACTIVE", devices: items,
-                        deviceLimit: d?["limit"] as? Int ?? 0, devicesEnabled: d?["enabled"] as? Bool ?? !items.isEmpty)
+                        deviceLimit: d?["limit"] as? Int ?? 0, devicesEnabled: d?["enabled"] as? Bool ?? !items.isEmpty,
+                        username: (o["username"] as? String)?.trimmingCharacters(in: .whitespaces).nilIfEmpty)
         }
         return nil
     }

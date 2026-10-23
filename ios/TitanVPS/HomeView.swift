@@ -13,7 +13,6 @@ struct HomeView: View {
     /// only the speed line and the curve redraw each second, not all of Главная.
     @State private var traffic = TrafficMonitor()
     @Environment(\.openURL) private var openURL
-    var openSubscription: () -> Void
     var openSettings: () -> Void
 
     var body: some View {
@@ -156,9 +155,9 @@ struct HomeView: View {
         }
     }
 
-    /// One line: a tap opens Подписка.
+    /// One line: a tap opens Тарифы.
     private var expiredBanner: some View {
-        Button(action: openSubscription) {
+        Button { store.paywall = .expired } label: {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.circle.fill")
                 Text("Подписка истекла").lineLimit(1)
@@ -334,7 +333,8 @@ struct HomeView: View {
                     } else if sub.info.total > 0 {
                         HStack(spacing: 6) {
                             Text("Трафик: \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
-                            Button("Докупить ГБ", action: openSubscription).font(.scaled(13, weight: .semibold))
+                            // Тарифы (the App Store first).
+                            Button("Добавить ГБ") { store.paywall = .traffic }.font(.scaled(13, weight: .semibold))
                         }
                     } else {
                         Text("Для ограничений мобильного интернета")

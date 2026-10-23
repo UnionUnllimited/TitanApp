@@ -29,6 +29,8 @@ final class AppStore: ObservableObject {
     private let pauseTime = BackgroundTime("VPN back after a ping")
     /// Servers in the running "Пинг" (for its progress ring).
     @Published private(set) var pingTotal = 0
+    /// Тарифы (PaywallView) on screen and why it opened; RootView shows it.
+    @Published var paywall: PaywallReason?
 
     /// Favourite servers, by name (ids change with the subscription).
     @Published private(set) var favorites: Set<String> = []
@@ -59,6 +61,8 @@ final class AppStore: ObservableObject {
     private let subKey = "titan.subscription"
     private let selKey = "titan.selected"
     private let favKey = "titan.favorites"
+    /// The cabinet's «Ваш ID» and the key it is for (its keyHash).
+    private let clientIdKey = "titan.clientId"
     private let pathMonitor = NWPathMonitor()
 
     /// The app's own, while it runs: the Live Activity's ‹ › move the pick here (VPNIntents).
@@ -86,6 +90,26 @@ final class AppStore: ObservableObject {
     /// Support: the subscription's support-url, else the bot.
     var supportURL: URL {
         subscription?.info.supportUrl.flatMap { URL(string: $0) }.flatMap { $0.scheme == nil ? nil : $0 } ?? Config.telegram
+    }
+
+    /// The cabinet showed «Ваш ID»: kept for this key, it names the account to support.
+    func rememberClientId(_ id: String) {
+        guard let key = subscription?.keyHash, clientId != id else { return }
+        UserDefaults.standard.set(["key": key, "id": id], forKey: clientIdKey)
+    }
+
+    /// «Ваш ID» from the cabinet, if it was shown for this key.
+    var clientId: String? {
+        guard let saved = UserDefaults.standard.dictionary(forKey: clientIdKey) as? [String: String],
+              let key = subscription?.keyHash, saved["key"] == key else { return nil }
+        return saved["id"]?.nilIfEmpty
+    }
+
+    /// Удалить аккаунт: the request copied for support. The account by the cabinet's ID, else
+    /// by the bot's username, else by the key's short hash (docs/BACKEND-APPSTORE.md).
+    var deletionRequest: String {
+        let id = clientId ?? account?.username ?? subscription.map { "\($0.keyHash) (хеш ключа)" } ?? "—"
+        return "Прошу удалить мой аккаунт Titan VPS. ID: \(id)"
     }
 
     private func indexServers() {
@@ -235,16 +259,21 @@ final class AppStore: ObservableObject {
         select(s.id)
     }
 
+    /// Выйти and Удалить аккаунт: what the key left on this device goes (the key, its account,
+    /// favourites, pings, reminders, the cabinet's ID). The VPN and its profile:
+    /// VPNController.removeProfile. The app's own settings stay.
     func logout() {
         // A ping's pause doesn't bring the VPN back behind the welcome screen.
         stopPing()
         Reminders.reset()
+        paywall = nil
         subscription = nil
         account = nil
         pings = [:]
         pingErrors = [:]
+        favorites = []
         select(nil)
-        UserDefaults.standard.removeObject(forKey: subKey)
+        for key in [subKey, favKey, clientIdKey] { UserDefaults.standard.removeObject(forKey: key) }
     }
 
     /// Servers being measured right now (spinners).

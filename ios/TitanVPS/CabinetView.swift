@@ -1,13 +1,16 @@
 import SwiftUI
 
 /// Personal cabinet in the app (same as Android's CabinetActivity): the site's limited cabinet,
-/// signed in by the subscription's link, shown natively. Only the payment itself is the
-/// provider's web page (PaymentView, inside the app; bank apps for SBP open from there).
+/// signed in by the subscription's link, shown natively. Only the tariff's own page is the
+/// provider's (PaymentView, inside the app; bank apps for SBP open from there). Buttons and
+/// titles on the way there are neutral (Тарифы, Продолжить): App Store purchases are in
+/// PaywallView.
 struct CabinetView: View {
     let link: String
     /// Connected devices and the limit from the subscription's account info, if known.
     let devices: (count: Int, limit: Int)?
 
+    @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var api: CabinetAPI?
     @State private var data: CabinetAPI.Snapshot?
@@ -25,7 +28,7 @@ struct CabinetView: View {
             VStack(spacing: 12) {
                 SegmentedTabs(items: [
                     SegmentedTabs.Item(id: 0, title: "Подписка", icon: "crown.fill"),
-                    SegmentedTabs.Item(id: 1, title: "Оплатить", icon: "creditcard.fill"),
+                    SegmentedTabs.Item(id: 1, title: "Тарифы", icon: "tag.fill"),
                 ], selection: $tab)
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
@@ -104,7 +107,7 @@ struct CabinetView: View {
         }
     }
 
-    private static let checking = "Проверяем оплату: кабинет обновится через несколько секунд"
+    private static let checking = "Проверяем: кабинет обновится через несколько секунд"
 
     private func load() async {
         loading = true
@@ -118,6 +121,8 @@ struct CabinetView: View {
                 api = a
                 data = d
             }
+            // Ваш ID names the account in a request to support (Удалить аккаунт).
+            if let id = data?.clientId { store.rememberClientId(id) }
         } catch {
             self.error = (error as? CabinetAPI.Failure)?.message ?? "Не удалось загрузить кабинет. Проверьте интернет и попробуйте ещё раз"
         }
@@ -355,22 +360,22 @@ private struct PayPane: View {
             }
             if data.tariffs.isEmpty {
                 VStack(spacing: 10) {
-                    Image(systemName: "creditcard.trianglebadge.exclamationmark")
+                    Image(systemName: "tag.slash")
                         .font(.scaled(34, weight: .semibold)).foregroundStyle(.secondary)
-                    Text("Сейчас оплата недоступна").foregroundStyle(.secondary)
+                    Text("Сейчас тарифы недоступны").foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 32)
             }
             // A payment code is rare: a quiet button at the bottom, the field in a dialog.
             if data.promo {
                 Button { codeOpen = true } label: {
-                    Label("Есть код оплаты?", systemImage: "ticket.fill")
+                    Label("Есть код?", systemImage: "ticket.fill")
                 }
                 .buttonStyle(SecondaryButtonStyle(height: 46, tint: .secondary))
             }
         }
         .onAppear { if limit == nil { limit = data.limits.first } }
-        .alert("Код оплаты", isPresented: $codeOpen) {
+        .alert("Код на продление", isPresented: $codeOpen) {
             TextField("Введите код", text: $code).textInputAutocapitalization(.characters)
             Button("Применить") {
                 let c = code.trimmingCharacters(in: .whitespaces)
@@ -394,8 +399,8 @@ private struct PayPane: View {
                     IconTile(icon: kind == "sub" ? "crown.fill" : "chart.pie.fill",
                              color: kind == "sub" ? Palette.primary : Palette.violet, size: 38)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(kind == "sub" ? "Продлить подписку" : "Докупить трафик").font(.scaled(17, weight: .bold))
-                        Text(kind == "sub" ? "Дни добавятся к текущей подписке" : "Гигабайты для обходов")
+                        Text(kind == "sub" ? "Продление подписки" : "Гигабайты для обходов").font(.scaled(17, weight: .bold))
+                        Text(kind == "sub" ? "Дни добавятся к текущей подписке" : "Добавятся к трафику на обходах")
                             .font(.scaled(12)).foregroundStyle(.secondary)
                     }
                 }
@@ -404,7 +409,7 @@ private struct PayPane: View {
                 if let t = selected {
                     let methods = (data.methods[kind] ?? []).filter { t.methods.contains($0.id) }
                     let list = methods.isEmpty ? t.methods.map { CabinetAPI.Method(id: $0, title: "") } : methods
-                    if list.isEmpty { Text("Оплата для этого тарифа недоступна").font(.scaled(13)).foregroundStyle(.red) }
+                    if list.isEmpty { Text("Этот тариф сейчас недоступен").font(.scaled(13)).foregroundStyle(.red) }
                     ForEach(list, id: \.id) { m in
                         Button {
                             Haptics.tap(.medium)
@@ -412,7 +417,8 @@ private struct PayPane: View {
                             Task { await onPay(t, m.id); busy = false }
                         } label: {
                             if busy { ProgressView().tint(.white) } else {
-                                Label("Оплатить \(price(t.price))" + (m.title.isEmpty ? "" : " · \(m.title)"), systemImage: "creditcard.fill")
+                                // Neutral: no price or payment words on the way to the provider.
+                                Label("Продолжить" + (m.title.isEmpty ? "" : " · \(m.title)"), systemImage: "arrow.right.circle.fill")
                                     .lineLimit(1).minimumScaleFactor(0.8)
                             }
                         }
@@ -421,7 +427,7 @@ private struct PayPane: View {
                     }
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                 } else if !visible.isEmpty {
-                    Text("Выберите тариф, чтобы оплатить").font(.scaled(12)).foregroundStyle(.secondary)
+                    Text("Выберите тариф").font(.scaled(12)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -461,7 +467,7 @@ private struct PayPane: View {
                 }
                 .padding(.vertical, 4)
             }
-            Text("Сколько устройств одновременно. Фиксируется после первой оплаты.")
+            Text("Сколько устройств одновременно. Фиксируется после первого продления.")
                 .font(.scaled(12)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

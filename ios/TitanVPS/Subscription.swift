@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import UIKit
 
@@ -8,6 +9,20 @@ enum Config {
     /// Our User-Agent everywhere: "Titan(IOS/<version>)" (Android and Windows the same way).
     static let userAgent = "Titan(IOS/\((Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0"))"
     static let userAgents = [userAgent, "Xray"]
+    /// The app's public repository (О приложении → Открытый исходный код).
+    static let repository = URL(string: "https://github.com/UnionUnllimited/TitanApp")!
+    /// Our patches to Xray-core and the protocol clients for iOS.
+    static let iosPatches = URL(string: "https://github.com/UnionUnllimited/TitanApp/tree/HEAD/scripts/ios-patches")!
+    /// Политика конфиденциальности: docs/PRIVACY.md of the repository's default branch (a
+    /// placeholder until the site has its own page).
+    static let privacyPolicy = URL(string: "https://github.com/UnionUnllimited/TitanApp/blob/HEAD/docs/PRIVACY.md")!
+    /// Условия использования: Apple's standard EULA.
+    static let terms = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
+    /// Apple ID → Подписки, if StoreKit's own sheet doesn't open.
+    static let manageSubscriptions = URL(string: "https://apps.apple.com/account/subscriptions")!
+    /// Where App Store purchases go to extend the subscription (docs/BACKEND-APPSTORE.md). Nil
+    /// until the bot has it: purchases then stay unfinished and StoreKit hands them over again.
+    static let purchaseEndpoint: URL? = nil
 }
 
 struct SubscriptionInfo: Codable, Equatable {
@@ -43,6 +58,37 @@ struct Subscription: Codable, Equatable {
     let info: SubscriptionInfo
     let servers: [Server]
     let fetchedAt: Date
+}
+
+extension Subscription {
+    /// The key's own part, the same on either host: its UUID (as AccountAPI finds it, lower
+    /// case), else its path.
+    var keyToken: String {
+        if let re = try? NSRegularExpression(pattern: "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
+           let m = re.matches(in: url, range: NSRange(url.startIndex..., in: url)).last,
+           let r = Range(m.range, in: url) {
+            return url[r].lowercased()
+        }
+        let path = URLComponents(string: url)?.path ?? url
+        return path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private var keyDigest: [UInt8] { Array(SHA256.hash(data: Data(keyToken.utf8))) }
+
+    /// The key in a request to support without the key itself: the first 12 hex digits of
+    /// SHA-256 of keyToken (docs/BACKEND-APPSTORE.md).
+    var keyHash: String { keyDigest.prefix(6).map { String(format: "%02x", $0) }.joined() }
+
+    /// App Store purchases with this key carry it (appAccountToken): the bot tells whose a
+    /// renewal or a refund is without the key. SHA-256 of keyToken, its first 16 bytes as a
+    /// UUID of version 8.
+    var appAccountToken: UUID {
+        var b = Array(keyDigest.prefix(16))
+        b[6] = (b[6] & 0x0F) | 0x80
+        b[8] = (b[8] & 0x3F) | 0x80
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                           b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
+    }
 }
 
 struct SubscriptionError: LocalizedError {

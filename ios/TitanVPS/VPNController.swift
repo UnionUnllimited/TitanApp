@@ -445,6 +445,30 @@ final class VPNController: ObservableObject {
         forgetStart()
     }
 
+    /// Выйти and Удалить аккаунт: the VPN off for good and its profile gone from iOS Settings
+    /// (it holds the signed-out key's config, which iOS Settings or on demand could still start).
+    /// A connect under way gives up first (it saves the profile once more on its way out); a
+    /// connect begun after this one (a new key) keeps its profile. iOS asks to allow the VPN
+    /// again at the next connect.
+    func removeProfile() {
+        let wasOn = isOn
+        cancelConnects()
+        let attempt = attempts
+        if wasOn { state = .disconnecting }
+        Task {
+            await loading?.value
+            for _ in 0..<100 where connectsInFlight > 0 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard attempt == attempts, let m = manager else { return }
+            await holdOnDemand(m)
+            m.connection.stopVPNTunnel()
+            guard attempt == attempts else { return }
+            if (try? await m.removeFromPreferences()) != nil, attempt == attempts { manager = nil }
+            update()
+        }
+    }
+
     private static func describe(_ error: Error) -> String {
         let ns = error as NSError
         if ns.domain == NEVPNErrorDomain, ns.code == NEVPNError.configurationReadWriteFailed.rawValue {

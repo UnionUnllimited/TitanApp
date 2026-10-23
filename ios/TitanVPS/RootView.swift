@@ -7,8 +7,12 @@ struct RootView: View {
     @EnvironmentObject var vpn: VPNController
     @AppStorage("autoconnect") private var autoconnect = false
     @AppStorage(TechMode.key) private var techMode = false
+    /// Конфиденциальность accepted (PrivacyNoticeView): nothing of the service is used before.
+    @AppStorage(PrivacyNoticeView.key) private var privacyAccepted = false
     @State private var tab: Tab = .home
     @State private var splash = true
+    /// A titanvps:// link opened before Конфиденциальность was accepted: added right after.
+    @State private var pendingLink: URL?
     /// The app went to the background: back in it is an opening for Автоподключение.
     @State private var wasInBackground = false
     /// The phone's text size: the screens are built again when it changes (Font.scaled).
@@ -20,6 +24,9 @@ struct RootView: View {
             Palette.background.ignoresSafeArea()
             if splash {
                 SplashView()
+            } else if !privacyAccepted {
+                PrivacyNoticeView(onAccept: acceptPrivacy)
+                    .transition(.opacity)
             } else if store.subscription == nil {
                 WelcomeView()
             } else {
@@ -57,9 +64,11 @@ struct RootView: View {
             // Пункт управления's toggle and the Live Activity follow the VPN.
             LiveActivityController.vpnChanged(state, server: store.selected?.name, paused: store.vpnPaused)
         }
-        // A tap on a reminder: Подписка.
-        .onReceive(NotificationCenter.default.publisher(for: Reminders.openSubscription)) { _ in
-            if store.subscription != nil { tab = .subscription }
+        // A tap on a reminder: Подписка; on the bypass traffic one, Тарифы over it.
+        .onReceive(NotificationCenter.default.publisher(for: Reminders.openSubscription)) { note in
+            guard store.subscription != nil else { return }
+            tab = .subscription
+            if (note.object as? String) == Reminders.trafficId, privacyAccepted { store.paywall = .traffic }
         }
         .onChange(of: scenePhase) { phase in
             // Left mid-ping (or mid-check): those stop and the VPN comes back now, in background
@@ -80,7 +89,7 @@ struct RootView: View {
             if opened, !splash { Task { await autoconnectOnOpen() } }
             // After a while: the subscription again (renewed in the bot meanwhile?), which also
             // moves the reminders.
-            guard let sub = store.subscription, Date().timeIntervalSince(sub.fetchedAt) > 1800 else { return }
+            guard privacyAccepted, let sub = store.subscription, Date().timeIntervalSince(sub.fetchedAt) > 1800 else { return }
             Task { await store.refresh(quiet: true) }
         }
         .task {
@@ -93,24 +102,51 @@ struct RootView: View {
             // Opened later: then Автоподключение (scenePhase above).
             if inBackground { wasInBackground = true }
             withAnimation { splash = false }
+            // Nothing of the service before Конфиденциальность is accepted (acceptPrivacy then).
+            guard privacyAccepted else { return }
             await store.refresh(quiet: true)
             if !inBackground { await autoconnectOnOpen() }
         }
         // Технический режим switched: a bypass server's on demand follows it (Wi-Fi or not).
         .onChange(of: techMode) { _ in Task { await vpn.applyOnDemandRules() } }
         // titanvps://import/<key>, titanvps://add?url=<key> (same as Android): add and connect.
+        // Before Конфиденциальность is accepted it waits for that.
         .onOpenURL { url in
-            Task {
-                guard await store.activate(url.absoluteString) else { return }
-                tab = .home
-                // Coming back after a ping: that reconnect goes over to the pick itself.
-                if let s = store.selected, !store.blockedOnWifi(s), !store.resumingAfterPing {
-                    if vpn.isOn { await vpn.switchTo(s) } else { await vpn.connect(s) }
-                }
-            }
+            if privacyAccepted { openLink(url) } else { pendingLink = url }
         }
         .alert(store.message ?? "", isPresented: Binding(get: { store.message != nil }, set: { if !$0 { store.message = nil } })) {
             Button("OK", role: .cancel) {}
+        }
+        // Тарифы: from Главная, Подписка and the «Добавить ГБ» buttons.
+        .sheet(item: $store.paywall) { reason in
+            PaywallView(reason: reason).environmentObject(store)
+        }
+    }
+
+    private func openLink(_ url: URL) {
+        Task {
+            guard await store.activate(url.absoluteString) else { return }
+            tab = .home
+            // Coming back after a ping: that reconnect goes over to the pick itself.
+            if let s = store.selected, !store.blockedOnWifi(s), !store.resumingAfterPing {
+                if vpn.isOn { await vpn.switchTo(s) } else { await vpn.connect(s) }
+            }
+        }
+    }
+
+    /// Принимаю и продолжить: the key entry (or the tabs) next, and what waited for it.
+    private func acceptPrivacy() {
+        Haptics.success()
+        withAnimation(.easeInOut(duration: 0.35)) { privacyAccepted = true }
+        if let url = pendingLink {
+            pendingLink = nil
+            openLink(url)
+        } else {
+            // What the launch held back: a saved key's subscription, then Автоподключение.
+            Task {
+                await store.refresh(quiet: true)
+                await autoconnectOnOpen()
+            }
         }
     }
 
@@ -120,7 +156,7 @@ struct RootView: View {
         GeometryReader { geo in
             VStack(spacing: 0) {
                 TabView(selection: $tab) {
-                    HomeView(openSubscription: { tab = .subscription }, openSettings: { tab = .profile })
+                    HomeView(openSettings: { tab = .profile })
                         .toolbar(.hidden, for: .tabBar)
                         .tabItem { Label("Главная", systemImage: "house.fill") }.tag(Tab.home)
                     SubscriptionView()
@@ -142,10 +178,10 @@ struct RootView: View {
 
     /// Автоподключение: on each time the app is opened, at launch or back from the background
     /// (Не отключать VPN keeps it on after that). Not while it is on, going off, being connected
-    /// or paused for a ping; the profile's own status first, as the app's may lag after a
-    /// suspension (iOS may have brought it back meanwhile).
+    /// or paused for a ping, nor before Конфиденциальность is accepted; the profile's own status
+    /// first, as the app's may lag after a suspension (iOS may have brought it back meanwhile).
     private func autoconnectOnOpen() async {
-        guard autoconnect, !vpn.isOn, !(await TunnelSwitch.isOn()) else { return }
+        guard autoconnect, privacyAccepted, !vpn.isOn, !(await TunnelSwitch.isOn()) else { return }
         guard autoconnect, !vpn.isOn, vpn.state != .disconnecting, !vpn.connectsUnderWay,
               !store.pingBusy, !store.vpnPaused, let s = store.selected, !store.blockedOnWifi(s) else { return }
         await vpn.connect(s)
@@ -231,6 +267,95 @@ struct SplashView: View {
             }
         }
         .onAppear { withAnimation(.spring(response: 0.6, dampingFraction: 0.72)) { appeared = true } }
+    }
+}
+
+/// Конфиденциальность: once, after the splash and before anything else (App Review 5.4: what a
+/// VPN app does with the traffic, said before the service is used). Accepted, it never shows
+/// again; until then no key is added and nothing connects (RootView).
+struct PrivacyNoticeView: View {
+    /// Accepted once (UserDefaults).
+    nonisolated static let key = "privacyAccepted"
+    let onAccept: () -> Void
+    @Environment(\.openURL) private var openURL
+    /// Read so that a text size change redraws it (Font.scaled).
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var appeared = false
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 22) {
+                VStack(spacing: 12) {
+                    GlowingLogo(size: 96)
+                    Text("Конфиденциальность").font(.scaled(30, weight: .heavy))
+                        .foregroundStyle(Palette.logoGradient)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                    Text("Прежде чем начать — как Titan VPS обращается с вашими данными")
+                        .font(.scaled(15))
+                        .multilineTextAlignment(.center).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 36)
+                .opacity(appeared ? 1 : 0)
+                .offset(y: appeared ? 0 : 16)
+
+                points
+                    .opacity(appeared ? 1 : 0)
+                    .offset(y: appeared ? 0 : 24)
+
+                VStack(spacing: 12) {
+                    Button(action: onAccept) {
+                        Label("Принимаю и продолжить", systemImage: "checkmark.shield.fill")
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    Button { openURL(Config.privacyPolicy) } label: {
+                        Text("Политика конфиденциальности")
+                            .font(.scaled(15, weight: .semibold))
+                            .foregroundStyle(Palette.primary)
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(PressableStyle())
+                }
+                .opacity(appeared ? 1 : 0)
+                .offset(y: appeared ? 0 : 32)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 32)
+            .frame(maxWidth: 480)
+            .frame(maxWidth: .infinity)
+        }
+        .background(AuroraBackground())
+        .onAppear { withAnimation(.spring(response: 0.7, dampingFraction: 0.8).delay(0.05)) { appeared = true } }
+    }
+
+    private var points: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            point("hand.raised.fill", "Titan VPS не собирает, не хранит и не продаёт ваши личные данные и историю посещений.")
+            point("network", "Трафик идёт через VPN-серверы только для того, чтобы попасть в интернет.")
+            point("eye.slash.fill", "В приложении нет аналитики и трекеров.")
+            point("key.fill", "Ключ подписки хранится только на этом устройстве.")
+            point("iphone", "Для лимита устройств сервер подписки получает только модель устройства, версию iOS и идентификатор Titan VPS на этом устройстве.")
+            point("checkmark.shield.fill", "Нажимая «Принимаю», вы соглашаетесь с этим и разрешаете Titan VPS добавить VPN-конфигурацию на устройство. iOS спросит разрешение при первом подключении.")
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.18), radius: 24, y: 12)
+    }
+
+    private func point(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.scaled(15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Palette.accentGradient, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .accessibilityHidden(true)
+            Text(text).font(.scaled(15)).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
