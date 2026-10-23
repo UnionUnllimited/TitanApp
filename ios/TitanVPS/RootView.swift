@@ -194,6 +194,10 @@ struct TitanTabBar: View {
                 .buttonStyle(PressableStyle(scale: 0.92))
                 .accessibilityLabel(item.title)
                 .accessibilityAddTraits(on ? .isSelected : [])
+                // At accessibility text sizes a long press shows the item large, as the system bar did.
+                .accessibilityShowsLargeContentViewer {
+                    Label(item.title, systemImage: item.icon)
+                }
             }
         }
         // On an iPad the items stay together in the middle.
