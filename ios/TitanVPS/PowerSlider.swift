@@ -47,6 +47,11 @@ struct PowerSlider: View {
     private let inset: CGFloat = 6
     /// The green gradient's own colour, for the glow while on.
     private static let onGlow = Color(UIColor(hex: 0x16A34A))
+    /// Off: the knob red, as it is green while on.
+    private static let red = Color(UIColor(hex: 0xEF4444))
+    private static let offGlow = Color(UIColor(hex: 0xDC2626))
+    private static let offGradient = LinearGradient(colors: [red, offGlow, Color(UIColor(hex: 0xC81E1E))],
+                                                    startPoint: .topLeading, endPoint: .bottomTrailing)
 
     private var isOn: Bool { pending ?? (phase == .on || phase == .connecting) }
     private var busy: Bool { phase == .connecting || phase == .disconnecting }
@@ -120,20 +125,30 @@ struct PowerSlider: View {
         Capsule()
             .fill(Palette.track)
             .overlay(Capsule().fill(Palette.green.opacity(0.16 * Double(progress))))
+            .overlay(Capsule().fill(Self.red.opacity(busy || locked ? 0 : 0.14 * Double(1 - progress))))
             .shimmer(busy && !locked, tint: Palette.primary, duration: 1.2)
-            .overlay(Capsule().stroke(Palette.outline.opacity(0.7), lineWidth: 1))
+            .overlay(Capsule().stroke(rim, lineWidth: 1.5))
     }
 
-    /// A soft light around the slider: green while on, blue while it connects (breathing slowly)
-    /// or goes off, a faint blue while off; none while locked. A shadow of a capsule under the
-    /// track, so only the light outside it shows. The radius is about the blur's sigma: at 9 the
-    /// light has faded out 22 pt away, where a ScrollView's edge (it clips on iOS 16) may be; at
-    /// 18 that edge cut it in a line under the header and beside the iPad's list.
+    /// The track's edge in the state's colour: green on, red off, blue on the way.
+    private var rim: Color {
+        if locked { return Palette.outline.opacity(0.7) }
+        if busy { return Palette.primary.opacity(0.5) }
+        return isOn ? Palette.green.opacity(0.45) : Self.red.opacity(0.5)
+    }
+
+    /// A soft light around the slider, breathing slowly: green while on, red while off, blue on
+    /// the way; none while locked. A shadow of a capsule under the track, so only the light
+    /// outside it shows. The radius is about the blur's sigma: at 9 the light has faded out 22 pt
+    /// away, where a ScrollView's edge (it clips on iOS 16) may be; at 18 that edge cut it in a
+    /// line under the header and beside the iPad's list.
     private var glow: some View {
-        let color = phase == .on ? Self.onGlow : Palette.primary
-        let strength: Double = locked ? 0 : phase == .on ? 0.5 : busy ? 0.45 : 0.2
-        let breathes = busy && !locked && !reduceMotion
-        return TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !breathes)) { ctx in
+        let color = busy ? Palette.primary : isOn ? Self.onGlow : Self.offGlow
+        let strength: Double = locked ? 0 : busy ? 0.45 : isOn ? 0.5 : 0.4
+        // Still with Reduce Motion.
+        let breathes = !locked && !reduceMotion
+        // 20 frames a second: a slow breath needs no more, and it runs all the time on Главная.
+        return TimelineView(.animation(minimumInterval: 1.0 / 20, paused: !breathes)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3600)
             // One breath in about 2.5 s, between half and full strength.
             let breath = breathes ? 0.75 + 0.25 * sin(t * 2.5) : 1
@@ -170,9 +185,11 @@ struct PowerSlider: View {
     private func knob(progress: CGFloat) -> some View {
         let lit = progress > 0.5
         return ZStack {
+            // Off: red (grey while locked for a ping); the lit gradient fades in over it.
             Capsule()
-                .fill(Palette.knob)
-                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                .fill(locked ? AnyShapeStyle(Palette.knob) : AnyShapeStyle(Self.offGradient))
+                .shadow(color: locked ? .black.opacity(0.18) : Self.offGlow.opacity(0.45 * Double(1 - progress)),
+                        radius: locked ? 6 : 10, y: locked ? 3 : 4)
             Capsule()
                 .fill(phase == .connecting ? Palette.accentGradient : Palette.greenGradient)
                 .opacity(Double(progress))
@@ -182,7 +199,7 @@ struct PowerSlider: View {
                     Image(systemName: "lock.fill")
                     Text(lockedText)
                 } else if busy {
-                    ProgressView().tint(lit ? Color.white : Palette.primary)
+                    ProgressView().tint(Color.white)
                     Text(phase == .connecting ? "Подключение" : "Отключение")
                 } else if lit {
                     Image(systemName: "checkmark.shield.fill")
@@ -193,7 +210,7 @@ struct PowerSlider: View {
                 }
             }
             .font(.scaled(22, weight: .bold))
-            .foregroundStyle(lit ? Color.white : Color.primary)
+            .foregroundStyle(locked && !lit ? Color.primary : Color.white)
             .lineLimit(1)
             .minimumScaleFactor(0.6)
             .padding(.horizontal, 12)
