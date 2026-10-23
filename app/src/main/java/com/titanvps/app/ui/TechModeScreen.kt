@@ -57,6 +57,7 @@ import com.titanvps.app.data.ServerGroups
 import com.titanvps.app.data.Subscription
 import com.titanvps.app.data.UserAgent
 import com.titanvps.app.ui.theme.ProvideTitanTextScale
+import com.titanvps.app.vpn.BypassReturn
 import com.titanvps.app.vpn.VpnState
 import com.titanvps.app.vpn.VpnStatus
 import kotlinx.coroutines.Dispatchers
@@ -154,6 +155,9 @@ internal fun TechModeScreen(
     )
     val bypassCount = ServerGroups.split(sub.servers).toMap()[ServerGroups.Group.BYPASS].orEmpty().size
     val selectedGroup = selected?.let { ServerGroups.groupOf(it, sub.servers) }
+    // Read on every redraw: a switch changes vpnState, which redraws this screen.
+    val returnTo = BypassReturn.load(context)?.takeIf { it.bypassId == selected?.id }
+        ?.let { saved -> sub.servers.firstOrNull { it.id == saved.returnTo } }
     val bypassRows = listOf(
         "Обходы сейчас" to (if (onMobile) "разрешены (мобильный интернет)" else "разрешены на Wi‑Fi (технический режим)"),
         "Серверов-обходов" to "$bypassCount",
@@ -161,10 +165,13 @@ internal fun TechModeScreen(
         "Автопереход на обходы" to (if (autoBypass) "включён" else "выключен"),
         "Слежение за белыми списками" to when {
             vpnState !is VpnState.Connected -> "не работает (VPN выключен)"
-            selectedGroup == ServerGroups.Group.BYPASS -> "не нужно (уже на обходе)"
-            else -> "работает: каждые 30 с на мобильном, при 2 неответах сервера и открытых ya.ru / vk.com / gosuslugi.ru — " +
+            selectedGroup == ServerGroups.Group.BYPASS ->
+                "на обходе: каждые 2 мин на мобильном — открываются ли зарубежные сайты напрямую и отвечает ли обычный сервер"
+            else -> "работает: каждые 30 с на мобильном; 2 неответа сервера подряд, молчат и другие серверы, " +
+                "ya.ru / vk.com / gosuslugi.ru открываются, а зарубежные сайты нет, и так же через 20 с — " +
                 (if (autoBypass) "переход на обход" else "уведомление")
         },
+        "Возврат с обхода" to (returnTo?.let { "на «${it.name.trim()}», когда ограничения снимут" } ?: "нет"),
     )
     val accessRows = TechChecks.ACCESS_URLS.map { it.removePrefix("https://") to (access[it] ?: "—") }
     val serverRows = endpoints.map { "${it.label} (${it.protocol}, ${it.host}:${it.port})" to (tcp[it.key] ?: "—") }

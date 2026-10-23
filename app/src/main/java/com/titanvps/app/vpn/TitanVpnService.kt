@@ -85,6 +85,22 @@ class TitanVpnService : VpnService() {
 
     private var watcherJob: Job? = null
     private val watcher by lazy { WhitelistWatcher(this) }
+    /**
+     * On a bypass: waits for the restrictions to end ([watchReturn]). A core restart on the
+     * same bypass keeps it, with its timer and checks in a row; another server or a stop ends it.
+     */
+    private var returnJob: Job? = null
+    /** The bypass and the server list [returnJob] watches with. */
+    private var returnFor: String? = null
+    private var returnAll: List<Server> = emptyList()
+    /** Our own move to a bypass or back: outside the watchers, as the switch cancels them. */
+    @Volatile private var bypassJob: Job? = null
+    /** The way back from a bypass was offered on this connection (once per connection). */
+    @Volatile private var returnOffered = false
+    /** The bypass the «Вернуться на «X»» offer on screen is for; null: none shown. */
+    @Volatile private var offerFor: String? = null
+    /** How often we switch to a bypass on our own; saved by [BypassReturn]. */
+    private val policy by lazy { BypassReturn.policy(this) }
 
     /** Naive / Mieru client of the current server, if it is one. */
     private var plugin: PluginProcess? = null
@@ -136,6 +152,33 @@ class TitanVpnService : VpnService() {
                 }
                 return START_STICKY
             }
+            // «Вернуться на «X»» from the notification: back from a bypass to that regular server.
+            ACTION_RETURN -> {
+                // An action tap doesn't dismiss its notification.
+                cancelReturnNote()
+                // The VPN went off since the offer: the tap is moot, it doesn't turn it on.
+                if (tun == null) {
+                    val st = VpnStatus.state.value
+                    if (st is VpnState.Disconnected || st is VpnState.Error) { stopSelf(startId); return START_NOT_STICKY }
+                    return START_STICKY
+                }
+                showStatus(status, statusServer, statusSince)
+                val gen = generation.get()
+                val id = intent?.getStringExtra(EXTRA_SERVER)
+                val from = intent?.getStringExtra(EXTRA_FROM)
+                scope.launch {
+                    lock.withLock {
+                        if (!stillOn(gen)) return@withLock
+                        val all = TitanApp.get(this@TitanVpnService).repository.subscription.value?.servers.orEmpty()
+                        // Only from the bypass the offer was for: after another pick the tap is moot.
+                        val on = running ?: return@withLock
+                        if (!isBypass(on, all) || (from != null && on.id != from)) return@withLock
+                        val target = all.firstOrNull { it.id == id && !isBypass(it, all) } ?: regularServer(all)
+                        if (target != null) returnToRegular(target, auto = false)
+                    }
+                }
+                return START_STICKY
+            }
             // The status notification was swiped away (Android 14+ lets users): back while on.
             ACTION_RESHOW -> {
                 // Off by hand (perhaps still on its way): not shown again, the service ends after it.
@@ -149,6 +192,7 @@ class TitanVpnService : VpnService() {
                 // Off by hand: nothing queued may turn the VPN back on, and keep-alive lets it be.
                 KeepAlive.setWanted(this, false)
                 cancelQueued()
+                forgetReturn()
                 warnAlwaysOn()
                 stopJob = scope.launch { lock.withLock { stopVpn() }; stopSelf(startId) }
                 return START_NOT_STICKY
@@ -266,6 +310,8 @@ class TitanVpnService : VpnService() {
                 }
                 clearLogs()
             }
+            // A new connection: a bypass may offer the way back once more.
+            returnOffered = false
             GeoFiles.prepare(this, File(app.assetDir), all.map { it.xrayJson })
             launchCore(target, all, null)
 
@@ -358,6 +404,8 @@ class TitanVpnService : VpnService() {
      */
     private fun launchCore(server: Server, all: List<Server>, network: Network?) {
         val pfd = tun ?: throw StartRefused("Нет разрешения на VPN")
+        // The way back's checks belong to one bypass: kept over its restarts only.
+        if (returnFor != server.id) stopReturnWatch()
         launchedAt = SystemClock.elapsedRealtime()
         // Resolver for "direct" traffic: the carrier's/router's own DNS (like Happ), since
         // foreign resolvers such as 1.1.1.1 are often blocked on Russian mobile networks.
@@ -382,12 +430,28 @@ class TitanVpnService : VpnService() {
         }
         VpnStatus.localProxy = localProxy
         running = server
+        // The way back belongs to the bypass we moved to: any other server (our way back, the
+        // user's pick, Wi-Fi's regular one) drops it.
+        val saved = BypassReturn.load(this)
+        if (saved != null && saved.bypassId != server.id) {
+            BypassReturn.clear(this)
+            // «Вернёмся на обычный сервер» goes with it. Not for a regular server: Wi-Fi's
+            // «Обходы недоступны на Wi-Fi» may have just been shown there.
+            if (isBypass(server, all)) getSystemService(NotificationManager::class.java).cancel(ALERT_ID)
+        }
+        // So does the offer to go back (a restart of the same bypass keeps it).
+        val offeredOn = offerFor
+        if (offeredOn != null && offeredOn != server.id) cancelReturnNote()
         startWatcher(server)
         watchWifi(server, all)
+        watchReturn(server, all)
         watchPlugin()
     }
 
-    /** Stops the core and its plugin; the tun stays. Under [lock] (or in onDestroy). */
+    /**
+     * Stops the core and its plugin; the tun stays, so do the way back's checks
+     * ([watchReturn]: direct, not through the core). Under [lock] (or in onDestroy).
+     */
     private fun stopCore() {
         wifiJob?.cancel()
         wifiJob = null
@@ -719,7 +783,8 @@ class TitanVpnService : VpnService() {
             // Separate job: restarting the VPN cancels this one.
             scope.launch {
                 lock.withLock {
-                    if (!stillOn(gen)) return@withLock
+                    // Off this bypass meanwhile (our way back, the user's pick): nothing to undo.
+                    if (!stillOn(gen) || running?.id != server.id) return@withLock
                     TitanApp.get(this@TitanVpnService).repository.select(target.id)
                     startVpn(revive = false)
                     notifyWifiSwitch(target.name)
@@ -756,39 +821,171 @@ class TitanVpnService : VpnService() {
         return (v4?.hostAddress ?: "77.88.8.8") + ":53"
     }
 
-    /** Watches for mobile whitelist mode while on a regular server. */
+    /**
+     * Watches for mobile whitelist mode while on a regular server. [BypassPolicy] decides
+     * whether we switch on our own, only offer it, or look again later (just back from a
+     * bypass; our own switches used up this hour, then with the offer meanwhile).
+     */
     private fun startWatcher(server: Server) {
         watcherJob?.cancel()
         val all = TitanApp.get(this).repository.subscription.value?.servers ?: return
         watcherJob = scope.launch {
-            if (!watcher.awaitWhitelist(server, all)) return@launch
-            if (TitanApp.get(this@TitanVpnService).settings.autoBypass.value) {
-                val gen = generation.get()
-                val askedAt = SystemClock.elapsedRealtime()
-                // Separate job: restarting the VPN cancels this watcher. The pings run before the lock.
-                scope.launch {
-                    val best = watcher.bestBypass(all) ?: return@launch
-                    lock.withLock {
-                        if (!stillOn(gen)) return@withLock
-                        // Another server picked while measuring (by hand, ‹ ›): it stays.
-                        if (TitanApp.get(this@TitanVpnService).repository.selectedServer()?.id != server.id) return@withLock
-                        // A connect, switch or restart since: that core's own watcher looks again.
-                        if (running != null && launchedAt > askedAt) return@withLock
-                        switchToBypass(best, auto = true)
+            // Capped: the offer once, not on every look.
+            var offered = false
+            while (true) {
+                if (!watcher.awaitWhitelist(server, all)) return@launch
+                val auto = TitanApp.get(this@TitanVpnService).settings.autoBypass.value
+                when (val decision = policy.onWhitelist(System.currentTimeMillis(), auto)) {
+                    BypassPolicy.Decision.Switch -> {
+                        val gen = generation.get()
+                        val askedAt = SystemClock.elapsedRealtime()
+                        // Separate job: restarting the VPN cancels this watcher. The pings run before the lock.
+                        bypassJob = scope.launch {
+                            val best = watcher.bestBypass(all) ?: return@launch
+                            lock.withLock {
+                                if (!stillOn(gen) || running?.id != server.id) return@withLock
+                                // Another server picked while measuring (by hand, ‹ ›): it stays.
+                                if (TitanApp.get(this@TitanVpnService).repository.selectedServer()?.id != server.id) return@withLock
+                                // A connect, switch or restart since: that core's own watcher looks again.
+                                if (launchedAt > askedAt) return@withLock
+                                // Wi-Fi came while measuring: no bypass there.
+                                if (!TitanApp.get(this@TitanVpnService).network.current()) return@withLock
+                                switchToBypass(best, auto = true)
+                            }
+                        }
+                        return@launch
                     }
+                    // «Автопереход на обходы» off: only the offer, nothing more on this connection.
+                    BypassPolicy.Decision.Offer -> {
+                        notifyWhitelist(null)
+                        return@launch
+                    }
+                    // Our own switches used up this hour: the offer now, our own switch once the hour allows.
+                    is BypassPolicy.Decision.Capped -> {
+                        if (!offered) notifyWhitelist(null)
+                        offered = true
+                        delay(decision.retryInMs)
+                    }
+                    is BypassPolicy.Decision.Wait -> delay(decision.ms)
                 }
-            } else {
-                notifyWhitelist(null)
             }
         }
     }
 
-    /** Moves to [best], the fastest bypass server (measured before taking [lock]). Under [lock]. */
+    /**
+     * Moves to [best], the fastest bypass server (measured before taking [lock]), and keeps
+     * the way back: the regular server we leave. [auto]: our own switch, counted by [policy].
+     * Under [lock].
+     */
     private fun switchToBypass(best: Server, auto: Boolean) {
-        TitanApp.get(this).repository.select(best.id)
+        val app = TitanApp.get(this)
+        val all = app.repository.subscription.value?.servers.orEmpty()
+        val from = running ?: app.repository.selectedServer()
+        // From one bypass to another: the way back stays the same.
+        val returnTo = from?.takeUnless { isBypass(it, all) }?.id
+            ?: BypassReturn.load(this)?.takeIf { it.bypassId == from?.id }?.returnTo
+        if (returnTo != null) BypassReturn.save(this, returnTo, best.id)
+        app.repository.select(best.id)
         startVpn(revive = false)
-        if (auto) notifyWhitelist(best.name)
-        else getSystemService(NotificationManager::class.java).cancel(ALERT_ID)
+        val nm = getSystemService(NotificationManager::class.java)
+        if (running?.id != best.id) {
+            // Wi-Fi gave a regular server instead (its notice stays) or the VPN went off:
+            // no switch to count or tell about.
+            if (tun == null) { nm.cancel(ALERT_ID); cancelReturnNote() }
+            return
+        }
+        cancelReturnNote()
+        if (auto) {
+            val now = System.currentTimeMillis()
+            policy.recordSwitch(now)
+            BypassReturn.savePolicy(this, policy, now)
+            notifyWhitelist(best.name)
+        } else {
+            nm.cancel(ALERT_ID)
+        }
+    }
+
+    /**
+     * On a bypass server: once the restrictions end ([WhitelistWatcher.awaitLifted]) back to
+     * the regular server the app moved the user from (another one if that one is down), or
+     * (with «Автопереход на обходы» off) an offer to. A bypass the user picked himself gets
+     * one offer per connection, never a switch. Mobile data only: on Wi-Fi it just waits.
+     */
+    private fun watchReturn(server: Server, all: List<Server>) {
+        // A core restart on the same bypass (a new network, a plugin exit): the checks go on
+        // with their timer and checks in a row, so restarts never keep the user on paid GB.
+        if (returnJob?.isActive == true && returnFor == server.id && returnAll == all) return
+        stopReturnWatch()
+        if (!isBypass(server, all)) return
+        val saved = BypassReturn.load(this)?.takeIf { it.bypassId == server.id }
+        // The user's own pick of a free bypass: it spends no GB.
+        if (saved == null && !ServerGroups.isLimited(server)) return
+        // Offered already and no way back of our own to follow (also after a restart): nothing to check.
+        val autoNow = TitanApp.get(this).settings.autoBypass.value
+        val next = BypassPolicy.onLifted(movedByUs = saved != null, autoBypass = autoNow, offered = returnOffered)
+        if (next == BypassPolicy.Back.NONE) return
+        val target = saved?.let { s -> all.firstOrNull { it.id == s.returnTo } } ?: regularServer(all) ?: return
+        returnFor = server.id
+        returnAll = all
+        returnJob = scope.launch {
+            // [target], or another regular server if that one is down.
+            val back = watcher.awaitLifted(target, all)
+            val auto = TitanApp.get(this@TitanVpnService).settings.autoBypass.value
+            when (BypassPolicy.onLifted(movedByUs = saved != null, autoBypass = auto, offered = returnOffered)) {
+                BypassPolicy.Back.RETURN -> {
+                    val gen = generation.get()
+                    // Separate job: switching cancels this one.
+                    bypassJob = scope.launch {
+                        lock.withLock {
+                            if (!stillOn(gen) || running?.id != server.id) return@withLock
+                            returnToRegular(back, auto = true)
+                        }
+                    }
+                }
+                BypassPolicy.Back.OFFER -> {
+                    returnOffered = true
+                    notifyReturn(back, if (saved != null) ReturnNote.OFFER else ReturnNote.OFFER_OWN, server.id)
+                }
+                BypassPolicy.Back.NONE -> Unit
+            }
+        }
+    }
+
+    /** From a bypass back to [target], a regular server. [auto]: our own way back. Under [lock]. */
+    private fun returnToRegular(target: Server, auto: Boolean) {
+        BypassReturn.clear(this)
+        if (auto) {
+            val now = System.currentTimeMillis()
+            policy.recordReturn(now)
+            BypassReturn.savePolicy(this, policy, now)
+        }
+        TitanApp.get(this).repository.select(target.id)
+        startVpn(revive = false)
+        val nm = getSystemService(NotificationManager::class.java)
+        // «Мобильный интернет ограничен» is over.
+        nm.cancel(ALERT_ID)
+        if (auto && running?.id == target.id) notifyReturn(target, ReturnNote.RETURNED) else cancelReturnNote()
+    }
+
+    /** The way back's checks end: another server, or the VPN goes off. Under [lock] (or in onDestroy). */
+    private fun stopReturnWatch() {
+        returnJob?.cancel()
+        returnJob = null
+        returnFor = null
+        returnAll = emptyList()
+    }
+
+    /** Off by hand: no way back is kept; its offer and «Вернёмся на обычный сервер» go. */
+    private fun forgetReturn() {
+        BypassReturn.clear(this)
+        getSystemService(NotificationManager::class.java).cancel(ALERT_ID)
+        cancelReturnNote()
+    }
+
+    /** The notification about the end of the restrictions goes, the offer with it. */
+    private fun cancelReturnNote() {
+        offerFor = null
+        getSystemService(NotificationManager::class.java).cancel(RETURN_ID)
     }
 
     /** [switchedTo] = null: offer a switch; otherwise tell which bypass server we moved to. */
@@ -811,9 +1008,55 @@ class TitanVpnService : VpnService() {
             builder.setContentText("Похоже, включены белые списки. Переключитесь на «Обходы».")
                 .addAction(0, "Переключить на обход", switch)
         } else {
-            builder.setContentText("Переключились на «$switchedTo»")
+            val text = "Переключились на «${switchedTo.trim()}». Вернёмся на обычный сервер, когда ограничения снимут"
+            builder.setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text))
         }
         nm.notify(ALERT_ID, builder.build())
+    }
+
+    /** What the notification about the end of the restrictions says. */
+    private enum class ReturnNote {
+        /** We went back on our own. */
+        RETURNED,
+        /** We moved the user to the bypass; «Автопереход на обходы» is off: an offer. */
+        OFFER,
+        /** The user picked the bypass himself: an offer. */
+        OFFER_OWN,
+    }
+
+    /** [bypassId]: the bypass an offer is for; a tap on another server is moot. */
+    private fun notifyReturn(to: Server, note: ReturnNote, bypassId: String? = null) {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.cancel(ALERT_ID)
+        if (!TitanApp.get(this).settings.notifications.value) return
+        nm.createNotificationChannel(
+            NotificationChannel(ALERT_CHANNEL_ID, "Ограничения мобильной сети", NotificationManager.IMPORTANCE_HIGH)
+        )
+        val name = to.name.trim()
+        val (title, text) = when (note) {
+            ReturnNote.RETURNED -> "Ограничения сняты" to "Вернулись на «$name». Обходы больше не тратят ГБ"
+            ReturnNote.OFFER -> "Ограничения сняты" to "Обычные серверы снова работают. Обходы тратят ГБ"
+            ReturnNote.OFFER_OWN -> "Обычные серверы снова работают" to "Обходы тратят ГБ. Вернуться на «$name»?"
+        }
+        val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val builder = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_shield)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+        if (note != ReturnNote.RETURNED) {
+            val back = PendingIntent.getService(
+                this, 8,
+                Intent(this, TitanVpnService::class.java).setAction(ACTION_RETURN)
+                    .putExtra(EXTRA_SERVER, to.id).putExtra(EXTRA_FROM, bypassId),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            builder.addAction(0, "Вернуться на «$name»", back)
+        }
+        offerFor = if (note == ReturnNote.RETURNED) null else bypassId
+        nm.notify(RETURN_ID, builder.build())
     }
 
     /** Full stop: the core, the tun and everything queued. Under [lock] (or in onDestroy). */
@@ -827,6 +1070,9 @@ class TitanVpnService : VpnService() {
         updateJob?.cancel()
         updateJob = null
         pluginDeaths = 0
+        bypassJob?.cancel()
+        bypassJob = null
+        stopReturnWatch()
         unwatchNetwork()
         // «Переключить на обход» belongs to the session that ended.
         runCatching { getSystemService(NotificationManager::class.java).cancel(ALERT_ID) }
@@ -846,6 +1092,7 @@ class TitanVpnService : VpnService() {
         // Another VPN took over or the user revoked permission: off, and it stays off.
         KeepAlive.setWanted(this, false)
         cancelQueued()
+        forgetReturn()
         scope.launch { lock.withLock { stopVpn() }; stopSelf() }
     }
 
@@ -1015,6 +1262,10 @@ class TitanVpnService : VpnService() {
         private const val ACTION_START = "com.titanvps.app.START"
         private const val ACTION_STOP = "com.titanvps.app.STOP"
         private const val ACTION_SWITCH_BYPASS = "com.titanvps.app.SWITCH_BYPASS"
+        /** Back from a bypass ([EXTRA_FROM]) to the regular server [EXTRA_SERVER]. */
+        private const val ACTION_RETURN = "com.titanvps.app.RETURN"
+        private const val EXTRA_SERVER = "server"
+        private const val EXTRA_FROM = "from"
         private const val ACTION_RESHOW = "com.titanvps.app.RESHOW"
         private const val ACTION_PREV = "com.titanvps.app.PREV"
         private const val ACTION_NEXT = "com.titanvps.app.NEXT"
@@ -1024,6 +1275,8 @@ class TitanVpnService : VpnService() {
         private const val UPDATE_CHANNEL_ID = "updates"
         private const val UPDATE_ID = 3
         private const val ALERT_ID = 2
+        /** «Ограничения сняты» and the offers to go back from a bypass. */
+        private const val RETURN_ID = 4
         private const val CHANNEL_ID = "vpn_ongoing"
         /** Never to be used again: a channel created under a deleted id gets its old settings back. */
         private val OLD_CHANNEL_IDS = arrayOf("vpn", "vpn_status")
