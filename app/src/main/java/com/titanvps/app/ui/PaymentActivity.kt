@@ -336,10 +336,14 @@ class PaymentActivity : ComponentActivity() {
             return true
         }
         dialog.value?.result?.cancel()
-        val host = url?.let { Uri.parse(it).host }.orEmpty()
-        dialog.value = PageDialog(kind, host.ifEmpty { "Оплата" }, message.orEmpty(), text.orEmpty(), result)
+        // A frame without a host (about:blank, srcdoc, blob:) speaks for the page it is in;
+        // never under the app's own «Оплата», so a page's prompt can't pass for the app's.
+        val host = hostOf(url) ?: hostOf(web.url) ?: "Страница"
+        dialog.value = PageDialog(kind, host, message.orEmpty(), text.orEmpty(), result)
         return true
     }
+
+    private fun hostOf(url: String?): String? = url?.let { Uri.parse(it).host }?.takeIf { it.isNotEmpty() }
 
     private fun answer(d: PageDialog, ok: Boolean, text: String) {
         if (dialog.value !== d) return

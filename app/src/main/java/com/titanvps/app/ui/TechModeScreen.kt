@@ -56,6 +56,7 @@ import com.titanvps.app.data.Server
 import com.titanvps.app.data.ServerGroups
 import com.titanvps.app.data.Subscription
 import com.titanvps.app.data.UserAgent
+import com.titanvps.app.ui.theme.ProvideTitanTextScale
 import com.titanvps.app.vpn.VpnState
 import com.titanvps.app.vpn.VpnStatus
 import kotlinx.coroutines.Dispatchers
@@ -452,23 +453,26 @@ internal fun TechCodeDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
             code = ""
         }
     }
+    // A dialog is a window of its own, with the system's text size otherwise.
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Код") },
+        title = { ProvideTitanTextScale { Text("Код") } },
         text = {
-            OutlinedTextField(
-                value = code,
-                onValueChange = { code = it.filter(Char::isDigit); wrong = false },
-                singleLine = true,
-                isError = wrong,
-                supportingText = if (wrong) { { Text("Неверный код") } } else null,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                modifier = Modifier.fillMaxWidth(),
-            )
+            ProvideTitanTextScale {
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it.filter(Char::isDigit); wrong = false },
+                    singleLine = true,
+                    isError = wrong,
+                    supportingText = if (wrong) { { Text("Неверный код") } } else null,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         },
-        confirmButton = { TextButton(onClick = submit) { Text("OK") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+        confirmButton = { ProvideTitanTextScale { TextButton(onClick = submit) { Text("OK") } } },
+        dismissButton = { ProvideTitanTextScale { TextButton(onClick = onDismiss) { Text("Отмена") } } },
     )
 }
 
