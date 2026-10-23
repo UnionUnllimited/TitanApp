@@ -4,4 +4,12 @@
     <color name="background">#FFF2F4F8</color>
     <!-- Adaptive icon background stays dark in both themes. -->
     <color name="icon_background">#FF0E131D</color>
+
+    <!-- Home-screen widget: follows the system theme (values-night). -->
+    <color name="widget_bg">#FFFFFFFF</color>
+    <color name="widget_text">#FF111827</color>
+    <color name="widget_text_secondary">#FF6B7280</color>
+
+    <!-- Launcher shortcut icons. -->
+    <color name="shortcut_background">#FF1A66FF</color>
 </resources>

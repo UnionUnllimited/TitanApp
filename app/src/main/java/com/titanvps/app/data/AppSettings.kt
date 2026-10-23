@@ -110,6 +110,33 @@ class AppSettings(context: Context) {
         _techMode.value = enabled
     }
 
+    private val _keepAlive = MutableStateFlow(prefs.getBoolean(KEY_KEEP_ALIVE, true))
+    /** «Не отключать VPN»: back on after a network change, a crash, a kill or a reboot. */
+    val keepAlive: StateFlow<Boolean> = _keepAlive.asStateFlow()
+
+    fun setKeepAlive(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_KEEP_ALIVE, enabled).apply()
+        _keepAlive.value = enabled
+    }
+
+    private val _reminders = MutableStateFlow(prefs.getBoolean(KEY_REMINDERS, true))
+    /** «Напоминания»: the subscription ends soon, bypass traffic runs out. */
+    val reminders: StateFlow<Boolean> = _reminders.asStateFlow()
+
+    fun setReminders(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_REMINDERS, enabled).apply()
+        _reminders.value = enabled
+    }
+
+    private val _liveNotification = MutableStateFlow(prefs.getBoolean(KEY_LIVE_NOTIFICATION, true))
+    /** «Уведомление с сервером»: flag, server and ‹ › in the VPN notification. */
+    val liveNotification: StateFlow<Boolean> = _liveNotification.asStateFlow()
+
+    fun setLiveNotification(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LIVE_NOTIFICATION, enabled).apply()
+        _liveNotification.value = enabled
+    }
+
     fun reset() {
         prefs.edit().clear().apply()
         _excludedApps.value = emptySet()
@@ -121,6 +148,9 @@ class AppSettings(context: Context) {
         _notifications.value = true
         _favorites.value = emptySet()
         _techMode.value = false
+        _keepAlive.value = true
+        _reminders.value = true
+        _liveNotification.value = true
     }
 
     private companion object {
@@ -133,5 +163,8 @@ class AppSettings(context: Context) {
         const val KEY_NOTIFICATIONS = "notifications"
         const val KEY_FAVORITES = "favorites"
         const val KEY_TECH_MODE = "tech_mode"
+        const val KEY_KEEP_ALIVE = "keep_alive"
+        const val KEY_REMINDERS = "reminders"
+        const val KEY_LIVE_NOTIFICATION = "live_notification"
     }
 }

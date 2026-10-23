@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Colours come from @color/widget_*, so the widget follows the system theme. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
@@ -6,9 +7,14 @@
     android:background="@drawable/widget_bg"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:padding="12dp">
+    android:paddingStart="12dp"
+    android:paddingTop="12dp"
+    android:paddingEnd="8dp"
+    android:paddingBottom="12dp">
 
+    <!-- The server's round flag; the logo when there is no server yet. -->
     <ImageView
+        android:id="@+id/widget_flag"
         android:layout_width="36dp"
         android:layout_height="36dp"
         android:contentDescription="@null"
@@ -18,7 +24,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="10dp"
-        android:layout_marginEnd="8dp"
+        android:layout_marginEnd="4dp"
         android:layout_weight="1"
         android:orientation="vertical">
 
@@ -26,9 +32,10 @@
             android:id="@+id/widget_status"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:ellipsize="end"
             android:maxLines="1"
             android:text="Не подключено"
-            android:textColor="#FFE6EAF2"
+            android:textColor="@color/widget_text"
             android:textSize="15sp"
             android:textStyle="bold" />
 
@@ -39,9 +46,18 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="Titan VPS"
-            android:textColor="#FF8C96A8"
+            android:textColor="@color/widget_text_secondary"
             android:textSize="12sp" />
     </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/widget_prev"
+        android:layout_width="28dp"
+        android:layout_height="48dp"
+        android:background="@android:color/transparent"
+        android:contentDescription="Предыдущий сервер"
+        android:scaleType="center"
+        android:src="@drawable/ic_chevron_left" />
 
     <ImageView
         android:id="@+id/widget_button"
@@ -51,4 +67,13 @@
         android:contentDescription="Вкл / Выкл"
         android:padding="12dp"
         android:src="@drawable/ic_power" />
+
+    <ImageButton
+        android:id="@+id/widget_next"
+        android:layout_width="28dp"
+        android:layout_height="48dp"
+        android:background="@android:color/transparent"
+        android:contentDescription="Следующий сервер"
+        android:scaleType="center"
+        android:src="@drawable/ic_chevron_right" />
 </LinearLayout>

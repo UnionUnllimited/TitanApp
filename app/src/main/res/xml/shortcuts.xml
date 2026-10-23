@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long press on the app icon: VPN on / off / toggle without opening the app.
+     ShortcutActivity (not exported: the launcher starts it as our app) does it and closes. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_power"
+        android:shortcutId="on"
+        android:shortcutLongLabel="@string/shortcut_on_long"
+        android:shortcutShortLabel="@string/shortcut_on_short">
+        <intent
+            android:action="com.titanvps.app.action.CONNECT"
+            android:targetClass="com.titanvps.app.vpn.ShortcutActivity"
+            android:targetPackage="com.titanvps.app" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_power"
+        android:shortcutId="off"
+        android:shortcutLongLabel="@string/shortcut_off_long"
+        android:shortcutShortLabel="@string/shortcut_off_short">
+        <intent
+            android:action="com.titanvps.app.action.DISCONNECT"
+            android:targetClass="com.titanvps.app.vpn.ShortcutActivity"
+            android:targetPackage="com.titanvps.app" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_shield"
+        android:shortcutId="toggle"
+        android:shortcutLongLabel="@string/shortcut_toggle_long"
+        android:shortcutShortLabel="@string/shortcut_toggle_short">
+        <intent
+            android:action="com.titanvps.app.action.TOGGLE"
+            android:targetClass="com.titanvps.app.vpn.ShortcutActivity"
+            android:targetPackage="com.titanvps.app" />
+    </shortcut>
+</shortcuts>
