@@ -66,20 +66,35 @@ class WhitelistWatcher(private val context: Context) {
     }
 
     /**
-     * On a bypass: returns once the restrictions look lifted, that is on mobile data a
-     * foreign site opens directly and [target] (a regular server) answers,
-     * [BypassPolicy.LIFTED_CHECKS] checks in a row [RETURN_INTERVAL_MS] apart.
+     * On a bypass: once the restrictions look lifted, returns the regular server to go back
+     * to. That is on mobile data a foreign site opens directly and [target] answers (if it is
+     * down, another regular server: see [answering]), [BypassPolicy.LIFTED_CHECKS] checks in
+     * a row [RETURN_INTERVAL_MS] apart.
      */
-    suspend fun awaitLifted(target: Server) {
+    suspend fun awaitLifted(target: Server, all: List<Server>): Server {
         val streak = BypassPolicy.Streak(BypassPolicy.LIFTED_CHECKS)
         while (true) {
             delay(RETURN_INTERVAL_MS)
             if (!onMobileData()) { streak.reset(); awaitMobile(); continue }
             val foreign = foreignSiteReachable()
             // Still whitelisted: the foreign site already failed, no ping.
-            val ok = foreign && (ping(listOf(target))[target.id] ?: -1L) >= 0
-            if (streak.add(BypassPolicy.lifted(foreign, ok))) return
+            val back = if (foreign) answering(target, all) else null
+            if (streak.add(BypassPolicy.lifted(foreign, back != null)) && back != null) return back
         }
+    }
+
+    /**
+     * [target] if it answers, else the first regular server that does (АВТО, then up to
+     * [MAX_OTHERS] on other nodes): one server that is down keeps nobody on a paid bypass.
+     */
+    private suspend fun answering(target: Server, all: List<Server>): Server? {
+        if (answers(ping(listOf(target)), target)) return target
+        val auto = ServerGroups.split(all).toMap()[ServerGroups.Group.SERVERS].orEmpty()
+            .firstOrNull { "авто" in it.name.lowercase() }?.takeIf { it.id != target.id }
+        val fallbacks = listOfNotNull(auto) + others(target, all).filter { it.id != auto?.id }
+        if (fallbacks.isEmpty()) return null
+        val pings = ping(fallbacks)
+        return fallbacks.firstOrNull { answers(pings, it) }
     }
 
     /** Fastest answering bypass server (prefers real "обход" entries over info rows). */
@@ -113,6 +128,9 @@ class WhitelistWatcher(private val context: Context) {
 
     /** Only a miss the ping service reported counts: a cancelled or lost measurement doesn't. */
     private fun failed(pings: Map<String, Long>, server: Server): Boolean = pings[server.id]?.let { it < 0 } == true
+
+    /** Only a measured delay is an answer. */
+    private fun answers(pings: Map<String, Long>, server: Server): Boolean = (pings[server.id] ?: -1L) >= 0
 
     /**
      * Up to [MAX_OTHERS] regular servers of one node each, none of [current]'s nodes and no

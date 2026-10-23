@@ -70,12 +70,25 @@ class BypassPolicyTest {
             assertEquals(Decision.Switch, policy.onWhitelist(start + i * 10 * min, autoBypass = true))
             policy.recordSwitch(start + i * 10 * min)
         }
-        // The fourth within the hour: only the offer.
-        assertEquals(Decision.Offer, policy.onWhitelist(start + 30 * min, autoBypass = true))
-        assertEquals(Decision.Offer, policy.onWhitelist(start + 59 * min, autoBypass = true))
+        // The fourth within the hour: only the offer, and a look again once the first is an hour old.
+        assertEquals(Decision.Capped(30 * min), policy.onWhitelist(start + 30 * min, autoBypass = true))
+        assertEquals(Decision.Capped(min), policy.onWhitelist(start + 59 * min, autoBypass = true))
         // An hour after the first one, a switch again.
         assertEquals(Decision.Switch, policy.onWhitelist(start + 60 * min, autoBypass = true))
         assertEquals(2, policy.switches(start + 60 * min).size)
+    }
+
+    @Test
+    fun cappedSwitchesAgainOnceTheHourAllows() {
+        val policy = BypassPolicy(listOf(start, start + 5 * min, start + 50 * min))
+        val capped = policy.onWhitelist(start + 55 * min, autoBypass = true)
+        assertEquals(Decision.Capped(5 * min), capped)
+        // Asked again after the wait (the watcher goes on): our own switch is back.
+        val retry = start + 55 * min + (capped as Decision.Capped).retryInMs
+        assertEquals(Decision.Switch, policy.onWhitelist(retry, autoBypass = true))
+        assertEquals(2, policy.switches(retry).size)
+        // «Автопереход на обходы» off is no cap: only the offer.
+        assertEquals(Decision.Offer, policy.onWhitelist(retry, autoBypass = false))
     }
 
     @Test
@@ -92,7 +105,7 @@ class BypassPolicyTest {
     fun savedHistoryIsKept() {
         // As BypassReturn restores it after a revive.
         val policy = BypassPolicy(listOf(start, start + min, start + 2 * min), returnedAt = start + 3 * min)
-        assertEquals(Decision.Offer, policy.onWhitelist(start + 4 * min, autoBypass = true))
+        assertEquals(Decision.Capped(56 * min), policy.onWhitelist(start + 4 * min, autoBypass = true))
         assertEquals(start + 3 * min, policy.returnedAt)
         assertEquals(3, policy.switches(start + 4 * min).size)
     }

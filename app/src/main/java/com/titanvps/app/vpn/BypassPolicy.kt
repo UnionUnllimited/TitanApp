@@ -17,6 +17,11 @@ class BypassPolicy(switches: List<Long> = emptyList(), returnedAt: Long = 0L) {
         data object Offer : Decision
         /** Just back from a bypass: look again in [ms]. */
         data class Wait(val ms: Long) : Decision
+        /**
+         * [MAX_SWITCHES] of our own this hour: only the offer for now, and look again in
+         * [retryInMs], once the oldest of them is an hour old.
+         */
+        data class Capped(val retryInMs: Long) : Decision
     }
 
     /** What to do on a bypass once the restrictions look lifted. */
@@ -37,13 +42,14 @@ class BypassPolicy(switches: List<Long> = emptyList(), returnedAt: Long = 0L) {
     /**
      * Whitelist mode confirmed: a switch with «Автопереход на обходы» on, unless we came
      * back less than [COOLDOWN_MS] ago (then later) or already switched [MAX_SWITCHES]
-     * times this hour (then only the offer).
+     * times this hour (then the offer, and a switch again once the hour allows it).
      */
     @Synchronized
     fun onWhitelist(now: Long, autoBypass: Boolean): Decision {
         if (!autoBypass) return Decision.Offer
         prune(now)
-        if (switches.size >= MAX_SWITCHES) return Decision.Offer
+        // Kept switches are less than an hour old: always a wait > 0.
+        if (switches.size >= MAX_SWITCHES) return Decision.Capped(switches.min() + HOUR_MS - now)
         val since = now - returnedAt
         // A clock set back counts as long ago.
         if (returnedAt > 0 && since in 0L until COOLDOWN_MS) return Decision.Wait(COOLDOWN_MS - since)
