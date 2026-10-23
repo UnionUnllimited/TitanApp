@@ -207,7 +207,7 @@ internal fun ProfileScreen(
                     palette.orange,
                     checked = autoBypass,
                     onCheckedChange = { viewModel.setAutoBypass(it) },
-                    subtitle = "Переключит на обход, если мобильный интернет ограничен белыми списками",
+                    subtitle = "При белых списках — на обход, после их снятия — обратно",
                 )
             }
 
