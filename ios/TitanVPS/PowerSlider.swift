@@ -3,6 +3,7 @@ import SwiftUI
 /// Выкл | Вкл as one slider: the knob is dragged across by hand (or a side tapped). While a
 /// ping runs (it turns the VPN off for its time and back on after) the slider is locked:
 /// it darkens, the knob shows a lock and a shine runs over it; a tap then only shakes it.
+/// It glows in its state's colour (none while locked): the parent leaves room for it.
 struct PowerSlider: View {
     enum Phase: Equatable { case off, connecting, on, disconnecting }
 
@@ -40,9 +41,12 @@ struct PowerSlider: View {
     @State private var held = false
     @State private var shakes: CGFloat = 0
     @State private var nudge: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let height: CGFloat = 68
-    private let inset: CGFloat = 5
+    private let height: CGFloat = 76
+    private let inset: CGFloat = 6
+    /// The green gradient's own colour, for the glow while on.
+    private static let onGlow = Color(UIColor(hex: 0x16A34A))
 
     private var isOn: Bool { pending ?? (phase == .on || phase == .connecting) }
     private var busy: Bool { phase == .connecting || phase == .disconnecting }
@@ -76,6 +80,7 @@ struct PowerSlider: View {
             }
         }
         .frame(height: height)
+        .background { glow }
         .modifier(ShakeEffect(animatableData: shakes))
         .saturation(locked ? 0.15 : 1)
         .animation(.easeInOut(duration: 0.35), value: locked)
@@ -119,22 +124,42 @@ struct PowerSlider: View {
             .overlay(Capsule().stroke(Palette.outline.opacity(0.7), lineWidth: 1))
     }
 
+    /// A soft light around the slider: green while on, blue while it connects (breathing slowly)
+    /// or goes off, a faint blue while off; none while locked. A shadow of a capsule under the
+    /// track, so only the light outside it shows.
+    private var glow: some View {
+        let color = phase == .on ? Self.onGlow : Palette.primary
+        let strength: Double = locked ? 0 : phase == .on ? 0.45 : busy ? 0.4 : 0.18
+        let breathes = busy && !locked && !reduceMotion
+        return TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !breathes)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3600)
+            // One breath in about 2.5 s, between half and full strength.
+            let breath = breathes ? 0.75 + 0.25 * sin(t * 2.5) : 1
+            Capsule()
+                .fill(Palette.track)
+                .shadow(color: color.opacity(strength * breath), radius: 18)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     /// What the free half of the track says: where the knob would go.
     private func sideLabels(progress: CGFloat) -> some View {
         HStack(spacing: 0) {
             Label("Выкл", systemImage: "power")
                 .frame(maxWidth: .infinity)
                 .opacity(Double(progress))
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Text("Вкл")
                 Image(systemName: "chevron.right")
-                    .font(.scaled(13, weight: .bold))
+                    .font(.scaled(15, weight: .bold))
             }
             .frame(maxWidth: .infinity)
             .shimmer(phase == .off && !locked, tint: Palette.primary, duration: 2)
             .opacity(Double(1 - progress))
         }
-        .font(.scaled(17, weight: .semibold))
+        .font(.scaled(20, weight: .semibold))
+        .lineLimit(1)
         .foregroundStyle(.secondary)
         .padding(.horizontal, inset)
         .allowsHitTesting(false)
@@ -150,7 +175,7 @@ struct PowerSlider: View {
                 .fill(phase == .connecting ? Palette.accentGradient : Palette.greenGradient)
                 .opacity(Double(progress))
                 .shadow(color: (phase == .connecting ? Palette.primary : Palette.green).opacity(0.45 * Double(progress)), radius: 10, y: 4)
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 if locked {
                     Image(systemName: "lock.fill")
                     Text(lockedText)
@@ -165,11 +190,11 @@ struct PowerSlider: View {
                     Text("Выкл")
                 }
             }
-            .font(.scaled(17, weight: .bold))
+            .font(.scaled(22, weight: .bold))
             .foregroundStyle(lit ? Color.white : Color.primary)
             .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .padding(.horizontal, 10)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, 12)
         }
         .allowsHitTesting(false)
     }

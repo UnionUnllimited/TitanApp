@@ -416,7 +416,9 @@ struct ProfileView: View {
             .onAppear { activitiesOff = !LiveActivityController.allowedInSettings }
             .onChange(of: scenePhase) { if $0 == .active { activitiesOff = !LiveActivityController.allowedInSettings } }
             .navigationTitle("Настройки")
-            .navigationDestination(isPresented: $showTech) { TechModeView() }
+            // The system tab bar stays hidden here and on a pushed screen too (RootView's TitanTabBar).
+            .toolbar(.hidden, for: .tabBar)
+            .navigationDestination(isPresented: $showTech) { TechModeView().toolbar(.hidden, for: .tabBar) }
             .sheet(isPresented: $about) { AboutSheet(version: version, support: store.supportURL) }
             .alert("Код", isPresented: $askCode) {
                 SecureField("Код", text: $code).keyboardType(.numberPad)

@@ -23,15 +23,7 @@ struct RootView: View {
             } else if store.subscription == nil {
                 WelcomeView()
             } else {
-                TabView(selection: $tab) {
-                    HomeView(openSubscription: { tab = .subscription }, openSettings: { tab = .profile })
-                        .tabItem { Label("Главная", systemImage: "house.fill") }.tag(Tab.home)
-                    SubscriptionView()
-                        .tabItem { Label("Подписка", systemImage: "crown") }.tag(Tab.subscription)
-                    ProfileView(openSubscription: { tab = .subscription }, openHome: { tab = .home })
-                        .tabItem { Label("Профиль", systemImage: "person") }.tag(Tab.profile)
-                }
-                .id(typeSize)
+                tabs
             }
         }
         .overlay(alignment: .top) {
@@ -122,6 +114,32 @@ struct RootView: View {
         }
     }
 
+    /// The three tabs. TabView keeps each one's state; its own bar is hidden for TitanTabBar,
+    /// which is thinner and sits lower, so Главная shows more servers.
+    private var tabs: some View {
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                TabView(selection: $tab) {
+                    HomeView(openSubscription: { tab = .subscription }, openSettings: { tab = .profile })
+                        .toolbar(.hidden, for: .tabBar)
+                        .tabItem { Label("Главная", systemImage: "house.fill") }.tag(Tab.home)
+                    SubscriptionView()
+                        .toolbar(.hidden, for: .tabBar)
+                        .tabItem { Label("Подписка", systemImage: "crown") }.tag(Tab.subscription)
+                    ProfileView(openSubscription: { tab = .subscription }, openHome: { tab = .home })
+                        .toolbar(.hidden, for: .tabBar)
+                        .tabItem { Label("Профиль", systemImage: "person") }.tag(Tab.profile)
+                }
+                // Of the home indicator's 34 pt it needs 20 under the bar.
+                TitanTabBar(selection: $tab, bottom: min(geo.safeAreaInsets.bottom, 20))
+            }
+            // Down to the screen's edge. A keyboard (in a sheet over it) doesn't lift the bar:
+            // no tab has a text field of its own.
+            .ignoresSafeArea([.container, .keyboard], edges: .bottom)
+        }
+        .id(typeSize)
+    }
+
     /// Автоподключение: on each time the app is opened, at launch or back from the background
     /// (Не отключать VPN keeps it on after that). Not while it is on, going off, being connected
     /// or paused for a ping; the profile's own status first, as the app's may lag after a
@@ -131,6 +149,61 @@ struct RootView: View {
         guard autoconnect, !vpn.isOn, vpn.state != .disconnecting, !vpn.connectsUnderWay,
               !store.pingBusy, !store.vpnPaused, let s = store.selected, !store.blockedOnWifi(s) else { return }
         await vpn.connect(s)
+    }
+}
+
+/// Главная / Подписка / Профиль: the picked one in the brand colour. Its surface goes down to
+/// the screen's edge; [bottom] is the room kept there for the home indicator.
+struct TitanTabBar: View {
+    @Binding var selection: Tab
+    var bottom: CGFloat = 0
+    @Environment(\.displayScale) private var displayScale
+
+    private struct Item: Identifiable {
+        let id: Tab
+        let title: String
+        let icon: String
+    }
+
+    private let items = [
+        Item(id: .home, title: "Главная", icon: "house.fill"),
+        Item(id: .subscription, title: "Подписка", icon: "crown"),
+        Item(id: .profile, title: "Профиль", icon: "person"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(items) { item in
+                let on = item.id == selection
+                Button {
+                    guard !on else { return }
+                    Haptics.selection()
+                    selection = item.id
+                } label: {
+                    VStack(spacing: 2) {
+                        // Filled, as the system bar drew them.
+                        Image(systemName: item.icon).symbolVariant(.fill)
+                            .font(.scaled(20, weight: .semibold))
+                            .frame(height: 22)
+                        Text(item.title).font(.scaled(10, weight: .semibold)).lineLimit(1)
+                    }
+                    .foregroundStyle(on ? Palette.primary : Color.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PressableStyle(scale: 0.92))
+                .accessibilityLabel(item.title)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        // On an iPad the items stay together in the middle.
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, bottom)
+        .background(Palette.surface)
+        .overlay(alignment: .top) {
+            Palette.outline.frame(height: 1 / displayScale)
+        }
     }
 }
 

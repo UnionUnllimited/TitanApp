@@ -3,12 +3,9 @@ import SwiftUI
 struct HomeView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var vpn: VPNController
-    @Environment(\.colorScheme) private var scheme
-    @AppStorage("theme") private var theme = "system"
     /// Why a ping or a check failed is shown in Технический режим only.
     @AppStorage(TechMode.key) private var techMode = false
     @State private var page: ServerGroup = .servers
-    @State private var expanded = false
     @State private var wifiInfo = false
     /// The Выкл | Вкл knob or a server row is being dragged sideways: the page stays still.
     @State private var holdingDrag = false
@@ -106,18 +103,19 @@ struct HomeView: View {
                 Text("Titan VPS").font(.scaled(22, weight: .bold))
             }
             Spacer()
-            squareButton(scheme == .dark ? "sun.max.fill" : "moon.fill", label: "Тема") {
-                Haptics.selection()
-                theme = scheme == .dark ? "light" : "dark"
+            // Обновить подписку (the theme is in Настройки).
+            squareButton("arrow.clockwise", spinning: store.busy, label: "Обновить подписку") {
+                Task { await store.refreshByHand() }
             }
+            .disabled(store.busy)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
     }
 
-    private func squareButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
+    private func squareButton(_ icon: String, spinning: Bool = false, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.scaled(19, weight: .semibold)).foregroundStyle(Palette.primary)
+            SpinningIcon(name: icon, spinning: spinning).font(.scaled(19, weight: .semibold)).foregroundStyle(Palette.primary)
                 .frame(width: 48, height: 48)
                 .background(Palette.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Palette.outline.opacity(0.5), lineWidth: 1))
@@ -144,14 +142,36 @@ struct HomeView: View {
                 }
                 .buttonStyle(PressableStyle())
             }
-            subscriptionCard(sub)
+            // The subscription's details are on Подписка; here only that it has run out.
+            if sub.info.expire > 0, sub.info.expire <= Int64(Date().timeIntervalSince1970) { expiredBanner }
             PowerSlider(phase: powerPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Пинг…",
                         failures: vpn.failures, onToggle: toggleVPN,
                         onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) },
                         onHold: { holdingDrag = $0 })
-                .padding(.top, 6)
+                // Room for its glow.
+                .padding(.vertical, 6)
             statusBlock
         }
+    }
+
+    /// One line: a tap opens Подписка.
+    private var expiredBanner: some View {
+        Button(action: openSubscription) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill")
+                Text("Подписка истекла").lineLimit(1)
+                Spacer(minLength: 8)
+                Text("Продлить").fontWeight(.bold).lineLimit(1)
+                Image(systemName: "chevron.right").font(.scaled(12, weight: .bold))
+            }
+            .font(.scaled(14, weight: .semibold))
+            .foregroundStyle(.red)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel("Подписка истекла. Продлить")
     }
 
     private var powerPhase: PowerSlider.Phase {
@@ -291,107 +311,41 @@ struct HomeView: View {
         }
     }
 
-    private func subscriptionCard(_ sub: Subscription) -> some View {
-        let now = Int64(Date().timeIntervalSince1970)
-        let active = sub.info.expire <= 0 || sub.info.expire > now
-        return Card {
-            HStack(spacing: 10) {
-                Button(action: openSubscription) {
-                    HStack(spacing: 14) {
-                        Image(systemName: "crown.fill")
-                            .font(.scaled(18, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .background(active ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Color.red), in: Circle())
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 4) {
-                                Text(active ? "Подписка активна" : "Подписка истекла").font(.scaled(16, weight: .semibold))
-                                Image(systemName: "chevron.right").font(.scaled(12, weight: .bold)).foregroundStyle(.tertiary)
-                            }
-                            Text(sub.info.expire > 0 ? "До " + Fmt.date(sub.info.expire) : "Бессрочно")
-                                .font(.scaled(14)).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(PressableStyle(scale: 0.98))
-                CircleIconButton(icon: "arrow.clockwise", spinning: store.busy, size: 44) {
-                    Task { await store.refreshByHand() }
-                }
-                .disabled(store.busy)
-                .accessibilityLabel("Обновить подписку")
-            }
-            .padding(.horizontal, 14).padding(.vertical, 12)
-            Divider().padding(.horizontal, 14)
-            Button {
-                Haptics.selection()
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(expanded ? "Скрыть" : "Подробнее")
-                    Image(systemName: "chevron.down")
-                        .rotationEffect(.degrees(expanded ? 180 : 0))
-                }
-                .font(.scaled(13, weight: .medium)).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity).padding(.vertical, 8)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if expanded {
-                VStack(spacing: 6) {
-                    if sub.info.expire > 0 { detail("Осталось", "\(max((sub.info.expire - now) / 86400, 0)) дн.") }
-                    detail("Обычные серверы", "Безлимит")
-                    detail("Трафик на обходах", sub.info.total > 0 ? "\(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))" : "Безлимит")
-                    detail("Обновлено", Fmt.ago(sub.fetchedAt))
-                }
-                .padding(.horizontal, 16).padding(.bottom, 14)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-    }
-
-    private func detail(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).fontWeight(.medium)
-        }
-        .font(.scaled(14))
-    }
-
     @ViewBuilder private var list: some View {
         if let sub = store.subscription {
             let groups = ServerGroup.split(sub.servers)
-            HStack(spacing: 8) {
-                HStack(spacing: 2) {
-                    ForEach(ServerGroup.allCases) { g in
-                        if let items = groups[g], !items.isEmpty { tabChip(g, items.count) }
+            // The tabs and the lines under them kept close: more rows on screen.
+            VStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    HStack(spacing: 2) {
+                        ForEach(ServerGroup.allCases) { g in
+                            if let items = groups[g], !items.isEmpty { tabChip(g, items.count) }
+                        }
+                    }
+                    .padding(4)
+                    .background(Palette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    pingButton(groups)
+                }
+                Group {
+                    if page == .servers {
+                        Text("Безлимит на обычных серверах")
+                    } else if sub.info.total > 0 {
+                        HStack(spacing: 6) {
+                            Text("Трафик: \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
+                            Button("Докупить ГБ", action: openSubscription).font(.scaled(13, weight: .semibold))
+                        }
+                    } else {
+                        Text("Для ограничений мобильного интернета")
                     }
                 }
-                .padding(4)
-                .background(Palette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                pingButton(groups)
-            }
-            Group {
-                if page == .servers {
-                    Text("Безлимит на обычных серверах")
-                } else if sub.info.total > 0 {
-                    HStack(spacing: 6) {
-                        Text("Трафик: \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
-                        Button("Докупить ГБ", action: openSubscription).font(.scaled(13, weight: .semibold))
-                    }
-                } else {
-                    Text("Для ограничений мобильного интернета")
-                }
-            }
-            .font(.scaled(13)).foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
+                .font(.scaled(13)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
 
-            if page == .bypass && store.bypassLockedOnWifi {
-                Text("Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Серверы».")
-                    .font(.scaled(13)).foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
+                if page == .bypass && store.bypassLockedOnWifi {
+                    Text("Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Серверы».")
+                        .font(.scaled(13)).foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
+                }
             }
             // Read once for the list, not per row.
             let selectedId = store.selected?.id
