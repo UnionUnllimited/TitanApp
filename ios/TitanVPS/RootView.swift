@@ -69,8 +69,11 @@ struct RootView: View {
         // A tap on a reminder: Подписка; on the bypass traffic one, Тарифы over it.
         .onReceive(NotificationCenter.default.publisher(for: Reminders.openSubscription)) { note in
             guard store.subscription != nil else { return }
-            tab = .subscription
-            if (note.object as? String) == Reminders.trafficId, privacyAccepted { store.paywall = .traffic }
+            if (note.object as? String) == Reminders.trafficId, privacyAccepted {
+                openTrafficPaywall()
+            } else {
+                tab = .subscription
+            }
         }
         .onChange(of: scenePhase) { phase in
             // Left mid-ping (or mid-check): those stop and the VPN comes back now, in background
@@ -123,6 +126,35 @@ struct RootView: View {
         .sheet(item: $store.paywall) { reason in
             PaywallView(reason: reason).environmentObject(store)
         }
+    }
+
+    /// Тарифы from the bypass traffic reminder, over Подписка. UIKit shows one sheet at a time:
+    /// the tabs' own (Личный кабинет, Устройства, О приложении) close first, while their tab is
+    /// still on screen, and Тарифы opens once they are down. Something still up after 2 s (an
+    /// alert): not opened, so the next tap or «Добавить ГБ» is a change again.
+    private func openTrafficPaywall() {
+        // Up already (Тарифы is the one presenting): it stays, a purchase in it too.
+        if store.paywall == .traffic && Self.presenting {
+            tab = .subscription
+            return
+        }
+        store.paywall = nil
+        store.closeSheets += 1
+        Task {
+            var waited = 0
+            while Self.presenting && waited < 20 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            tab = .subscription
+            guard !Self.presenting, store.subscription != nil else { return }
+            store.paywall = .traffic
+        }
+    }
+
+    /// A sheet or an alert is over the app, or still going down.
+    private static var presenting: Bool {
+        AppStorePurchases.activeScene?.keyWindow?.rootViewController?.presentedViewController != nil
     }
 
     private func openLink(_ url: URL) {
@@ -372,6 +404,8 @@ struct WelcomeView: View {
     @State private var appeared = false
     @State private var restoring = false
     @FocusState private var editing: Bool
+    /// The storefront: the way to the bot for a key shows only in the United States one.
+    @ObservedObject private var purchases = AppStorePurchases.shared
 
     /// The key as typed has our subscription link in it.
     private var valid: Bool { SubscriptionAPI.findLink(key) != nil }
@@ -383,7 +417,7 @@ struct WelcomeView: View {
                     GlowingLogo(size: 110)
                     Text("Titan VPS").font(.scaled(34, weight: .heavy))
                         .foregroundStyle(Palette.logoGradient)
-                    Text("Вставьте ключ подписки из бота или личного кабинета — и VPN включится сразу")
+                    Text("Вставьте ключ подписки — и VPN включится сразу")
                         .font(.scaled(15))
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -400,9 +434,13 @@ struct WelcomeView: View {
                     .opacity(appeared ? 1 : 0)
                     .offset(y: appeared ? 0 : 28)
 
-                steps
-                    .opacity(appeared ? 1 : 0)
-                    .offset(y: appeared ? 0 : 32)
+                // Where to get a key is where it is sold (the bot): the United States storefront
+                // only (App Review 3.1.1(a), 3.1.3); elsewhere just how to enter one.
+                Group {
+                    if purchases.linksOut { steps } else { haveKey }
+                }
+                .opacity(appeared ? 1 : 0)
+                .offset(y: appeared ? 0 : 32)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 32)
@@ -450,7 +488,7 @@ struct WelcomeView: View {
             .animation(.easeInOut(duration: 0.2), value: valid)
             .animation(.easeInOut(duration: 0.2), value: editing)
             if !key.isEmpty && !valid {
-                Text("Это не похоже на ключ Titan VPS. Скопируйте ссылку подписки из бота целиком.")
+                Text("Это не похоже на ключ Titan VPS. Скопируйте ссылку-ключ целиком.")
                     .font(.scaled(12)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -529,7 +567,7 @@ struct WelcomeView: View {
         }
     }
 
-    /// Где взять ключ: the bot, its key, the link.
+    /// Где взять ключ (United States storefront only): the bot, its key, the link.
     private var steps: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Где взять ключ").font(.scaled(16, weight: .bold))
@@ -545,6 +583,26 @@ struct WelcomeView: View {
             }
             .buttonStyle(PressableStyle())
             .padding(.top, 2)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 1))
+    }
+
+    /// Outside the United States storefront: a key got before, no way to the bot.
+    private var haveKey: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "doc.on.clipboard.fill")
+                .font(.scaled(15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Palette.accentGradient, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .accessibilityHidden(true)
+            Text("Уже есть ключ? Скопируйте ссылку-ключ и вставьте её выше")
+                .font(.scaled(15)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)

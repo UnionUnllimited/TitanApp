@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// Personal cabinet in the app (same as Android's CabinetActivity, read only on iOS): the site's
-/// limited cabinet, signed in by the subscription's link, shown natively. Renewing goes through
-/// Тарифы (PaywallView, the App Store first): no tariffs, payments or codes here (App Review
-/// 3.1.1).
+/// Personal cabinet in the app (same as Android's CabinetActivity): the site's limited cabinet,
+/// signed in by the subscription's link, shown natively. «Продлить подписку» opens Тарифы (the
+/// App Store first); the site's own tariffs and codes are a tab of their own where
+/// AppStorePurchases.otherMethods allows. Only the tariff's own page is the provider's
+/// (PaymentView, inside the app; bank apps for SBP open from there). Buttons and titles on the
+/// way there are neutral (Тарифы, Продолжить).
 struct CabinetView: View {
     let link: String
     /// Connected devices and the limit from the subscription's account info, if known.
@@ -12,26 +14,48 @@ struct CabinetView: View {
     var renew: () -> Void = {}
 
     @EnvironmentObject var store: AppStore
+    @ObservedObject private var purchases = AppStorePurchases.shared
     @Environment(\.dismiss) private var dismiss
     @State private var api: CabinetAPI?
     @State private var data: CabinetAPI.Snapshot?
     @State private var error: String?
     @State private var loading = true
+    @State private var tab = 0
+    @State private var note: String?
+    @State private var payment: Payment?
+    /// Bumped when a payment closes: the cabinet is read again a few seconds later too.
+    @State private var recheck = 0
     @State private var copied = false
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            VStack(spacing: 12) {
+                if purchases.otherMethods {
+                    SegmentedTabs(items: [
+                        SegmentedTabs.Item(id: 0, title: "Подписка", icon: "crown.fill"),
+                        SegmentedTabs.Item(id: 1, title: "Тарифы", icon: "tag.fill"),
+                    ], selection: $tab)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                }
                 if let d = data {
                     ScrollView {
                         VStack(spacing: 14) {
+                            if let note { banner(note, icon: "info.circle.fill", color: Palette.primary) }
                             if let error { banner(error, icon: "exclamationmark.triangle.fill", color: .red) }
-                            subscription(d)
-                            Button(action: renew) {
-                                Label("Продлить подписку", systemImage: "crown.fill")
+                            if tab == 1 && purchases.otherMethods {
+                                PayPane(data: d, onPay: pay, onCode: applyCode).transition(.opacity)
+                            } else {
+                                Group {
+                                    subscription(d)
+                                    Button(action: renew) {
+                                        Label("Продлить подписку", systemImage: "crown.fill")
+                                    }
+                                    .buttonStyle(PrimaryButtonStyle())
+                                    .padding(.top, 4)
+                                }
+                                .transition(.opacity)
                             }
-                            .buttonStyle(PrimaryButtonStyle())
-                            .padding(.top, 4)
                         }
                         .padding(16)
                         .frame(maxWidth: 640)
@@ -76,9 +100,28 @@ struct CabinetView: View {
                     .accessibilityLabel("Обновить")
                 }
             }
+            // Closed by hand or by itself on the return to the site: the cabinet shows the result.
+            .sheet(item: $payment, onDismiss: {
+                Task { await load() }
+                recheck += 1
+            }) { p in
+                PaymentView(url: p.url, subtitle: p.title, home: p.home) { note = Self.checking }
+            }
         }
         .task { await load() }
+        // After a payment: the provider may tell the site a moment after the user is back.
+        .task(id: recheck) {
+            guard recheck > 0 else { return }
+            for s: UInt64 in [4, 12] {
+                try? await Task.sleep(nanoseconds: s * 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                await load()
+            }
+            if note == Self.checking { note = nil }
+        }
     }
+
+    private static let checking = "Проверяем: кабинет обновится через несколько секунд"
 
     private func load() async {
         loading = true
@@ -98,6 +141,31 @@ struct CabinetView: View {
             self.error = (error as? CabinetAPI.Failure)?.message ?? "Не удалось загрузить кабинет. Проверьте интернет и попробуйте ещё раз"
         }
     }
+
+    private func pay(_ tariff: CabinetAPI.Tariff, _ method: String) async {
+        guard let api else { return }
+        do {
+            let url = try await api.pay(tariff, method: method)
+            let title = [tariff.name, price(tariff.price)].filter { !$0.isEmpty }.joined(separator: " · ")
+            payment = Payment(url: url, title: title, home: api.host)
+        } catch {
+            note = message(error)
+        }
+    }
+
+    private func applyCode(_ code: String) async -> Bool {
+        guard let api else { return false }
+        do {
+            note = try await api.applyCode(code)
+            await load()
+            return true
+        } catch {
+            note = message(error)
+            return false
+        }
+    }
+
+    private func message(_ error: Error) -> String { (error as? CabinetAPI.Failure)?.message ?? "Ошибка соединения" }
 
     private func banner(_ text: String, icon: String, color: Color) -> some View {
         HStack(alignment: .top, spacing: 10) {
@@ -287,6 +355,174 @@ struct CabinetView: View {
     }
 }
 
+private struct PayPane: View {
+    let data: CabinetAPI.Snapshot
+    let onPay: (CabinetAPI.Tariff, String) async -> Void
+    let onCode: (String) async -> Bool
+
+    @State private var busy = false
+    @State private var limit: Int?
+    @State private var picked: [String: String] = [:]
+    @State private var codeOpen = false
+    @State private var code = ""
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ForEach(["sub", "traffic"], id: \.self) { kind in
+                let all = data.tariffs.filter { $0.kind == kind }
+                if !all.isEmpty { section(kind, all) }
+            }
+            if data.tariffs.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "tag.slash")
+                        .font(.scaled(34, weight: .semibold)).foregroundStyle(.secondary)
+                    Text("Сейчас тарифы недоступны").foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 32)
+            }
+            // A payment code is rare: a quiet button at the bottom, the field in a dialog.
+            if data.promo {
+                Button { codeOpen = true } label: {
+                    Label("Есть код?", systemImage: "ticket.fill")
+                }
+                .buttonStyle(SecondaryButtonStyle(height: 46, tint: .secondary))
+            }
+        }
+        .onAppear { if limit == nil { limit = data.limits.first } }
+        .alert("Код на продление", isPresented: $codeOpen) {
+            TextField("Введите код", text: $code).textInputAutocapitalization(.characters)
+            Button("Применить") {
+                let c = code.trimmingCharacters(in: .whitespaces)
+                Task { if await onCode(c) { code = "" } }
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.")
+        }
+    }
+
+    @ViewBuilder private func section(_ kind: String, _ all: [CabinetAPI.Tariff]) -> some View {
+        let visible = kind == "sub" && !data.limits.isEmpty ? all.filter { $0.limit == limit } : {
+            let shown = all.filter(\.shown)
+            return shown.isEmpty ? all : shown
+        }()
+        let selected = visible.first { $0.id == picked[kind] } ?? (visible.count == 1 ? visible.first : nil)
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    IconTile(icon: kind == "sub" ? "crown.fill" : "chart.pie.fill",
+                             color: kind == "sub" ? Palette.primary : Palette.violet, size: 38)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(kind == "sub" ? "Продление подписки" : "Гигабайты для обходов").font(.scaled(17, weight: .bold))
+                        Text(kind == "sub" ? "Дни добавятся к текущей подписке" : "Добавятся к трафику на обходах")
+                            .font(.scaled(12)).foregroundStyle(.secondary)
+                    }
+                }
+                if kind == "sub" && !data.limits.isEmpty { limits(kind) }
+                ForEach(visible) { t in tariffRow(t, kind: kind, on: selected?.id == t.id) }
+                if let t = selected {
+                    let methods = (data.methods[kind] ?? []).filter { t.methods.contains($0.id) }
+                    let list = methods.isEmpty ? t.methods.map { CabinetAPI.Method(id: $0, title: "") } : methods
+                    if list.isEmpty { Text("Этот тариф сейчас недоступен").font(.scaled(13)).foregroundStyle(.red) }
+                    ForEach(list, id: \.id) { m in
+                        Button {
+                            Haptics.tap(.medium)
+                            busy = true
+                            Task { await onPay(t, m.id); busy = false }
+                        } label: {
+                            if busy { ProgressView().tint(.white) } else {
+                                // Neutral: no price or payment words on the way to the provider.
+                                Label("Продолжить" + (m.title.isEmpty ? "" : " · \(m.title)"), systemImage: "arrow.right.circle.fill")
+                                    .lineLimit(1).minimumScaleFactor(0.8)
+                            }
+                        }
+                        .buttonStyle(PrimaryButtonStyle(height: 52))
+                        .disabled(busy)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                } else if !visible.isEmpty {
+                    Text("Выберите тариф").font(.scaled(12)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(18)
+        }
+    }
+
+    /// Лимит устройств: how many at once; fixed after the first payment.
+    private func limits(_ kind: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Лимит устройств", systemImage: "iphone")
+                .font(.scaled(13, weight: .semibold)).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(data.limits, id: \.self) { l in
+                        let on = limit == l
+                        Button {
+                            guard !on else { return }
+                            Haptics.selection()
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                limit = l
+                                picked[kind] = nil
+                            }
+                        } label: {
+                            Text("\(l)")
+                                .font(.scaled(16, weight: .bold))
+                                .foregroundStyle(on ? Color.white : Color.primary)
+                                .frame(width: 46, height: 42)
+                                .background(on ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Palette.track),
+                                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .shadow(color: Palette.primary.opacity(on ? 0.35 : 0), radius: 6, y: 3)
+                        }
+                        .buttonStyle(PressableStyle(scale: 0.9))
+                        .accessibilityLabel("\(l) устр.")
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            Text("Сколько устройств одновременно. Фиксируется после первого продления.")
+                .font(.scaled(12)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func tariffRow(_ t: CabinetAPI.Tariff, kind: String, on: Bool) -> some View {
+        let meta = [t.limitLabel, t.trafficLabel].filter { !$0.isEmpty }.joined(separator: " · ")
+        return Button {
+            Haptics.selection()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { picked[kind] = t.id }
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle().stroke(on ? Palette.primary : Palette.outline, lineWidth: 2).frame(width: 22, height: 22)
+                    if on { Circle().fill(Palette.primary).frame(width: 12, height: 12).transition(.scale) }
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(t.name).font(.scaled(16, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                    if !meta.isEmpty { Text(meta).font(.scaled(12)).foregroundStyle(.secondary) }
+                }
+                Spacer(minLength: 8)
+                Text(price(t.price))
+                    .font(.scaled(18, weight: .heavy)).monospacedDigit()
+                    .foregroundStyle(on ? Palette.primary : Color.primary)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .frame(minHeight: 62)
+            .background(on ? Palette.primary.opacity(0.1) : Palette.track.opacity(0.55),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(on ? Palette.primary : Color.clear, lineWidth: 1.5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle(scale: 0.98))
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+private func price(_ p: Double) -> String {
+    (p.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(p)) : String(format: "%.2f", p)) + " ₽"
+}
+
 private func devicesWord(_ n: Int) -> String {
     let word: String
     if (11...14).contains(n % 100) { word = "устройств" }
@@ -294,4 +530,12 @@ private func devicesWord(_ n: Int) -> String {
     else if (2...4).contains(n % 10) { word = "устройства" }
     else { word = "устройств" }
     return "\(n) \(word)"
+}
+
+/// A payment open in PaymentView.
+private struct Payment: Identifiable {
+    let id = UUID()
+    let url: URL
+    let title: String
+    let home: String?
 }

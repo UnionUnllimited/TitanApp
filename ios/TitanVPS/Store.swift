@@ -31,6 +31,9 @@ final class AppStore: ObservableObject {
     @Published private(set) var pingTotal = 0
     /// Тарифы (PaywallView) on screen and why it opened; RootView shows it.
     @Published var paywall: PaywallReason?
+    /// Bumped to close the tabs' own sheets (Личный кабинет, Устройства, О приложении): Тарифы
+    /// from a reminder then opens over the app, not under one of them (RootView).
+    @Published var closeSheets = 0
 
     /// Favourite servers, by name (ids change with the subscription).
     @Published private(set) var favorites: Set<String> = []

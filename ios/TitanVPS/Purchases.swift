@@ -42,10 +42,20 @@ final class AppStorePurchases: ObservableObject {
     var subscriptions: [Product] { products.filter { ProductIDs.subscriptions.contains($0.id) } }
     var packs: [Product] { products.filter { ProductIDs.packs.contains($0.id) } }
 
-    /// Links to buying outside the App Store (Другие методы, the site's cabinet): only in the
-    /// United States storefront (App Review 3.1.1(a), 3.1.3); elsewhere, and until it is known,
-    /// they aren't shown.
+    /// Other links to buying outside the App Store (the key entry's way to the bot, Подписка's
+    /// «Открыть сайт», О приложении's bot): only in the United States storefront (App Review
+    /// 3.1.1(a), 3.1.3); elsewhere, and until it is known, they aren't shown.
     var linksOut: Bool { storefront == "USA" }
+
+    /// Другие методы in Тарифы and the in-app cabinet's tariffs and codes (the site's own
+    /// payment): in every storefront, as the owner chose. App Review allows them only in the
+    /// United States storefront (3.1.1(a)): false keeps them there (docs/HANDOFF.md).
+    static let otherMethodsEverywhere = true
+    var otherMethods: Bool { Self.otherMethodsEverywhere || linksOut }
+
+    /// The App Store answered without any of the subscriptions (not made in App Store Connect
+    /// yet) or couldn't be reached: Тарифы then shows Другие методы with a key anyway.
+    var noSubscriptions: Bool { (loaded || loadFailed) && subscriptions.isEmpty }
 
     enum Outcome: Equatable {
         /// The bot has it: the subscription is extended (or, without a key, made and signed in).

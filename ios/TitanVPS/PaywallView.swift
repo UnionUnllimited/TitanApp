@@ -11,9 +11,9 @@ enum PaywallReason: String, Identifiable {
 
 /// Тарифы: the App Store first (its subscriptions, and for «Добавить ГБ» its packs of
 /// гигабайты; Оплатить через Apple, Восстановить покупки, Управление подпиской, its offer
-/// codes, the auto-renewal terms), then, in the United States storefront only, Другие методы: the site's
-/// cabinet in the browser, without a price beside it. Opened from Главная's «Подписка
-/// истекла», Подписка's «Продлить подписку», the «Добавить ГБ» buttons and the key entry.
+/// codes, the auto-renewal terms), then Другие методы: the site's cabinet in the browser,
+/// without a price beside it (showsOther). Opened from Главная's «Подписка истекла»,
+/// Подписка's «Продлить подписку», the «Добавить ГБ» buttons and the key entry.
 struct PaywallView: View {
     let reason: PaywallReason
     @EnvironmentObject var store: AppStore
@@ -40,15 +40,20 @@ struct PaywallView: View {
                     if let note {
                         banner(note).transition(.opacity.combined(with: .move(edge: .top)))
                     }
-                    // Гигабайты go to a key.
-                    if reason == .traffic && store.subscription != nil { packsCard }
+                    // Гигабайты go to a key; none in the App Store (not made yet): no card for
+                    // them, not a «скоро» at the top.
+                    if reason == .traffic && store.subscription != nil && !(purchases.loaded && purchases.packs.isEmpty) {
+                        packsCard
+                    }
                     subscriptionsCard
-                    if purchases.linksOut { other }
+                    if showsOther { other }
                 }
                 .padding(16)
                 .frame(maxWidth: 560)
                 .frame(maxWidth: .infinity)
                 .animation(.easeInOut(duration: 0.2), value: note)
+                // The App Store's answer: the cards come in (and an empty packs card goes) gently.
+                .animation(.easeInOut(duration: 0.2), value: purchases.loaded)
             }
             .background(Palette.background.ignoresSafeArea())
             .navigationTitle("Тарифы")
@@ -289,9 +294,17 @@ struct PaywallView: View {
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
-    /// Другие методы (United States storefront only): the site's cabinet (signed in by the
-    /// subscription's link) in the browser, where a bank's own certificates work; the bot if
-    /// the subscription has no link.
+    /// Другие методы with a key: in every storefront as the owner chose
+    /// (AppStorePurchases.otherMethods), and while the App Store has no subscription to sell, so
+    /// an expired key is never left with nothing to tap. Before a key it would be the bot, as
+    /// «Где взять ключ» on the key entry: the United States storefront only.
+    private var showsOther: Bool {
+        guard store.subscription != nil else { return purchases.linksOut }
+        return purchases.otherMethods || purchases.noSubscriptions
+    }
+
+    /// Другие методы: the site's cabinet (signed in by the subscription's link) in the browser,
+    /// where a bank's own certificates work; the bot if the subscription has no link.
     private var other: some View {
         VStack(spacing: 6) {
             Button(action: openOther) {

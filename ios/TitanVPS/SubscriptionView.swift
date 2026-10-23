@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Подписка: expiry, bypass traffic, «Продлить подписку» (Тарифы) and a "Личный кабинет"
-/// button with what it shows.
+/// button with what it has.
 struct SubscriptionView: View {
     @EnvironmentObject var store: AppStore
     @ObservedObject private var purchases = AppStorePurchases.shared
@@ -57,7 +57,7 @@ struct SubscriptionView: View {
                                 Text("Безлимит").font(.scaled(26, weight: .bold))
                             }
                             Text("На обычных серверах — безлимит").font(.scaled(13)).foregroundStyle(.secondary)
-                            Text("Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные серверы не работают. Гигабайты списываются только пока вы подключены к обходу. На Wi-Fi обходы не нужны и недоступны. Закончились ГБ — добавьте их в «Тарифах».")
+                            Text("Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные серверы не работают. Гигабайты списываются только пока вы подключены к обходу. На Wi-Fi обходы не нужны и недоступны." + (info.total > 0 ? " Закончились ГБ — нажмите «Добавить ГБ»." : ""))
                                 .font(.scaled(12)).foregroundStyle(.secondary).padding(.top, 4)
                             if info.total > 0 {
                                 // Тарифы (the App Store first); orange once less than 10 % is left.
@@ -75,12 +75,17 @@ struct SubscriptionView: View {
                         Label("Продлить подписку", systemImage: "crown.fill")
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    Button {
-                        if info.webPageUrl != nil { showCabinet = true } else { openURL(Config.telegram) }
-                    } label: {
-                        Label("Личный кабинет", systemImage: "person.crop.circle.fill")
+                    // Without the site's link, the bot instead: the United States storefront only,
+                    // as it sells subscriptions too (App Review 3.1.1(a)).
+                    let cabinet = info.webPageUrl != nil || purchases.linksOut
+                    if cabinet {
+                        Button {
+                            if info.webPageUrl != nil { showCabinet = true } else { openURL(Config.telegram) }
+                        } label: {
+                            Label("Личный кабинет", systemImage: "person.crop.circle.fill")
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
                     }
-                    .buttonStyle(SecondaryButtonStyle())
                     if let acc = store.account, acc.devicesEnabled {
                         Card {
                             Button { showDevices = true } label: {
@@ -92,15 +97,19 @@ struct SubscriptionView: View {
                             .buttonStyle(RowButtonStyle())
                         }
                     }
-                    // What the in-app cabinet shows (read only: renewing is Тарифы).
-                    Card {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("В личном кабинете").fontWeight(.semibold)
-                            feature("calendar", "Сколько дней осталось")
-                            feature("chart.pie", "Трафик на обходах")
-                            feature("person.text.rectangle", "Устройства и ваш ID")
+                    // What the in-app cabinet has; the site's tariffs and codes as
+                    // AppStorePurchases.otherMethods allows.
+                    if cabinet {
+                        Card {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("В личном кабинете").fontWeight(.semibold)
+                                feature("calendar", "Сколько дней осталось")
+                                feature("chart.pie", "Трафик на обходах")
+                                feature("person.text.rectangle", "Устройства и ваш ID")
+                                if purchases.otherMethods { feature("tag", "Тарифы и коды на продление") }
+                            }
+                            .padding(16)
                         }
-                        .padding(16)
                     }
                     // What the in-app cabinet can't do: the bot, or (United States storefront
                     // only, App Review 3.1.1(a)) the full cabinet on the site, where it is sold too.
@@ -130,6 +139,11 @@ struct SubscriptionView: View {
         .background(Palette.background.ignoresSafeArea())
         .refreshable { await store.refreshFromPull() }
         .task { await store.loadAccount() }
+        // Тарифы from a reminder (RootView): this tab's sheets go down first.
+        .onChange(of: store.closeSheets) { _ in
+            showCabinet = false
+            showDevices = false
+        }
         .sheet(isPresented: $showDevices) {
             if let acc = store.account { DevicesView(account: acc) }
         }
@@ -478,6 +492,8 @@ struct ProfileView: View {
             .toolbar(.hidden, for: .tabBar)
             .navigationDestination(isPresented: $showTech) { TechModeView().toolbar(.hidden, for: .tabBar) }
             .sheet(isPresented: $about) { AboutSheet(version: version, support: store.supportURL) }
+            // Тарифы from a reminder (RootView): О приложении goes down first.
+            .onChange(of: store.closeSheets) { _ in about = false }
             .alert("Код", isPresented: $askCode) {
                 SecureField("Код", text: $code).keyboardType(.numberPad)
                 Button("Открыть") { enterCode() }
@@ -730,6 +746,8 @@ struct ThemePicker: View {
 struct AboutSheet: View {
     let version: String
     let support: URL
+    /// The storefront: the bot itself (where it sells too) only in the United States one.
+    @ObservedObject private var purchases = AppStorePurchases.shared
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
 
@@ -757,14 +775,17 @@ struct AboutSheet: View {
             }
             chip("cpu", "Ядро Xray")
             VStack(spacing: 10) {
-                Button { openURL(Config.telegram) } label: {
-                    Label("Telegram-бот", systemImage: "paperplane.fill")
-                }
-                .buttonStyle(PrimaryButtonStyle())
                 Button { openURL(support) } label: {
                     Label("Поддержка", systemImage: "headphones")
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(PrimaryButtonStyle())
+                // Elsewhere the bot is reached as support (App Review 3.1.1(a)).
+                if purchases.linksOut {
+                    Button { openURL(Config.telegram) } label: {
+                        Label("Telegram-бот", systemImage: "paperplane.fill")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                }
                 Button { openURL(Config.privacyPolicy) } label: {
                     Text("Политика конфиденциальности")
                         .font(.scaled(15, weight: .semibold))
@@ -860,7 +881,8 @@ struct OpenSource {
     private static func github(_ path: String) -> URL { URL(string: "https://github.com/" + path)! }
 
     static let all = [
-        OpenSource(name: "Titan VPS", detail: "Это приложение и версии для Android и Windows",
+        // No other platforms named (App Review 2.3.10): the repository shows the rest.
+        OpenSource(name: "Titan VPS", detail: "Исходный код приложения Titan VPS",
                    links: [Link(title: "UnionUnllimited/TitanApp", url: Config.repository)]),
         OpenSource(name: "Ядро VPN", detail: "Xray-core v26.9.30 (через libXray), с нашими патчами для iOS",
                    links: [Link(title: "XTLS/Xray-core", url: github("XTLS/Xray-core")),
