@@ -9,8 +9,8 @@ class AccountApiTest {
     @Test
     fun uuidFromSubscriptionUrl() {
         assertEquals(
-            "c277430c-bd59-43a7-9cf6-279a6cad4d27",
-            AccountApi.uuidOf("https://api1.titanvps.su/sub/c277430c-bd59-43a7-9cf6-279a6cad4d27"),
+            "11111111-2222-4333-8444-555555555555",
+            AccountApi.uuidOf("https://sub.example.net/sub/11111111-2222-4333-8444-555555555555"),
         )
     }
 

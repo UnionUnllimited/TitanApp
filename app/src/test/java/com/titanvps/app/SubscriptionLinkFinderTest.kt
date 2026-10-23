@@ -13,8 +13,8 @@ class SubscriptionLinkFinderTest {
 
     @Test
     fun findsPlainLinkInHtml() {
-        val html = """<div><input value="https://sub-vpn.example.online/api/sub/c277430c-bd59"><a href="/pay">Оплатить</a></div>"""
-        assertEquals("https://sub-vpn.example.online/api/sub/c277430c-bd59", finder.find(html))
+        val html = """<div><input value="https://sub-vpn.example.online/api/sub/11111111-2222"><a href="/pay">Оплатить</a></div>"""
+        assertEquals("https://sub-vpn.example.online/api/sub/11111111-2222", finder.find(html))
     }
 
     @Test
