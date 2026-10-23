@@ -26,7 +26,9 @@ struct HomeView: View {
                         ScrollView {
                             VStack(spacing: 12) { controls }
                                 .animation(.spring(response: 0.45, dampingFraction: 0.85), value: vpn.isConnected)
-                                .padding(16)
+                                // The column clips: room at its sides for the slider's glow.
+                                .padding(.vertical, 16)
+                                .padding(.horizontal, 24)
                         }
                         .scrollDisabled(holdingDrag)
                         ScrollView { VStack(spacing: 10) { list }.padding(16) }
@@ -148,7 +150,7 @@ struct HomeView: View {
                         failures: vpn.failures, onToggle: toggleVPN,
                         onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) },
                         onHold: { holdingDrag = $0 })
-                // Room for its glow.
+                // Room for its glow: with the stack's padding, 22 pt to the page's top.
                 .padding(.vertical, 6)
             statusBlock
         }

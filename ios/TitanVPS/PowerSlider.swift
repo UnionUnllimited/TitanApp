@@ -3,7 +3,7 @@ import SwiftUI
 /// Выкл | Вкл as one slider: the knob is dragged across by hand (or a side tapped). While a
 /// ping runs (it turns the VPN off for its time and back on after) the slider is locked:
 /// it darkens, the knob shows a lock and a shine runs over it; a tap then only shakes it.
-/// It glows in its state's colour (none while locked): the parent leaves room for it.
+/// It glows in its state's colour (none while locked): the parent keeps clipping edges 22 pt away.
 struct PowerSlider: View {
     enum Phase: Equatable { case off, connecting, on, disconnecting }
 
@@ -126,10 +126,12 @@ struct PowerSlider: View {
 
     /// A soft light around the slider: green while on, blue while it connects (breathing slowly)
     /// or goes off, a faint blue while off; none while locked. A shadow of a capsule under the
-    /// track, so only the light outside it shows.
+    /// track, so only the light outside it shows. The radius is about the blur's sigma: at 9 the
+    /// light has faded out 22 pt away, where a ScrollView's edge (it clips on iOS 16) may be; at
+    /// 18 that edge cut it in a line under the header and beside the iPad's list.
     private var glow: some View {
         let color = phase == .on ? Self.onGlow : Palette.primary
-        let strength: Double = locked ? 0 : phase == .on ? 0.45 : busy ? 0.4 : 0.18
+        let strength: Double = locked ? 0 : phase == .on ? 0.5 : busy ? 0.45 : 0.2
         let breathes = busy && !locked && !reduceMotion
         return TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !breathes)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3600)
@@ -137,7 +139,7 @@ struct PowerSlider: View {
             let breath = breathes ? 0.75 + 0.25 * sin(t * 2.5) : 1
             Capsule()
                 .fill(Palette.track)
-                .shadow(color: color.opacity(strength * breath), radius: 18)
+                .shadow(color: color.opacity(strength * breath), radius: 9)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
