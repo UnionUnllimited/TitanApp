@@ -2,7 +2,8 @@ name: Android
 
 on:
   push:
-    branches: [main, "claude/**"]
+    # android-dev/**: test builds, published as pre-releases the in-app updater never offers.
+    branches: [main, "claude/**", "android-dev/**"]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -79,13 +80,25 @@ jobs:
 
       # The app's "Обновление приложения" reads releases/latest (tag android-<versionCode>).
       - name: Publish release for in-app updates
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && !startsWith(github.ref_name, 'android-dev/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-${{ github.run_number }}
           target_commitish: ${{ github.sha }}
           name: Titan VPS 0.1.${{ github.run_number }}
           make_latest: true
+          files: out/release/*.apk
+
+      # A test build: a link to try it, never "latest" (releases/latest skips pre-releases).
+      - name: Publish test build
+        if: github.event_name == 'push' && startsWith(github.ref_name, 'android-dev/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-test-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Titan VPS тест 0.1.${{ github.run_number }}
+          prerelease: true
+          make_latest: false
           files: out/release/*.apk
 
       - uses: actions/upload-artifact@v4
