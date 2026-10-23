@@ -837,10 +837,11 @@ class TitanVpnService : VpnService() {
 
     /**
      * The VPN's own notification, kept at the top of the shade while on: a channel of
-     * default importance (the main section, not "Silent") without sound, connection time on
-     * a timer, and shown again if swiped away. «Уведомление с сервером» on: the server's
-     * flag and name as the title, the status below and ‹ Отключить › (also on the lock
-     * screen; on Android 16 asked to be promoted to a Live Update). [since]: connected at.
+     * default importance (the main section, not "Silent") without sound, colorized in our
+     * blue unless it is a Live Update, connection time on a timer, and shown again if swiped
+     * away. «Уведомление с сервером» on: the server's flag and name as the title, the status
+     * below and ‹ Отключить › (also on the lock screen; on Android 16 asked to be promoted to
+     * a Live Update). [since]: connected at.
      */
     @Synchronized
     private fun showStatus(s: Status, server: String?, since: Long = 0L) {
@@ -886,18 +887,24 @@ class TitanVpnService : VpnService() {
             .setContentIntent(open)
         val name = statusServer
         val stop = serviceIntent(1, ACTION_STOP)
-        if (TitanApp.get(this).settings.liveNotification.value && name != null) {
+        val live = name != null && TitanApp.get(this).settings.liveNotification.value
+        // Android 16 is asked to promote it to a Live Update, which a colorized one can't be.
+        val promoted = live && Build.VERSION.SDK_INT >= 36
+        // Elsewhere our blue: Android ranks a colorized foreground service first (Android 12+:
+        // in the top section, with media and calls), not under every newer notification.
+        if (!promoted) builder.setColorized(true).setColor(BRAND_COLOR)
+        if (name != null && live) {
             builder.setContentTitle(Flags.nameWithoutFlag(name))
                 .setContentText(statusText(live = true, name))
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            flagIcon(name)?.let { builder.setLargeIcon(it) }
+            flagIcon(name, onBrand = !promoted)?.let { builder.setLargeIcon(it) }
             val steps = canStep()
             if (steps) builder.addAction(0, getString(R.string.action_prev), serviceIntent(6, ACTION_PREV))
             builder.addAction(0, getString(R.string.action_disconnect), stop)
             if (steps) builder.addAction(0, getString(R.string.action_next), serviceIntent(7, ACTION_NEXT))
             // Android 16 Live Update (the Dynamic Island of Android): string keys, so any
             // compile SDK builds it; older versions ignore them.
-            if (Build.VERSION.SDK_INT >= 36) {
+            if (promoted) {
                 builder.addExtras(Bundle().apply {
                     putBoolean("android.requestPromotedOngoing", true)
                     putString("android.shortCriticalText", Flags.codeOf(name)?.uppercase() ?: "VPN")
@@ -928,15 +935,21 @@ class TitanVpnService : VpnService() {
         return ServerOrder.neighbor(all, current, true, app.settings.favorites.value, wifiLocked()) != null
     }
 
-    /** The round flag; the shade follows the system theme, so do the disc and the ring. */
-    private fun flagIcon(name: String): Bitmap? {
+    /**
+     * The round flag. On our blue ([onBrand]): a white disc, so the shield of a server without
+     * a flag still shows; otherwise the shade follows the system theme, so do the disc and the ring.
+     */
+    private fun flagIcon(name: String, onBrand: Boolean): Bitmap? {
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-        val key = "$name|$night"
+        val key = "$name|$night|$onBrand"
         if (key == iconKey) return icon
         val px = (64 * resources.displayMetrics.density).roundToInt()
         icon = runCatching {
-            if (night) Flags.circleBitmap(this, name, px, 0x1AFFFFFF, 0x26FFFFFF)
-            else Flags.circleBitmap(this, name, px, 0x14000000, 0x1F000000)
+            when {
+                onBrand -> Flags.circleBitmap(this, name, px, 0xFFFFFFFF.toInt(), 0x40FFFFFF)
+                night -> Flags.circleBitmap(this, name, px, 0x1AFFFFFF, 0x26FFFFFF)
+                else -> Flags.circleBitmap(this, name, px, 0x14000000, 0x1F000000)
+            }
         }.getOrNull()
         iconKey = key
         return icon
@@ -962,6 +975,8 @@ class TitanVpnService : VpnService() {
         private const val CHANNEL_ID = "vpn_status"
         private const val OLD_CHANNEL_ID = "vpn"
         private const val NOTIFICATION_ID = 1
+        /** The colour of the VPN notification (the app's blue). */
+        private val BRAND_COLOR = 0xFF1A66FF.toInt()
         private const val MTU = 1500
         /** A new network settles (DHCP, DNS) before the core restarts on it. */
         private const val NETWORK_SETTLE_MS = 1_500L
