@@ -779,7 +779,7 @@ struct AboutSheet: View {
                     Label("Поддержка", systemImage: "headphones")
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                // Elsewhere the bot is reached as support (App Review 3.1.1(a)).
+                // With the links kept to the US (AppStorePurchases.linksOut) the bot is reached as support.
                 if purchases.linksOut {
                     Button { openURL(Config.telegram) } label: {
                         Label("Telegram-бот", systemImage: "paperplane.fill")

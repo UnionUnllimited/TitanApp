@@ -434,8 +434,8 @@ struct WelcomeView: View {
                     .opacity(appeared ? 1 : 0)
                     .offset(y: appeared ? 0 : 28)
 
-                // Where to get a key is where it is sold (the bot): the United States storefront
-                // only (App Review 3.1.1(a), 3.1.3); elsewhere just how to enter one.
+                // Where to get a key is where it is sold (the bot), as AppStorePurchases.linksOut
+                // allows (the owner's switch); otherwise just how to enter one.
                 Group {
                     if purchases.linksOut { steps } else { haveKey }
                 }

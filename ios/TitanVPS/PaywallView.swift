@@ -296,8 +296,8 @@ struct PaywallView: View {
 
     /// Другие методы with a key: in every storefront as the owner chose
     /// (AppStorePurchases.otherMethods), and while the App Store has no subscription to sell, so
-    /// an expired key is never left with nothing to tap. Before a key it would be the bot, as
-    /// «Где взять ключ» on the key entry: the United States storefront only.
+    /// an expired key is never left with nothing to tap. Before a key it is the bot, as
+    /// «Где взять ключ» on the key entry (AppStorePurchases.linksOut).
     private var showsOther: Bool {
         guard store.subscription != nil else { return purchases.linksOut }
         return purchases.otherMethods || purchases.noSubscriptions
