@@ -1,14 +1,8 @@
 package com.titanvps.app.ui
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -28,94 +21,62 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.Shuffle
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.outlined.DarkMode
-import androidx.compose.material.icons.outlined.Dns
-import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material.icons.outlined.Shield
-import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.SupportAgent
-import androidx.compose.material.icons.outlined.Storage
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.titanvps.app.BuildConfig
 import com.titanvps.app.R
-import com.titanvps.app.data.Server
 import com.titanvps.app.data.ServerGroups
 import com.titanvps.app.data.ServerGroups.Group
+import com.titanvps.app.data.ServerOrder
 import com.titanvps.app.data.Subscription
-import com.titanvps.app.data.ThemeMode
-import com.titanvps.app.ui.theme.Connected
-import com.titanvps.app.ui.theme.isDark
-import com.titanvps.app.ui.theme.pingColor
+import com.titanvps.app.ui.home.ListCaption
+import com.titanvps.app.ui.home.PowerSlider
+import com.titanvps.app.ui.home.ServerRow
+import com.titanvps.app.ui.home.ServerTabs
+import com.titanvps.app.ui.home.StatusBlock
+import com.titanvps.app.ui.home.WifiLockedDialog
+import com.titanvps.app.ui.kit.SpinningIcon
+import com.titanvps.app.ui.kit.SquareIconButton
+import com.titanvps.app.ui.kit.ToastKind
+import com.titanvps.app.ui.kit.Toasts
+import com.titanvps.app.ui.kit.pressable
+import com.titanvps.app.ui.kit.rememberHaptics
+import com.titanvps.app.ui.theme.Titan
 import com.titanvps.app.vpn.VpnState
-import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.TimeUnit
-
-private fun isAuto(s: Server) = s.name.lowercase().let { "авто" in it || "auto" in it }
-
-@Composable
-private fun isLight() = MaterialTheme.colorScheme.background.luminance() > 0.5f
-
-/** Green used for the connected state: deeper on light backgrounds. */
-@Composable
-private fun connectedGreen() = if (isLight()) Color(0xFF12A150) else Connected
 
 /**
- * Главная, as in the mockup: header, subscription card, Выкл | Вкл switch, status,
- * Серверы | Обходы tabs with a ping button and the server list. Обходы: mobile data only.
+ * Главная: header (Поддержка, logo, Обновить подписку), the Выкл | Вкл slider, the status
+ * with Проверить соединение, Серверы | Обходы tabs with Пинг, and the server list. The
+ * subscription's details are on Подписка; here only that it ran out. Обходы: mobile data only.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -127,20 +88,23 @@ internal fun HomeScreen(
     onOpenSubscription: () -> Unit,
 ) {
     val context = LocalContext.current
+    val haptics = rememberHaptics()
     val state by viewModel.vpnState.collectAsState()
     val selectedId by viewModel.selectedId.collectAsState()
-    val pings by viewModel.pings.collectAsState()
+    // Read per row, not here: a ping result redraws only its own row.
+    val pingsState = viewModel.pings.collectAsState()
+    val measuringState = viewModel.measuring.collectAsState()
+    val errorsState = viewModel.pingErrors.collectAsState()
+    val progressState = viewModel.pingProgress.collectAsState()
     val pinging by viewModel.pinging.collectAsState()
-    val measuring by viewModel.measuring.collectAsState()
+    val check by viewModel.connectionCheck.collectAsState()
     val account by viewModel.account.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
     val mobileNet by viewModel.onMobile.collectAsState()
     val techMode by viewModel.techMode.collectAsState()
     // Bypass servers: mobile internet only, any network in Технический режим.
-    val onMobile = mobileNet || techMode
-    val theme by viewModel.theme.collectAsState()
-    val dark = isDark(theme)
-    var details by remember { mutableStateOf<Server?>(null) }
+    val wifiLocked = !(mobileNet || techMode)
+    var wifiInfo by remember { mutableStateOf(false) }
 
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
     val groups = remember(sub.servers) { ServerGroups.split(sub.servers).toMap() }
@@ -148,90 +112,132 @@ internal fun HomeScreen(
         mutableStateOf(selected?.let { ServerGroups.groupOf(it, sub.servers) } ?: Group.SERVERS)
     }
     if (groups[page].isNullOrEmpty()) page = Group.SERVERS
-    val bypassLocked = page == Group.BYPASS && !onMobile
-    val selectedLocked = !onMobile && selected != null && ServerGroups.groupOf(selected, sub.servers) == Group.BYPASS
+    // Favourites first, the subscription's order otherwise (as the ‹ › steps).
+    val shown = remember(groups, page, favorites) { ServerOrder.ordered(groups[page].orEmpty(), favorites) }
+    val counts = remember(groups) { groups.map { (group, list) -> group to list.size } }
+    val selectedPing by remember(selected?.id) { derivedStateOf { selected?.id?.let { pingsState.value[it] } } }
     val connected = state is VpnState.Connected
+    val expired = sub.info.expireAt > 0 && sub.info.expireAt <= System.currentTimeMillis() / 1000
+    val supportUrl = sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL
 
-    val onToggle: (Boolean) -> Unit = { on ->
+    // The slider moved: false when it can't be done now (the knob goes back with a shake).
+    val onToggle: (Boolean) -> Boolean = { on ->
+        val now = viewModel.vpnState.value
+        val active = now is VpnState.Connected || now == VpnState.Connecting
         when {
-            on && state !is VpnState.Connected && state != VpnState.Connecting -> onConnect()
-            !on && (state is VpnState.Connected || state == VpnState.Connecting) -> viewModel.disconnect()
+            on && !active -> viewModel.connectRefusal()?.let { refusal ->
+                Toasts.show(refusal, ToastKind.WARNING)
+                false
+            } ?: run {
+                onConnect()
+                true
+            }
+            !on && active -> {
+                viewModel.disconnect()
+                true
+            }
+            else -> true
         }
+    }
+    val bannerText = when (account?.status) {
+        "BLOCKED" -> "Аккаунт заблокирован. Напишите в поддержку"
+        "MAINTENANCE" -> "Идут технические работы. Подключение может не работать"
+        else -> null
     }
     val topItems: LazyListScope.() -> Unit = {
-        item { SubscriptionCard(sub, onOpenSubscription) }
-        item { PowerSwitch(state, Modifier.padding(top = 6.dp), onToggle) }
-        item { StatusBlock(state, selected, selected?.let { pings[it.id] }, selectedLocked) }
-        account?.status?.let { status ->
-            val text = when (status) {
-                "BLOCKED" -> "Аккаунт заблокирован. Напишите в поддержку"
-                "MAINTENANCE" -> "Идут технические работы. Подключение может не работать"
-                else -> null
-            }
-            if (text != null) item { AccountBanner(text) { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) } }
-        }
-    }
-    val listItems: LazyListScope.() -> Unit = {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    groups.forEach { (group, list) ->
-                        GroupTab(group, list.size, group == page, Modifier.weight(1f)) { page = group }
-                    }
-                }
-                PingButton(pinging) { viewModel.pingAll(groups[page].orEmpty().map { it.id }) }
+        if (bannerText != null) {
+            item(key = "home:account") {
+                AccountBanner(bannerText, blocked = account?.status == "BLOCKED") { context.openUrl(supportUrl) }
             }
         }
-        item {
-            when {
-                page == Group.SERVERS -> Caption("Безлимит на обычных серверах")
-                bypassLocked -> WifiWarning()
-                else -> BypassCaption(sub) { viewModel.openCabinet() }
-            }
-        }
-        items(groups[page].orEmpty(), key = { it.id }) { s ->
-            ServerRow(
-                server = s,
-                ping = pings[s.id],
-                measuring = s.id in measuring,
-                selected = s.id == selected?.id,
-                connected = connected && s.id == selected?.id,
-                favorite = s.name in favorites,
-                locked = bypassLocked,
-                limited = page == Group.BYPASS && ServerGroups.isLimited(s),
-                onClick = { if (bypassLocked) viewModel.explainBypassOnWifi() else viewModel.select(s.id) },
-                onLongClick = { details = s },
-                onPing = { viewModel.pingOne(s.id) },
+        if (expired) item(key = "home:expired") { ExpiredBanner(onOpenSubscription) }
+        // Room round the slider for its glow.
+        item(key = "home:slider") { PowerSlider(state, onToggle, Modifier.padding(vertical = 6.dp)) }
+        item(key = "home:status") {
+            StatusBlock(
+                state = state,
+                serverName = selected?.name,
+                ping = selectedPing,
+                bypassOnWifi = wifiLocked && selected != null && ServerGroups.isBypass(selected),
+                check = check,
+                techMode = techMode,
+                onCheck = { viewModel.checkConnection() },
             )
         }
     }
-    val header: @Composable (Modifier) -> Unit = { m ->
-        HomeHeader(
-            dark = dark,
-            onSupport = { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) },
-            onTheme = { viewModel.setTheme(if (dark) ThemeMode.LIGHT else ThemeMode.DARK) },
-            modifier = m,
-        )
+    val listItems: LazyListScope.() -> Unit = {
+        // The tabs and the lines under them kept close: more rows on screen.
+        item(key = "home:tabs") {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                ServerTabs(
+                    counts = counts,
+                    page = page,
+                    onPage = { page = it },
+                    pinging = pinging,
+                    progress = { progressState.value },
+                    // In the order shown (favourites first): results fill the list from the top.
+                    onPing = { viewModel.pingAll(shown.map { it.id }) },
+                )
+                ListCaption(page, sub.info, wifiLocked, onBuy = { viewModel.openCabinet() })
+            }
+        }
+        // Read once for the list, not per row.
+        val selectedServerId = selected?.id
+        val bypassPage = page == Group.BYPASS
+        items(shown, key = { it.id }) { s ->
+            val id = s.id
+            val ping by remember(id) { derivedStateOf { pingsState.value[id] } }
+            val measuring by remember(id) { derivedStateOf { id in measuringState.value } }
+            val error by remember(id) { derivedStateOf { errorsState.value[id] } }
+            val locked = wifiLocked && ServerGroups.isBypass(s)
+            ServerRow(
+                name = s.name,
+                ping = ping,
+                measuring = measuring,
+                error = error,
+                selected = id == selectedServerId,
+                connected = connected && id == selectedServerId,
+                favorite = s.name in favorites,
+                locked = locked,
+                limited = bypassPage && ServerGroups.isLimited(s),
+                techMode = techMode,
+                onSelect = {
+                    if (locked) {
+                        haptics.warning()
+                        wifiInfo = true
+                    } else {
+                        if (id != viewModel.selectedId.value) haptics.selection()
+                        // Connected: the view model moves the VPN to it.
+                        viewModel.select(id)
+                    }
+                },
+                onPing = { viewModel.pingOne(id) },
+                onFavorite = { viewModel.toggleFavorite(s.name) },
+                // Favourites move to the top: the row slides there.
+                modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
+            )
+        }
     }
-    val listPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)
+    val listPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
 
     // Phones: one column up to 640dp, centered. Tablets / landscape: controls on the
     // left, the server list on the right.
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         if (maxWidth >= 720.dp) {
             Column(Modifier.widthIn(max = 1200.dp).fillMaxSize()) {
-                header(Modifier.fillMaxWidth())
+                HomeHeader(busy, { context.openUrl(supportUrl) }, { viewModel.refreshByHand() }, Modifier.fillMaxWidth())
                 Row(Modifier.weight(1f).fillMaxWidth()) {
                     LazyColumn(
                         Modifier.weight(0.9f).fillMaxHeight(),
                         contentPadding = listPadding,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                         content = topItems,
                     )
-                    PullToRefreshBox(isRefreshing = busy, onRefresh = { viewModel.refresh() }, modifier = Modifier.weight(1.1f).fillMaxHeight()) {
+                    PullToRefreshBox(
+                        isRefreshing = busy,
+                        onRefresh = { viewModel.refreshByHand() },
+                        modifier = Modifier.weight(1.1f).fillMaxHeight(),
+                    ) {
                         LazyColumn(
                             Modifier.fillMaxSize(),
                             contentPadding = listPadding,
@@ -243,12 +249,16 @@ internal fun HomeScreen(
             }
         } else {
             Column(Modifier.widthIn(max = 640.dp).fillMaxSize()) {
-                header(Modifier.fillMaxWidth())
-                PullToRefreshBox(isRefreshing = busy, onRefresh = { viewModel.refresh() }, modifier = Modifier.weight(1f).fillMaxWidth()) {
+                HomeHeader(busy, { context.openUrl(supportUrl) }, { viewModel.refreshByHand() }, Modifier.fillMaxWidth())
+                PullToRefreshBox(
+                    isRefreshing = busy,
+                    onRefresh = { viewModel.refreshByHand() },
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                ) {
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = listPadding,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         topItems()
                         listItems()
@@ -258,546 +268,83 @@ internal fun HomeScreen(
         }
     }
 
-    details?.let { server ->
-        ServerDetailsSheet(
-            server = server,
-            ping = pings[server.id],
-            measuring = server.id in measuring,
-            selected = server.id == selected?.id,
-            favorite = server.name in favorites,
-            locked = !onMobile && ServerGroups.groupOf(server, sub.servers) == Group.BYPASS,
-            onFavorite = { viewModel.toggleFavorite(server.name) },
-            onSelect = { viewModel.select(server.id); details = null },
-            onDismiss = { details = null },
-        )
-    }
+    if (wifiInfo) WifiLockedDialog { wifiInfo = false }
 }
 
-/** Support button, logo + "Titan VPS", theme button. */
+/** Поддержка, the logo with "Titan VPS", Обновить подписку (the theme is in Настройки). */
 @Composable
-private fun HomeHeader(dark: Boolean, onSupport: () -> Unit, onTheme: () -> Unit, modifier: Modifier) {
-    Row(modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        SquareButton(Icons.Outlined.SupportAgent, "Поддержка", onSupport)
+private fun HomeHeader(busy: Boolean, onSupport: () -> Unit, onRefresh: () -> Unit, modifier: Modifier) {
+    Row(modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        SquareIconButton(Icons.Outlined.SupportAgent, "Поддержка", onSupport)
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(R.drawable.logo), null, Modifier.size(34.dp))
+            Image(painterResource(R.drawable.logo), null, Modifier.size(40.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Titan VPS", fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text("Titan VPS", fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         }
-        SquareButton(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, "Тема", onTheme)
+        RefreshButton(busy, onRefresh)
     }
 }
 
+/** The header's square button with an icon that turns while the subscription is fetched. */
 @Composable
-private fun SquareButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
+private fun RefreshButton(busy: Boolean, onClick: () -> Unit) {
+    val palette = Titan.palette
+    val shape = RoundedCornerShape(14.dp)
+    val shadow = Color.Black.copy(alpha = 0.06f)
+    // Looks as SquareIconButton; it has no turning icon.
     Box(
         Modifier
+            .pressable(onClick = { if (!busy) onClick() }, scale = 0.9f)
+            .semantics { contentDescription = "Обновить подписку" }
             .size(48.dp)
-            .shadow(2.dp, RoundedCornerShape(14.dp))
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick),
+            .shadow(3.dp, shape, clip = false, ambientColor = shadow, spotColor = shadow)
+            .clip(shape)
+            .background(palette.surface)
+            .border(1.dp, palette.outline.copy(alpha = 0.5f), shape),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, description, Modifier.size(22.dp))
+        SpinningIcon(Icons.Filled.Refresh, busy, Modifier.size(19.dp), tint = palette.primary)
     }
 }
-
-/** "Подписка активна · До …" with an expandable "Подробнее". */
-@Composable
-private fun SubscriptionCard(sub: Subscription, onOpen: () -> Unit) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    val info = sub.info
-    val now = System.currentTimeMillis() / 1000
-    val active = info.expireAt <= 0 || info.expireAt > now
-    val primary = MaterialTheme.colorScheme.primary
-    Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-        Column {
-            Row(
-                Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(44.dp).clip(CircleShape).background(primary.copy(alpha = 0.10f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(TitanIcons.Crown, null, Modifier.size(22.dp), tint = if (active) primary else MaterialTheme.colorScheme.error)
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(if (active) "Подписка активна" else "Подписка истекла", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    Text(
-                        if (info.expireAt <= 0) "Бессрочно"
-                        else "До " + SimpleDateFormat("d MMMM yyyy", Locale("ru")).format(Date(info.expireAt * 1000)),
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Подписка", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = MaterialTheme.colorScheme.outlineVariant)
-            Row(
-                Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Подробнее", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Icon(
-                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null,
-                    Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            AnimatedVisibility(expanded) {
-                Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (info.expireAt > 0) {
-                        val days = TimeUnit.SECONDS.toDays(info.expireAt - now).coerceAtLeast(0)
-                        DetailLine("Осталось", "$days дн.")
-                    }
-                    DetailLine("Обычные серверы", "Безлимит")
-                    DetailLine(
-                        "Трафик на обходах",
-                        if (info.totalBytes > 0) "${formatBytes((info.totalBytes - info.usedBytes).coerceAtLeast(0))} из ${formatBytes(info.totalBytes)}"
-                        else "Безлимит",
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DetailLine(label: String, value: String) {
-    Row(Modifier.fillMaxWidth()) {
-        Text(label, Modifier.weight(1f), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-    }
-}
-
-/** Выкл | Вкл switch: grey "Выкл" when off, spinner knob while connecting, green "Вкл" when on. */
-@Composable
-private fun PowerSwitch(state: VpnState, modifier: Modifier, onToggle: (Boolean) -> Unit) {
-    val primary = MaterialTheme.colorScheme.primary
-    val green = connectedGreen()
-    val connecting = state == VpnState.Connecting || state == VpnState.Disconnecting
-    val on = state is VpnState.Connected
-    val track = MaterialTheme.colorScheme.surfaceVariant
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(60.dp)
-            .clip(RoundedCornerShape(34.dp))
-            .background(
-                if (connecting) Brush.horizontalGradient(listOf(track, primary.copy(alpha = 0.18f), track))
-                else Brush.horizontalGradient(listOf(track, track))
-            )
-            .padding(5.dp),
-    ) {
-        Row(Modifier.fillMaxSize()) {
-            val red = MaterialTheme.colorScheme.error
-            val off = !on && !connecting
-            val offBg by animateColorAsState(if (off) red.copy(alpha = 0.14f) else Color.Transparent, label = "off")
-            val onBg by animateColorAsState(if (on) green.copy(alpha = 0.16f) else Color.Transparent, label = "on")
-            Row(
-                Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(30.dp))
-                    .background(offBg)
-                    .then(if (off) Modifier.border(1.5.dp, red, RoundedCornerShape(30.dp)) else Modifier)
-                    .clickable { onToggle(false) },
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val tint = if (off) red else MaterialTheme.colorScheme.onSurface
-                Icon(Icons.Default.PowerSettingsNew, null, Modifier.size(20.dp), tint = tint)
-                Spacer(Modifier.width(8.dp))
-                Text("Выкл", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = tint)
-            }
-            Row(
-                Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(30.dp))
-                    .background(onBg)
-                    .then(if (on) Modifier.border(1.5.dp, green, RoundedCornerShape(30.dp)) else Modifier)
-                    .clickable { onToggle(true) },
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val tint = when {
-                    on -> if (isLight()) Color(0xFF0B6B38) else green
-                    connecting -> primary
-                    else -> MaterialTheme.colorScheme.onSurface
-                }
-                Icon(Icons.Outlined.Shield, null, Modifier.size(20.dp), tint = tint)
-                Spacer(Modifier.width(8.dp))
-                Text("Вкл", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = tint)
-            }
-        }
-        if (connecting) {
-            Box(
-                Modifier
-                    .align(Alignment.Center)
-                    .size(58.dp)
-                    .shadow(10.dp, CircleShape, ambientColor = primary, spotColor = primary)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.5.dp, color = primary)
-            }
-        }
-    }
-}
-
-/** "Не подключено / Подключаемся / Подключено" with the server, ping and timer. */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun StatusBlock(state: VpnState, server: Server?, ping: Long?, locked: Boolean) {
-    val green = connectedGreen()
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        val (title, color) = when (state) {
-            is VpnState.Connected -> "Подключено" to green
-            VpnState.Connecting -> "Подключаемся" to MaterialTheme.colorScheme.primary
-            VpnState.Disconnecting -> "Отключаемся" to MaterialTheme.colorScheme.onSurface
-            else -> "Не подключено" to MaterialTheme.colorScheme.onSurface
-        }
-        Text(title, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = color)
-        val sub = MaterialTheme.colorScheme.onSurfaceVariant
-        when (state) {
-            is VpnState.Connected -> {
-                Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    server?.let { FlagCircle(it, 22.dp) }
-                    Spacer(Modifier.width(8.dp))
-                    MarqueeText(
-                        (server?.let { ServerGroups.splitFlag(it.name).second } ?: state.serverName) +
-                            (ping?.takeIf { it >= 0 }?.let { " · $it мс" } ?: ""),
-                        Modifier.weight(1f, fill = false),
-                        fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                    )
-                }
-                var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-                LaunchedEffect(state.since) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
-                val s = (now - state.since).coerceAtLeast(0) / 1000
-                Text(
-                    if (s >= 3600) formatDuration(now - state.since) else "%02d:%02d".format(s / 60, s % 60),
-                    fontSize = 13.sp, color = sub,
-                )
-            }
-            VpnState.Connecting -> Text("Устанавливаем соединение", fontSize = 15.sp, color = sub)
-            VpnState.Disconnecting -> Text("Закрываем соединение", fontSize = 15.sp, color = sub)
-            is VpnState.Error -> Text(state.message, fontSize = 14.sp, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-            else -> Text(
-                when {
-                    locked -> "Обходы недоступны на Wi-Fi — выберите сервер"
-                    server != null -> ServerGroups.splitFlag(server.name).second
-                    else -> "Выберите сервер"
-                },
-                fontSize = 15.sp,
-                color = if (locked) MaterialTheme.colorScheme.error else sub,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-            )
-        }
-    }
-}
-
-/** "Серверы 35" / "Обходы 52" tab with an icon and a count badge. */
-@Composable
-private fun GroupTab(group: Group, count: Int, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    val primary = MaterialTheme.colorScheme.primary
-    val shape = RoundedCornerShape(13.dp)
-    val color = if (selected) primary else MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier
-            .clip(shape)
-            .background(if (selected) primary.copy(alpha = 0.08f) else Color.Transparent)
-            .then(if (selected) Modifier.border(1.dp, primary.copy(alpha = 0.35f), shape) else Modifier)
-            .clickable(onClick = onClick)
-            .heightIn(min = 44.dp)
-            .padding(horizontal = 6.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(if (group == Group.SERVERS) Icons.Outlined.Storage else Icons.Default.Shuffle, null, Modifier.size(15.dp), tint = color)
-        Spacer(Modifier.width(4.dp))
-        Text(group.title, color = color, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Spacer(Modifier.width(4.dp))
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(10.dp))
-                .background(if (selected) primary else MaterialTheme.colorScheme.outlineVariant)
-                .padding(horizontal = 5.dp, vertical = 1.dp),
-        ) {
-            Text("$count", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun PingButton(pinging: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick)
-            .heightIn(min = 52.dp)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (pinging) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-        else Icon(Icons.Default.Speed, null, Modifier.size(20.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(if (pinging) "Стоп" else "Пинг", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun Caption(text: String) {
-    Text(text, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp))
-}
-
-/** Bypass traffic line: what's left and a "Докупить ГБ" link to the bot. */
-@Composable
-private fun BypassCaption(sub: Subscription, onBuy: () -> Unit) {
-    val info = sub.info
-    Row(Modifier.fillMaxWidth().padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            if (info.totalBytes > 0) "Трафик: ${formatBytes((info.totalBytes - info.usedBytes).coerceAtLeast(0))} из ${formatBytes(info.totalBytes)}"
-            else "Для ограничений мобильного интернета",
-            Modifier.weight(1f),
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            "Докупить ГБ",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onBuy).padding(horizontal = 6.dp, vertical = 4.dp),
-        )
-    }
-}
-
-/** Shown on the Обходы tab while the phone is on Wi-Fi. */
-@Composable
-private fun WifiWarning() {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
-            Icon(Icons.Default.Wifi, null, Modifier.size(20.dp))
-            Spacer(Modifier.width(10.dp))
-            Column {
-                Text("Недоступно на Wi-Fi", fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Обходы работают только через мобильный интернет и нужны при его ограничениях. " +
-                        "На Wi-Fi подключиться к ним нельзя — выберите сервер во вкладке «Серверы».",
-                    fontSize = 13.sp,
-                )
-            }
-        }
-    }
-}
-
-/** Round flag from the name's emoji; АВТО gets a bolt, other entries a server icon. */
-@Composable
-private fun FlagCircle(server: Server, size: androidx.compose.ui.unit.Dp) {
-    val flag = remember(server.name) { ServerGroups.splitFlag(server.name).first }
-    Box(
-        Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center,
-    ) {
-        when {
-            // Emoji drawn larger than the circle so the flag fills it.
-            flag != null -> Text(flag, fontSize = (size.value * 0.95f).sp, lineHeight = (size.value * 0.95f).sp, maxLines = 1, softWrap = false)
-            isAuto(server) -> Icon(Icons.Default.Bolt, null, Modifier.size(size * 0.6f), tint = MaterialTheme.colorScheme.primary)
-            else -> Icon(Icons.Outlined.Dns, null, Modifier.size(size * 0.55f), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun ServerRow(
-    server: Server,
-    ping: Long?,
-    measuring: Boolean,
-    selected: Boolean,
-    connected: Boolean,
-    favorite: Boolean,
-    locked: Boolean,
-    limited: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onPing: () -> Unit,
-) {
-    val shape = RoundedCornerShape(16.dp)
-    val accent = if (connected) connectedGreen() else MaterialTheme.colorScheme.primary
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(if (selected) accent.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface)
-            .then(if (selected) Modifier.border(1.5.dp, accent, shape) else Modifier)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .alpha(if (locked) 0.45f else 1f)
-            .heightIn(min = 58.dp)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        FlagCircle(server, 34.dp)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            MarqueeText(
-                ServerGroups.splitFlag(server.name).second,
-                fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                if (limited) "Лимитный · расходует ГБ" else "Безлимит",
-                fontSize = 11.sp,
-                color = if (limited) Color(0xFFF59E0B) else connectedGreen(),
-                maxLines = 1,
-            )
-        }
-        Spacer(Modifier.width(10.dp))
-        if (favorite) {
-            Icon(Icons.Default.Star, null, tint = Color(0xFFF5B301), modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-        }
-        // Tap the ping to re-measure just this server (like Happ).
-        Box(
-            Modifier
-                .heightIn(min = 40.dp)
-                .widthIn(min = 40.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .clickable(onClick = onPing)
-                .padding(horizontal = 6.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            when {
-                ping != null -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (measuring) {
-                        CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp)
-                        Spacer(Modifier.width(4.dp))
-                    }
-                    Text(
-                        if (ping >= 0) "$ping мс" else "таймаут",
-                        color = pingColor(ping),
-                        fontSize = 13.sp,
-                        modifier = Modifier.alpha(if (measuring) 0.5f else 1f),
-                    )
-                }
-                measuring -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                else -> Icon(Icons.Default.Speed, "Пинг", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-            }
-        }
-        Spacer(Modifier.width(12.dp))
-        when {
-            connected -> Box(Modifier.size(26.dp).clip(CircleShape).background(accent), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(17.dp))
-            }
-            selected -> Box(Modifier.size(26.dp).border(2.dp, accent, CircleShape), contentAlignment = Alignment.Center) {
-                Box(Modifier.size(13.dp).clip(CircleShape).background(accent))
-            }
-            else -> Box(Modifier.size(26.dp).border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape))
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ServerDetailsSheet(
-    server: Server,
-    ping: Long?,
-    measuring: Boolean,
-    selected: Boolean,
-    favorite: Boolean,
-    locked: Boolean,
-    onFavorite: () -> Unit,
-    onSelect: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val (flag, name) = remember(server.name) { ServerGroups.splitFlag(server.name) }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (flag != null) Text(flag, fontSize = 32.sp)
-                Spacer(Modifier.width(12.dp))
-                Text(name, Modifier.weight(1f), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                IconButton(onClick = onFavorite) {
-                    if (favorite) Icon(Icons.Default.Star, "Убрать из избранного", tint = Color(0xFFF5B301))
-                    else Icon(Icons.Outlined.StarBorder, "В избранное")
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Пинг", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                when {
-                    measuring && ping == null -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    ping != null -> Text(if (ping >= 0) "$ping мс" else "таймаут", color = pingColor(ping), fontWeight = FontWeight.Medium)
-                    else -> Text("—")
-                }
-            }
-            if ((ping ?: 0) < 0) {
-                Spacer(Modifier.height(8.dp))
-                Text("Сервер сейчас не отвечает. Попробуйте позже или выберите другой.", fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.height(20.dp))
-            Button(onClick = onSelect, enabled = !selected && !locked, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                Text(if (selected) "Выбран" else if (locked) "Только моб. сеть" else "Выбрать")
-            }
-        }
-    }
-}
-
-/**
- * A one-line name. Only if it doesn't fit does it scroll (after a pause, from the
- * beginning) with faded edges; names that fit are shown as is.
- */
-@Composable
-private fun MarqueeText(
-    text: String,
-    modifier: Modifier = Modifier,
-    fontSize: androidx.compose.ui.unit.TextUnit,
-    fontWeight: FontWeight,
-) {
-    // Once measured as too long it stays scrolling (the marquee itself never overflows).
-    var overflow by remember(text) { mutableStateOf(false) }
-    Text(
-        text,
-        modifier.then(if (overflow) Modifier.marqueeName() else Modifier),
-        fontSize = fontSize, fontWeight = fontWeight, maxLines = 1, softWrap = false,
-        onTextLayout = { if (it.hasVisualOverflow) overflow = true },
-    )
-}
-
-private fun Modifier.marqueeName(): Modifier = this
-    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-    .drawWithContent {
-        drawContent()
-        val fade = 12.dp.toPx().coerceAtMost(size.width / 4)
-        drawRect(
-            Brush.horizontalGradient(
-                0f to Color.Transparent, fade / size.width to Color.Black,
-                1f - fade / size.width to Color.Black, 1f to Color.Transparent,
-            ),
-            blendMode = BlendMode.DstIn,
-        )
-    }
-    .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 2000, repeatDelayMillis = 2500)
 
 /** Blocked account / maintenance, from the bot; tap → support. */
 @Composable
-private fun AccountBanner(text: String, onClick: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+private fun AccountBanner(text: String, blocked: Boolean, onClick: () -> Unit) {
+    val palette = Titan.palette
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .pressable(onClick = onClick, scale = 0.98f)
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (blocked) palette.red else palette.orange)
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text, Modifier.padding(14.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Icon(Icons.Filled.Warning, null, Modifier.size(18.dp), tint = Color.White)
+        Text(text, Modifier.weight(1f), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+/** The subscription ran out: one line, a tap opens Подписка (as on iOS). */
+@Composable
+private fun ExpiredBanner(onClick: () -> Unit) {
+    val red = Titan.palette.red
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .pressable(onClick = onClick, scale = 0.98f)
+            .semantics(mergeDescendants = true) { contentDescription = "Подписка истекла. Продлить" }
+            .heightIn(min = 44.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(red.copy(alpha = 0.12f))
+            .padding(horizontal = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Error, null, Modifier.size(18.dp), tint = red)
+        Text("Подписка истекла", Modifier.weight(1f), color = red, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text("Продлить", color = red, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(16.dp), tint = red)
     }
 }
