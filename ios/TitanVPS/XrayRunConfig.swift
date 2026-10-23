@@ -11,7 +11,8 @@ enum XrayRunConfig {
     static let sniffingKey = "_titanSniffing"
     /// Bumped when build() makes a different config, or parseServers a different server config
     /// (3: no TCP Fast Open on regular servers): a profile saved by an older one is rebuilt
-    /// (VPNController.source).
+    /// (VPNController.source), from servers this build parsed (Subscription.parsedBy): the
+    /// subscription an older one saved still has its configs until it is refreshed.
     static let version = 3
     /// The DNS outbounds' policy level (or the next one the panel's config doesn't use).
     static let dnsLevel = 9

@@ -56,9 +56,12 @@ struct RootView: View {
                 Task { await store.followTunnel() }
                 // Up without the app (iOS Settings) or on a profile saved before Не отключать VPN:
                 // the profile's on demand as switched there, and its config as this build makes it.
-                // The app's own connects set both.
+                // The app's own connects set both. Not from a subscription an older build saved: its
+                // configs aren't this build's (the panel's TFO); the refresh after the splash
+                // rebuilds from the new one (AppStore.load).
                 if !vpn.connectsUnderWay, !store.pingBusy, !store.vpnPaused {
-                    vpn.setKeepAlive(VPNController.keepAlive, rebuilding: store.subscription?.servers ?? [])
+                    let servers = store.subscription.flatMap { $0.parsedNow ? $0.servers : nil } ?? []
+                    vpn.setKeepAlive(VPNController.keepAlive, rebuilding: servers)
                 }
             } else {
                 store.resetCheck()

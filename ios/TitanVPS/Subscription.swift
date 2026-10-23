@@ -78,9 +78,16 @@ struct Subscription: Codable, Equatable {
     let info: SubscriptionInfo
     let servers: [Server]
     let fetchedAt: Date
+    /// XrayRunConfig.version of the build that parsed it (nil: saved by a build before 3).
+    var parsedBy: Int? = nil
 }
 
 extension Subscription {
+    /// Parsed by this build, not saved by an older one: its servers' configs are as
+    /// parseServers makes them now (an older one's keep the panel's TFO on regular servers
+    /// until the subscription is refreshed).
+    var parsedNow: Bool { parsedBy == XrayRunConfig.version }
+
     /// The key's own part, the same on either host: its UUID (as AccountAPI finds it, lower
     /// case), else its path.
     var keyToken: String {
@@ -154,7 +161,8 @@ enum SubscriptionAPI {
                     if let stub = SubscriptionErrors.stub(all.map(\.name)) { throw SubscriptionError(message: stub) }
                     let servers = all.filter { !ServerGroup.isHidden($0) }
                     if servers.isEmpty { throw SubscriptionError(message: "В подписке нет серверов") }
-                    return Subscription(url: url, info: info, servers: servers, fetchedAt: Date())
+                    return Subscription(url: url, info: info, servers: servers, fetchedAt: Date(),
+                                        parsedBy: XrayRunConfig.version)
                 } catch {
                     if firstError == nil { firstError = error }
                 }

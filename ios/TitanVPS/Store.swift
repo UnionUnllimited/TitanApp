@@ -266,10 +266,13 @@ final class AppStore: ObservableObject {
             if let data = try? JSONEncoder().encode(sub) { UserDefaults.standard.set(data, forKey: subKey) }
             if !sub.servers.contains(where: { $0.id == selectedId }) { select(sub.servers.first?.id) }
             // While off: what iOS Settings and Не отключать VPN start follows it too (a ping's
-            // pause reconnects with a fresh config anyway).
+            // pause reconnects with a fresh config anyway). While on with Не отключать VPN: the
+            // profile, for the next start by iOS (on demand after a kill); the tunnel up keeps its
+            // own. Each does nothing in the other case (or with a connect under way).
             if let vpn, !pingBusy, !vpnPaused {
                 let picked = selected
                 Task { await vpn.refreshProfile(sub.servers, picked: picked) }
+                if VPNController.keepAlive { vpn.setKeepAlive(true, rebuilding: sub.servers) }
             }
             return true
         } catch {
