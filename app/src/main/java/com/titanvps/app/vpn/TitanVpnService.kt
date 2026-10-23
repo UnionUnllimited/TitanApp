@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
@@ -64,7 +65,10 @@ class TitanVpnService : VpnService() {
 
     /** Our tun. The core reads a copy of it ([coreFd]), so a core restart keeps the interface up. */
     @Volatile private var tun: ParcelFileDescriptor? = null
-    /** Apps left out of [tun]; leaving out other apps needs a new tun. */
+    /**
+     * Apps Android left out of [tun] (installed when it was built); leaving out other apps,
+     * also one installed since, needs a new tun.
+     */
     private var tunApps: Set<String> = emptySet()
     /** The copy of [tun] the running core reads: a raw fd, owned by nobody on our side; -1 when none. */
     private var coreFd = -1
@@ -104,13 +108,17 @@ class TitanVpnService : VpnService() {
             ACTION_SWITCH_BYPASS -> {
                 if (tun == null) showStatus(Status.CONNECTING, null) else showStatus(status, statusServer, statusSince)
                 val gen = generation.get()
+                val repo = TitanApp.get(this).repository
+                // The pick when asked: one made while measuring (by hand, ‹ ›) wins.
+                val picked = repo.selectedServer()?.id
                 scope.launch {
                     // Measured outside the lock: an off by hand never waits for the pings.
-                    val best = TitanApp.get(this@TitanVpnService).repository.subscription.value?.servers
-                        ?.let { watcher.bestBypass(it) }
-                    val stopped = lock.withLock {
+                    val best = repo.subscription.value?.servers?.let { watcher.bestBypass(it) }
+                    val skipped = lock.withLock {
                         // Turned off while measuring: stays off.
                         if (gen != generation.get()) return@withLock true
+                        // Another server picked while measuring: it stays.
+                        if (repo.selectedServer()?.id != picked) return@withLock true
                         when {
                             best != null -> {
                                 // Wanted only now: a stale «Переключить на обход» with nothing to
@@ -123,7 +131,8 @@ class TitanVpnService : VpnService() {
                         }
                         false
                     }
-                    if (stopped) finishIfOff(startId)
+                    // Not switched: the service ends after this command unless the VPN is on (or on its way).
+                    if (skipped) finishIfOff(startId)
                 }
                 return START_STICKY
             }
@@ -218,12 +227,16 @@ class TitanVpnService : VpnService() {
             val target = pickServer(all) ?: throw StartRefused("В подписке нет серверов")
             server = target
             val apps = app.settings.bypassPackages()
+            // Android leaves out only apps that are installed when the tun is built, and never
+            // looks again: the installed ones are compared, so a new one gets a new tun.
+            val present = installed(apps)
             val current = tun
             if (current == null) {
                 VpnStatus.set(VpnState.Connecting)
                 showStatus(Status.CONNECTING, target.name)
-                tun = establish(apps)
-                tunApps = apps
+                val (fresh, applied) = establish(apps)
+                tun = fresh
+                tunApps = applied intersect present
                 localProxy = LocalProxy(
                     port = java.net.ServerSocket(0).use { it.localPort },
                     user = java.util.UUID.randomUUID().toString(),
@@ -235,20 +248,20 @@ class TitanVpnService : VpnService() {
             } else {
                 // Nothing changed (Always-on and Автоподключение both at boot, a reconnect
                 // with the same settings): the core goes on.
-                if (target == running && apps == tunApps && VpnStatus.state.value is VpnState.Connected) {
+                if (target == running && present == tunApps && VpnStatus.state.value is VpnState.Connected) {
                     showStatus(Status.CONNECTED, target.name, since)
                     return
                 }
                 VpnStatus.set(VpnState.Connecting)
                 showStatus(Status.SWITCHING, target.name)
-                if (apps == tunApps) {
+                if (present == tunApps) {
                     stopCore()
                 } else {
                     // Other apps left out: the new tun first (Android moves the routes to it).
-                    val fresh = establish(apps)
+                    val (fresh, applied) = establish(apps)
                     stopCore()
                     tun = fresh
-                    tunApps = apps
+                    tunApps = applied intersect present
                     runCatching { current.close() }
                 }
                 clearLogs()
@@ -296,7 +309,9 @@ class TitanVpnService : VpnService() {
         return server
     }
 
-    private fun establish(apps: Set<String>): ParcelFileDescriptor {
+    /** A new tun leaving out [apps], and those of them Android took (not one that isn't installed). */
+    private fun establish(apps: Set<String>): Pair<ParcelFileDescriptor, Set<String>> {
+        val applied = HashSet<String>()
         val pfd = try {
             Builder()
                 .setSession(getString(R.string.app_name))
@@ -313,7 +328,7 @@ class TitanVpnService : VpnService() {
                 .apply {
                     // User-excluded apps + (by default) Russian banks/marketplaces, which
                     // then don't see a VPN at all.
-                    apps.forEach { pkg -> runCatching { addDisallowedApplication(pkg) } }
+                    apps.forEach { pkg -> if (runCatching { addDisallowedApplication(pkg) }.isSuccess) applied += pkg }
                 }
                 .setBlocking(false)
                 .apply { if (Build.VERSION.SDK_INT >= 29) setMetered(false) }
@@ -322,7 +337,19 @@ class TitanVpnService : VpnService() {
             Log.w("Titan", "establish failed", e)
             null
         }
-        return pfd ?: throw StartRefused("Нет разрешения на VPN")
+        return (pfd ?: throw StartRefused("Нет разрешения на VPN")) to applied
+    }
+
+    /** Those of [packages] that are installed (and visible to us). */
+    private fun installed(packages: Set<String>): Set<String> = packages.filterTo(HashSet()) { pkg ->
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                packageManager.getApplicationInfo(pkg, PackageManager.ApplicationInfoFlags.of(0L))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getApplicationInfo(pkg, 0)
+            }
+        }.isSuccess
     }
 
     /**
@@ -376,12 +403,12 @@ class TitanVpnService : VpnService() {
     }
 
     /**
-     * The stopped core's copy of the tun. FD_SWAP: its number is never handed back to the
-     * system, so Go closing it later (iOS: when the stopped instance is garbage-collected)
-     * can't hit a reused number such as the next tun; it now points at a pipe nobody writes
-     * to, which never reads as ready, so an old reader can't spin or take our packets.
-     * Libxray v26.9.30 doesn't close it at all: one parked fd per core run. A number Go
-     * never got (the start failed before) is simply closed.
+     * The stopped core's copy of the tun. FD_SWAP: its number is not handed back to the
+     * system at once, so Go closing it later (iOS: when the stopped instance is
+     * garbage-collected) can't hit a reused number such as the next tun; it now points at a
+     * pipe nobody writes to, which never reads as ready, so an old reader can't spin or take
+     * our packets. Libxray v26.9.30 doesn't close it at all, so [park] closes the oldest
+     * parked numbers itself. A number Go never got (the start failed before) is simply closed.
      */
     private fun releaseCoreFd() {
         val fd = coreFd
@@ -389,7 +416,7 @@ class TitanVpnService : VpnService() {
         coreFd = -1
         val given = coreFdGiven
         coreFdGiven = false
-        if (FD_SWAP && given && runCatching { Os.dup2(parking[0].fileDescriptor, fd) }.isSuccess) return
+        if (FD_SWAP && given && park(fd)) return
         // Without the swap (or if it failed): closed, so the tun never outlives an off.
         runCatching { ParcelFileDescriptor.adoptFd(fd).close() }
     }
@@ -737,11 +764,16 @@ class TitanVpnService : VpnService() {
             if (!watcher.awaitWhitelist(server, all)) return@launch
             if (TitanApp.get(this@TitanVpnService).settings.autoBypass.value) {
                 val gen = generation.get()
+                val askedAt = SystemClock.elapsedRealtime()
                 // Separate job: restarting the VPN cancels this watcher. The pings run before the lock.
                 scope.launch {
                     val best = watcher.bestBypass(all) ?: return@launch
                     lock.withLock {
                         if (!stillOn(gen)) return@withLock
+                        // Another server picked while measuring (by hand, ‹ ›): it stays.
+                        if (TitanApp.get(this@TitanVpnService).repository.selectedServer()?.id != server.id) return@withLock
+                        // A connect, switch or restart since: that core's own watcher looks again.
+                        if (running != null && launchedAt > askedAt) return@withLock
                         switchToBypass(best, auto = true)
                     }
                 }
@@ -991,6 +1023,45 @@ class TitanVpnService : VpnService() {
 
         /** Never written, both ends kept for the life of the process: never readable. */
         private val parking: Array<ParcelFileDescriptor> by lazy { ParcelFileDescriptor.createPipe() }
+
+        /** Parked numbers ([releaseCoreFd]) and when they were parked, oldest first; for the life of the process. */
+        private val parked = LinkedHashMap<Int, Long>()
+        /** Parked numbers kept in any case: a few switches' worth. */
+        private const val PARKED_MAX = 32
+        /**
+         * A parked number this old is closed once there are more than [PARKED_MAX]: Go collects
+         * garbage at least every 2 minutes, so a stopped instance that ever closes its copy has
+         * done so by then.
+         */
+        private const val PARKED_CLOSE_AFTER_MS = 5 * 60_000L
+
+        /**
+         * Points [fd] at the parking pipe. Beyond [PARKED_MAX], the oldest numbers parked long
+         * enough ago are closed, so keep-alive retrying every 30 s for days, or a car unit that
+         * never restarts the app, doesn't run out of fds. False: [fd] couldn't be parked.
+         */
+        private fun park(fd: Int): Boolean {
+            if (runCatching { Os.dup2(parking[0].fileDescriptor, fd) }.isFailure) return false
+            val now = SystemClock.elapsedRealtime()
+            synchronized(parked) {
+                // The same number again: Go closed the old copy and the number came back as a new one.
+                parked.remove(fd)
+                parked[fd] = now
+                val pipe = fdTarget(parking[0].fd) ?: return true
+                val oldest = parked.entries.iterator()
+                while (parked.size > PARKED_MAX && oldest.hasNext()) {
+                    val (n, at) = oldest.next()
+                    if (now - at < PARKED_CLOSE_AFTER_MS) break
+                    oldest.remove()
+                    // Only while it still is our pipe: a number Go closed may belong to anything now.
+                    if (fdTarget(n) == pipe) runCatching { ParcelFileDescriptor.adoptFd(n).close() }
+                }
+            }
+            return true
+        }
+
+        /** What [fd] is open on ("pipe:[…]", a path…); null when it isn't open. */
+        private fun fdTarget(fd: Int): String? = runCatching { Os.readlink("/proc/self/fd/$fd") }.getOrNull()
 
         /** Connects, or switches to the selected server if already on. */
         fun start(context: Context) {
