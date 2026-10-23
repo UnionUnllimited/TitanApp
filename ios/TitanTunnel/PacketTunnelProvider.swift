@@ -109,17 +109,24 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var lastNetwork: Net?
     /// The network the running Xray was started on; nil if there was none.
     private var startedOn: Net?
-    /// When the network went away; nil while there is one.
-    private var lostAt: Date?
+    /// The physical interfaces ("type:name") of the last report with a network, the primary
+    /// one among them.
+    private var available: Set<String> = []
+    /// When the network went away (Self.clock); nil while there is one.
+    private var lostAt: TimeInterval?
     /// A network restart decided on and not done yet (it waits for a network and for the end
     /// of the 20 s since the last one): what for, for the journal.
     private var owed: NetworkChange?
-    private var lastNetworkRestart = Date.distantPast
+    /// When the last network restart came (Self.clock); nil before the first.
+    private var lastNetworkRestart: TimeInterval?
     /// The same network back within this (a road tunnel, a dead zone) with its addresses: its
     /// connections are still good, so Xray goes on.
     private static let shortGap: TimeInterval = 15
     /// At most one network restart in this; one more within it waits for its end.
     private static let networkRestartEvery: TimeInterval = 20
+    /// Seconds on a clock that a change of the phone's time doesn't move (a step back made the
+    /// 20 s wait as long as the step) and that goes on in sleep (a gap then counts in full).
+    private static var clock: TimeInterval { TimeInterval(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1e9 }
     private var pendingRestart: DispatchWorkItem?
     /// stopTunnel came: nothing starts again.
     private var stopped = false
@@ -148,7 +155,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func networkChanged(_ path: Network.NWPath) {
         // The physical network the traffic goes out through: the first one iOS prefers
         // (our own utun is type .other). A second one coming and going doesn't count.
-        let primary = path.availableInterfaces.first { $0.type != NWInterface.InterfaceType.other && $0.type != NWInterface.InterfaceType.loopback }
+        let physical = path.availableInterfaces.filter { $0.type != NWInterface.InterfaceType.other && $0.type != NWInterface.InterfaceType.loopback }
+        let primary = physical.first
         let before = network
         // The first report is the network we started on (or none yet).
         let first = !reported
@@ -156,15 +164,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard path.status == .satisfied, let primary else {
             // Gone (or none yet): since when, to tell a short gap from a new network.
             network = nil
-            if lostAt == nil { lostAt = Date() }
+            if lostAt == nil { lostAt = Self.clock }
             return
         }
-        let now = "\(primary.type):\(primary.name)"
+        let now = Self.key(primary)
         let addresses = Self.addresses(primary.name)
         let last = lastNetwork
-        let gap = lostAt.map { Date().timeIntervalSince($0) }
+        let gap = lostAt.map { Self.clock - $0 }
         network = now
         lastNetwork = (key: now, addresses: addresses)
+        available = Set(physical.map(Self.key))
         lostAt = nil
         // The network Xray started on.
         guard !first else { startedOn = lastNetwork; return }
@@ -174,12 +183,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             // connections are dead.
             let moved = last.key == now && Self.changed(last.addresses, addresses)
             if last.key != now || moved || (gap ?? 0) >= Self.shortGap {
-                change = NetworkChange(from: last.key, to: now, addressChanged: moved, gap: gap)
+                change = NetworkChange(from: last.key, to: now, addressChanged: moved, gap: gap, via: [last.key, now])
             }
         } else {
             // No network since the start (after a reboot iOS starts the VPN before it): what
             // Xray opened meanwhile hangs.
-            change = NetworkChange(from: "нет сети", to: now, gap: gap)
+            change = NetworkChange(from: "нет сети", to: now, gap: gap, via: [now])
         }
         // Xray down after a failed restart: no flows to keep, so no waiting out the 20 s.
         let down = failures > 0
@@ -197,17 +206,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
     private var reported = false
 
+    private static func key(_ interface: NWInterface) -> String {
+        "\(interface.type):\(interface.name)"
+    }
+
     /// Why Xray starts again for the network, as the journal says it.
     private struct NetworkChange {
         var from: String
         var to: String
         var addressChanged = false
         var gap: TimeInterval?
+        /// The networks it went through ("type:name"): Xray's new connections went out over each.
+        var via: Set<String> = []
 
         /// Another change while this one waits: from the first network to the last one.
         func then(_ next: NetworkChange) -> NetworkChange {
             NetworkChange(from: from, to: next.to, addressChanged: addressChanged || next.addressChanged,
-                          gap: [gap, next.gap].compactMap { $0 }.max())
+                          gap: [gap, next.gap].compactMap { $0 }.max(), via: via.union(next.via))
         }
 
         var text: String {
@@ -254,10 +269,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     /// A restart for [change] that waited still has something to do: Xray was started on no
-    /// network or another one, an address of it is gone, or the network was away long.
-    private static func needed(_ change: NetworkChange, startedOn run: Net?, now: Net?) -> Bool {
+    /// network or another one, an address of it is gone, the network was away long, or a network
+    /// it went through meanwhile is gone (LTE → Wi-Fi → LTE, the Wi-Fi left: what Xray opened
+    /// over it hangs; in Wi-Fi → LTE → Wi-Fi the LTE is still there and so are its connections).
+    private static func needed(_ change: NetworkChange, startedOn run: Net?, now: Net?, available: Set<String>) -> Bool {
         guard let run, let now else { return true }
         return run.key != now.key || changed(run.addresses, now.addresses) || (change.gap ?? 0) >= shortGap
+            || change.via.contains { $0 != run.key && !available.contains($0) }
     }
 
     /// The newest one replaces one still waiting.
@@ -271,8 +289,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// A moment for the network to settle first (several reports come at once), and at most
     /// one network restart in 20 s: one sooner waits for the end of them, not dropped.
     private func scheduleNetworkRestart() {
-        let left = Self.networkRestartEvery - Date().timeIntervalSince(lastNetworkRestart)
-        scheduleRestart(after: max(1.5, left))
+        let since = lastNetworkRestart.map { Self.clock - $0 } ?? .infinity
+        // Never longer than the 20 s, whatever the clock read.
+        scheduleRestart(after: max(1.5, min(Self.networkRestartEvery, Self.networkRestartEvery - since)))
     }
 
     /// Xray (and the protocol client) again on the network there is now, or on the same one
@@ -283,9 +302,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         pendingRestart?.cancel()
         pendingRestart = nil
         guard let run = running, !stopped else { return }
-        // A network restart that waited: not once the network Xray runs on is back as it was
-        // (Wi-Fi ↔ LTE and back within the wait).
-        if !memory, failures == 0, let change = owed, network != nil, !Self.needed(change, startedOn: startedOn, now: lastNetwork) {
+        // A network restart that waited: not once the network Xray runs on is back as it was and
+        // the ones it went through meanwhile are still there (Wi-Fi → LTE → Wi-Fi within the wait).
+        if !memory, failures == 0, let change = owed, network != nil,
+           !Self.needed(change, startedOn: startedOn, now: lastNetwork, available: available) {
             log.info("network: back on \(change.to, privacy: .public), no restart")
             owed = nil
             if reasserting { reasserting = false }
@@ -299,10 +319,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             memoryRestarts += 1
         } else if failures == 0 {
             networkRestarts += 1
-            lastNetworkRestart = Date()
+            lastNetworkRestart = Self.clock
             if let change = owed { note(change.text) }
         }
-        lastRestart = Date()
+        lastRestart = Self.clock
         let before = Self.memoryNow().footprint
         _ = Self.invoke("stopXray")
         // Down until it starts again: a restart after a failed one is always needed.
@@ -345,8 +365,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var memoryTimer: DispatchSourceTimer?
     private var pressure: DispatchSourceMemoryPressure?
     private var checkEvery: TimeInterval = 0
-    /// Any restart, for the network or memory: a memory one comes at most once in 30 s.
-    private var lastRestart = Date.distantPast
+    /// Any restart, for the network or memory (Self.clock): a memory one comes at most once in
+    /// 30 s. Nil before the first.
+    private var lastRestart: TimeInterval?
     private var memoryRestarts = 0
     private var networkRestarts = 0
     private var peak: Int64 = 0
@@ -394,7 +415,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard m.footprint >= m.limit - 5 * Self.mib || (critical && armed) else { return }
         // One just now, or no network to start on: not now. A restart waiting (a network one may
         // wait up to 20 s) is done now instead: it frees as much.
-        guard network != nil, Date().timeIntervalSince(lastRestart) >= 30 else { return }
+        guard network != nil, lastRestart.map({ Self.clock - $0 >= 30 }) ?? true else { return }
         log.notice("memory: \(m.footprint / Self.mib, privacy: .public) of \(m.limit / Self.mib, privacy: .public) MiB, restarting")
         restart(memory: true)
     }

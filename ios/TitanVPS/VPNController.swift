@@ -42,6 +42,9 @@ final class VPNController: ObservableObject {
     private(set) var offsByHand = 0
     /// Bumped by each setKeepAlive that may rebuild the profile: only the latest one saves its build.
     private var rebuilds = 0
+    /// Bumped by each hold of on demand (a server switch, a ping's pause, Выкл): a setKeepAlive
+    /// begun before one doesn't turn it back on.
+    private var holds = 0
 
     /// The app's own, while it runs: the Live Activity's ‹ › switch through it (VPNIntents).
     static weak var current: VPNController?
@@ -275,6 +278,7 @@ final class VPNController: ObservableObject {
     /// On demand off in the profile as saved now (see connect), before the tunnel is stopped:
     /// else iOS starts it again at once.
     private func holdOnDemand(_ m: NETunnelProviderManager) async {
+        holds += 1
         try? await m.loadFromPreferences()
         guard m.isOnDemandEnabled else { return }
         m.isOnDemandEnabled = false
@@ -356,6 +360,7 @@ final class VPNController: ObservableObject {
         // A newer call's servers win over an older one's still building (a refresh meanwhile).
         if on, !servers.isEmpty { rebuilds += 1 }
         let rebuild = rebuilds
+        let held = holds
         Task {
             try? await m.loadFromPreferences()
             var provider: [String: Any]?
@@ -370,8 +375,10 @@ final class VPNController: ObservableObject {
                    let now = m.protocolConfiguration as? NETunnelProviderProtocol,
                    now.serverAddress == server.name, Self.outdated(now, for: server) { provider = built }
             }
-            // Turned off meanwhile: stays off.
-            guard m.isOnDemandEnabled != on || provider != nil, !on || isOn else { return }
+            // Turned off, switched off in the settings, held for a switch or a ping's pause, or a
+            // connect begun meanwhile (it sets its own): stays as it is.
+            guard m.isOnDemandEnabled != on || provider != nil,
+                  !on || (isOn && connectsInFlight == 0 && Self.keepAlive && holds == held) else { return }
             m.isOnDemandEnabled = on
             if on, let proto = m.protocolConfiguration as? NETunnelProviderProtocol {
                 // A profile saved before this switch existed: the rules for its server too.
