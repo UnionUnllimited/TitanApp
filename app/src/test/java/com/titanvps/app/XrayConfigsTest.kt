@@ -1,6 +1,7 @@
 package com.titanvps.app
 
 import com.titanvps.app.core.XrayConfigs
+import com.titanvps.app.data.ServerGroups
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -112,6 +113,87 @@ class XrayConfigsTest {
         assertEquals(listOf("bal", "bal-2", "bal-3"), XrayConfigs.pingTags(json, "bal"))
         assertEquals(listOf("bal", "bal-2"), XrayConfigs.pingTags(json, "bal", max = 2))
         assertEquals(listOf("proxy"), XrayConfigs.pingTags("""{"outbounds":[{"tag":"proxy","protocol":"vless"}]}""", "proxy"))
+    }
+
+    /**
+     * Shaped like the panel's «👇БЕЗЛИМИТНЫЕ👇» row, all values made up: DNS tagged dns-in,
+     * BAL-LTE over "bal", YouTube over "yt-ru", and a catch-all with a "network" key.
+     */
+    private fun unlimitedConfig(remarks: String) = """
+        {
+          "remarks": "$remarks",
+          "dns": {"tag": "dns-in", "servers": ["https://doh.example.org/dns-query"]},
+          "inbounds": [{"tag": "socks", "protocol": "socks", "port": 10808}],
+          "outbounds": [
+            {"tag": "bal-de-1", "protocol": "vless", "settings": {"vnext": [{"address": "de1.example.net", "port": 443,
+              "users": [{"id": "11111111-1111-1111-1111-111111111111", "encryption": "mlkem768x25519plus.native.0rtt.fake"}]}]},
+              "streamSettings": {"network": "xhttp"}},
+            {"tag": "bal-fi-1", "protocol": "vless", "settings": {"vnext": [{"address": "fi1.example.net", "port": 443,
+              "users": [{"id": "22222222-2222-2222-2222-222222222222"}]}]}, "streamSettings": {"network": "grpc"}},
+            {"tag": "bal-nl-hy", "protocol": "hysteria", "settings": {"version": 2, "address": "nl1.example.net", "port": 443}},
+            {"tag": "yt-ru-1", "protocol": "vless", "settings": {"vnext": [{"address": "yt1.example.net", "port": 443,
+              "users": [{"id": "33333333-3333-3333-3333-333333333333"}]}]}},
+            {"tag": "direct", "protocol": "freedom"},
+            {"tag": "block", "protocol": "blackhole"}
+          ],
+          "burstObservatory": {"subjectSelector": ["bal", "yt-ru"]},
+          "routing": {
+            "balancers": [
+              {"tag": "BAL-LTE", "selector": ["bal"], "strategy": {"type": "leastLoad"}},
+              {"tag": "yt_balancer", "selector": ["yt-ru", "bal"], "fallbackTag": "bal", "strategy": {"type": "leastLoad"}}
+            ],
+            "rules": [
+              {"type": "field", "inboundTag": ["dns-in"], "balancerTag": "BAL-LTE"},
+              {"type": "field", "protocol": ["bittorrent"], "outboundTag": "direct"},
+              {"type": "field", "domain": ["domain:youtube.com"], "balancerTag": "yt_balancer"},
+              {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
+              {"type": "field", "domain": ["regexp:\\.ru$"], "outboundTag": "direct"},
+              {"type": "field", "network": "udp", "port": "443", "outboundTag": "block"},
+              {"type": "field", "balancerTag": "BAL-LTE", "network": "tcp,udp"}
+            ]
+          }
+        }
+    """.trimIndent()
+
+    @Test
+    fun unlimitedRowIsRenamedAndFirstOnParse() {
+        val country = """{"remarks":"🇩🇪 Германия","outbounds":[{"tag":"proxy","protocol":"vless",
+            "settings":{"vnext":[{"address":"de1.example.net","port":443,"users":[{"id":"0"}]}]}}]}"""
+        val servers = XrayConfigs.serversFromXrayJson("[$country,${unlimitedConfig("🇦🇱 👇БЕЗЛИМИТНЫЕ👇")}]")
+        assertEquals(listOf(ServerGroups.UNLIMITED_NAME, "🇩🇪 Германия"), servers.map { it.name })
+        val unlimited = servers[0]
+        assertEquals(XrayConfigs.UNLIMITED_ID, unlimited.id)
+        assertEquals("bal-de-1", unlimited.proxyTag)
+        assertFalse(ServerGroups.isHidden(unlimited))
+        // Other rows keep their ids.
+        assertEquals("json-0-${"🇩🇪 Германия".hashCode()}", servers[1].id)
+        // The same id after a refresh, wherever the panel puts it and whatever emoji round the word.
+        val again = XrayConfigs.serversFromXrayJson("[${unlimitedConfig("👇 Безлимитные 👇")},$country]")
+        assertEquals(listOf(XrayConfigs.UNLIMITED_ID, servers[1].id.replace("json-0", "json-1")), again.map { it.id })
+        // A second such row stays a hidden header.
+        val twice = XrayConfigs.serversFromXrayJson("[${unlimitedConfig("👇БЕЗЛИМИТНЫЕ👇")},${unlimitedConfig("👇БЕЗЛИМИТНЫЕ 2👇")}]")
+        assertEquals(listOf(ServerGroups.UNLIMITED_NAME, "👇БЕЗЛИМИТНЫЕ 2👇"), twice.map { it.name })
+        assertTrue(ServerGroups.isHidden(twice[1]))
+        // The DNS rule keeps its tag: dns-in is the DNS module's, not an inbound.
+        val rules = JSONObject(unlimited.xrayJson).getJSONObject("routing").getJSONArray("rules")
+        assertEquals("dns-in", rules.getJSONObject(0).getJSONArray("inboundTag").getString(0))
+    }
+
+    @Test
+    fun unlimitedRowIsPingedOnItsCatchAllBalancer() {
+        val unlimited = XrayConfigs.serversFromXrayJson(unlimitedConfig("🇦🇱 👇БЕЗЛИМИТНЫЕ👇"))[0]
+        // BAL-LTE's members only (not yt-ru), as for АВТО, and under the same cap.
+        assertEquals(listOf("bal-de-1", "bal-fi-1", "bal-nl-hy"), XrayConfigs.pingTags(unlimited.xrayJson, unlimited.proxyTag))
+        assertEquals(listOf("bal-de-1", "bal-fi-1"), XrayConfigs.pingTags(unlimited.xrayJson, unlimited.proxyTag, max = 2))
+    }
+
+    @Test
+    fun dummyUnlimitedHeaderKeepsItsName() {
+        val body = """{"remarks":"🇦🇱 👇БЕЗЛИМИТНЫЕ👇","outbounds":[{"tag":"proxy","protocol":"vless",
+            "settings":{"vnext":[{"address":"127.0.0.1","port":1,"users":[{"id":"0"}]}]}}]}"""
+        val server = XrayConfigs.serversFromXrayJson(body)[0]
+        assertEquals("🇦🇱 👇БЕЗЛИМИТНЫЕ👇", server.name)
+        assertTrue(ServerGroups.isHidden(server))
     }
 
     @Test

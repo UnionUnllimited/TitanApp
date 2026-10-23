@@ -1,10 +1,14 @@
 package com.titanvps.app
 
+import com.titanvps.app.data.Flags
 import com.titanvps.app.data.Server
 import com.titanvps.app.data.ServerGroups
 import com.titanvps.app.data.ServerGroups.Group
+import com.titanvps.app.data.ServerOrder
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ServerGroupsTest {
@@ -43,6 +47,46 @@ class ServerGroupsTest {
         val real = Server("y", "🇦🇱 Албания", """{"outbounds":[{"tag":"proxy","protocol":"vless",
             "settings":{"vnext":[{"address":"node.example","port":443,"users":[{"id":"0"}]}]}}]}""", "proxy")
         assert(!ServerGroups.isHidden(real))
+    }
+
+    /** A made-up balancer member: the row's proxy outbound with a real (fake) address. */
+    private val unlimitedJson = """{"outbounds":[{"tag":"bal-1","protocol":"vless",
+        "settings":{"vnext":[{"address":"node.example","port":443,"users":[{"id":"0"}]}]}}]}"""
+
+    @Test
+    fun unlimitedRowIsARegularServer() {
+        val raw = Server("u", "🇦🇱 👇БЕЗЛИМИТНЫЕ👇", unlimitedJson, "bal-1")
+        assertTrue(ServerGroups.isUnlimitedRow(raw))
+        val unlimited = raw.copy(name = ServerGroups.UNLIMITED_NAME)
+        assertTrue(ServerGroups.isUnlimited(unlimited))
+        assertFalse(ServerGroups.isHidden(unlimited))
+        assertEquals(Group.SERVERS, ServerGroups.groupOf(unlimited))
+        assertFalse(ServerGroups.isLimited(unlimited))
+        // The bolt, not the 🇦🇱 placeholder flag.
+        assertNull(Flags.codeOf(unlimited.name))
+        // First as parsed; the user's favourites still go above it.
+        val de = s("🇩🇪 Германия 1")
+        val fi = s("🇫🇮 Финляндия")
+        val regular = ServerGroups.split(listOf(unlimited, de, s("🇷🇺 Обход 1"), fi)).toMap().getValue(Group.SERVERS)
+        assertEquals(listOf(unlimited, de, fi), ServerOrder.ordered(regular, emptySet()))
+        assertEquals(listOf(fi, unlimited, de), ServerOrder.ordered(regular, setOf(fi.name)))
+    }
+
+    @Test
+    fun headersWithoutARealConfigStayHidden() {
+        assertFalse(ServerGroups.isUnlimitedRow(s("🇦🇱 👇БЕЗЛИМИТНЫЕ👇")))
+        val dummy = Server("x", "🇦🇱 👇БЕЗЛИМИТНЫЕ👇", """{"outbounds":[{"tag":"proxy","protocol":"vless",
+            "settings":{"vnext":[{"address":"0.0.0.0","port":443,"users":[{"id":"0"}]}]}}]}""", "proxy")
+        assertFalse(ServerGroups.isUnlimitedRow(dummy))
+        assertTrue(ServerGroups.isHidden(dummy))
+        val limited = Server("l", "🇦🇱 👇ЛИМИТНЫЕ ОСТ:1004.00 GB", unlimitedJson, "bal-1")
+        assertFalse(ServerGroups.isUnlimitedRow(limited))
+        assertTrue(ServerGroups.isHidden(limited))
+        assertTrue(ServerGroups.isHidden(Server("n", "🇦🇱 СЕРВЕР ДЛЯ безлимитных", unlimitedJson, "bal-1")))
+        // The address straight in the settings (hysteria) counts as well.
+        val hy = Server("h", "👇 Безлимитные 👇", """{"outbounds":[{"tag":"hy","protocol":"hysteria",
+            "settings":{"version":2,"address":"hy.example","port":443}}]}""", "hy")
+        assertTrue(ServerGroups.isUnlimitedRow(hy))
     }
 
     @Test

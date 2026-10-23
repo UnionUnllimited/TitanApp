@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.titanvps.app.data.Flags
 import com.titanvps.app.data.Fmt
+import com.titanvps.app.data.ServerGroups
 import com.titanvps.app.ui.theme.Titan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -41,7 +42,7 @@ import kotlinx.coroutines.withContext
 /**
  * A server's flag filled into a circle, as on iOS and Windows: the square flag PNG from the
  * assets (flag-icons, drawn in CI: scripts/download-flags-android.sh), else the flag emoji as
- * large as the circle needs. No flag: a bolt for АВТО, else a server.
+ * large as the circle needs. No flag: a bolt for АВТО and Безлимитные · все серверы, else a server.
  * Show the name next to it without its flag: Flags.nameWithoutFlag.
  */
 @Composable
@@ -85,11 +86,13 @@ private fun FlagDisc(
         }
     }
     val image = remember(bitmap) { bitmap?.asImageBitmap() }
-    val country = remember(code) { code?.let(Fmt::countryName) }
+    // Безлимитные · все серверы: АВТО's bolt, read out in words.
+    val unlimited = code == null && emoji == null && ServerGroups.isUnlimitedName(name)
+    val label = remember(code, unlimited) { code?.let(Fmt::countryName) ?: ServerGroups.UNLIMITED_LABEL.takeIf { unlimited } }
     Box(
         modifier
             .size(size)
-            .clearAndSetSemantics { if (country != null) contentDescription = country }
+            .clearAndSetSemantics { if (label != null) contentDescription = label }
             .clip(CircleShape)
             .background(disc.takeOrElse { palette.track })
             .then(
@@ -107,7 +110,7 @@ private fun FlagDisc(
                 maxLines = 1,
                 softWrap = false,
             )
-            "авто" in name.lowercase() -> Icon(Icons.Filled.Bolt, null, Modifier.size(size * 0.5f), tint = palette.primary)
+            unlimited || "авто" in name.lowercase() -> Icon(Icons.Filled.Bolt, null, Modifier.size(size * 0.5f), tint = palette.primary)
             else -> Icon(Icons.Filled.Dns, null, Modifier.size(size * 0.5f), tint = palette.textSecondary)
         }
     }

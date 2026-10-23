@@ -603,10 +603,15 @@ class TitanVpnService : VpnService() {
     private fun isBypass(server: Server, all: List<Server>) =
         ServerGroups.groupOf(server, all) == ServerGroups.Group.BYPASS
 
-    /** A regular server to fall back to: its АВТО entry if there is one. */
+    /**
+     * A regular server to fall back to: its АВТО entry if there is one, else Безлимитные · все
+     * серверы (its balancer picks a live server too), else the first one.
+     */
     private fun regularServer(all: List<Server>): Server? {
         val regular = ServerGroups.split(all).toMap()[ServerGroups.Group.SERVERS].orEmpty()
-        return regular.firstOrNull { "авто" in it.name.lowercase() } ?: regular.firstOrNull()
+        return regular.firstOrNull { "авто" in it.name.lowercase() }
+            ?: regular.firstOrNull(ServerGroups::isUnlimited)
+            ?: regular.firstOrNull()
     }
 
     /** Connected via a bypass server and the phone moved to Wi-Fi: move to a regular server. */
