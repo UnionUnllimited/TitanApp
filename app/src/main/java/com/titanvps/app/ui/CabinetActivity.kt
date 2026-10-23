@@ -5,53 +5,70 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ConfirmationNumber
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.CreditCardOff
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PieChart
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -59,20 +76,52 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.titanvps.app.TitanApp
 import com.titanvps.app.data.CabinetApi
-import com.titanvps.app.ui.theme.Brand
-import com.titanvps.app.ui.theme.Connected
-import com.titanvps.app.ui.theme.Danger
+import com.titanvps.app.data.Fmt
+import com.titanvps.app.ui.kit.CircleIconButton
+import com.titanvps.app.ui.kit.GradientBar
+import com.titanvps.app.ui.kit.IconTile
+import com.titanvps.app.ui.kit.PrimaryButton
+import com.titanvps.app.ui.kit.SecondaryButton
+import com.titanvps.app.ui.kit.SegmentItem
+import com.titanvps.app.ui.kit.SegmentedTabs
+import com.titanvps.app.ui.kit.Skeleton
+import com.titanvps.app.ui.kit.TitanCard
+import com.titanvps.app.ui.kit.pressable
+import com.titanvps.app.ui.kit.rememberHaptics
+import com.titanvps.app.ui.theme.AccentGradient
+import com.titanvps.app.ui.theme.DangerGradient
+import com.titanvps.app.ui.theme.GreenGradient
+import com.titanvps.app.ui.theme.HeroInactiveGradient
+import com.titanvps.app.ui.theme.ProvideTitanTextScale
+import com.titanvps.app.ui.theme.Titan
 import com.titanvps.app.ui.theme.TitanTheme
+import com.titanvps.app.ui.theme.WarnGradient
+import com.titanvps.app.ui.theme.fixedSp
+import com.titanvps.app.ui.theme.iosSpring
+import com.titanvps.app.ui.theme.isDark
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -90,9 +139,15 @@ class CabinetActivity : ComponentActivity() {
         val devices = intent.getIntExtra(EXTRA_DEVICES, -1).takeIf { it >= 0 }?.let { it to intent.getIntExtra(EXTRA_LIMIT, 0) }
         setContent {
             val mode by TitanApp.get(this).settings.theme.collectAsState()
+            val dark = isDark(mode)
+            // Status/navigation bar icons follow the app theme, as on the main screen.
+            LaunchedEffect(dark) {
+                val style = if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            }
             TitanTheme(mode) {
-                // Surface gives the texts the theme's colour (light on the dark theme).
-                Surface(color = MaterialTheme.colorScheme.background) { CabinetScreen(link, devices, onBack = ::finish) }
+                CabinetScreen(link, devices, onClose = ::finish)
             }
         }
     }
@@ -113,196 +168,479 @@ class CabinetActivity : ComponentActivity() {
     }
 }
 
+private const val LOAD_FAILED = "Не удалось загрузить кабинет. Проверьте интернет и попробуйте ещё раз"
+private const val CHECKING = "Проверяем оплату: кабинет обновится через несколько секунд"
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, onBack: () -> Unit) {
+private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, onClose: () -> Unit) {
     val context = LocalContext.current
+    val palette = Titan.palette
     val scope = rememberCoroutineScope()
     var api by remember { mutableStateOf<CabinetApi?>(null) }
     var data by remember { mutableStateOf<CabinetApi.Data?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var note by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
-    var tab by remember { mutableStateOf(0) }
+    var pulling by remember { mutableStateOf(false) }
+    var tab by remember { mutableIntStateOf(0) }
+    // A payment page was opened: its result is read when the cabinet is back on screen.
+    var awaitingPayment by remember { mutableStateOf(false) }
+    var recheck by remember { mutableIntStateOf(0) }
+    var loadJob by remember { mutableStateOf<Job?>(null) }
+    // The site itself: coming back to it ends a payment.
+    val home = remember(link) { runCatching { java.net.URI(link).host }.getOrNull() }
 
-    fun load() {
+    // A newer load replaces one still running.
+    fun load(): Job {
+        loadJob?.cancel()
         loading = true
         error = null
-        scope.launch {
+        val job = scope.launch {
             try {
                 val current = api
                 if (current == null) {
                     val (a, d) = withContext(Dispatchers.IO) { CabinetApi.open(link) }
-                    api = a; data = d
+                    api = a
+                    data = d
                 } else {
                     data = withContext(Dispatchers.IO) { current.load() }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: CabinetApi.CabinetException) {
                 error = e.message
             } catch (e: Exception) {
-                error = "Не удалось загрузить кабинет. Проверьте интернет и попробуйте ещё раз"
+                error = LOAD_FAILED
             } finally {
-                loading = false
+                if (loadJob === coroutineContext[Job]) loading = false
             }
         }
+        loadJob = job
+        return job
     }
     LaunchedEffect(Unit) { load() }
-    // Back from a payment: show what it changed.
-    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
-        if (api != null && !loading) load()
+    // Back from a payment: the cabinet now, and again a little later (the provider may tell
+    // the site a moment after the user is back).
+    LifecycleResumeEffect(Unit) {
+        if (awaitingPayment) {
+            awaitingPayment = false
+            note = CHECKING
+            load()
+            recheck++
+        }
         onPauseOrDispose { }
     }
+    LaunchedEffect(recheck) {
+        if (recheck == 0) return@LaunchedEffect
+        for (wait in listOf(4_000L, 8_000L)) {
+            delay(wait)
+            load().join()
+        }
+        if (note == CHECKING) note = null
+    }
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
-            Text("Личный кабинет", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            IconButton(onClick = { load() }, enabled = !loading) { Icon(Icons.Outlined.Refresh, "Обновить") }
+    Column(Modifier.fillMaxSize().background(palette.background).safeDrawingPadding()) {
+        Box(Modifier.fillMaxWidth().heightIn(min = 54.dp).padding(horizontal = 16.dp)) {
+            CloseCircle(onClose, Modifier.align(Alignment.CenterStart))
+            Text(
+                "Личный кабинет",
+                Modifier.align(Alignment.Center),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            // Not dimmed while it turns; a tap meanwhile does nothing.
+            CircleIconButton(
+                Icons.Filled.Refresh,
+                "Обновить",
+                onClick = { if (!loading) load() },
+                modifier = Modifier.align(Alignment.CenterEnd),
+                size = 32.dp,
+                spinning = loading,
+            )
         }
-        Row(
-            Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.surface).padding(4.dp),
-        ) {
-            listOf("Подписка", "Оплатить").forEachIndexed { i, title ->
-                Box(
-                    Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
-                        .background(if (tab == i) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
-                        .clickable { tab = i }.padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center,
-                ) { Text(title, fontWeight = if (tab == i) FontWeight.SemiBold else FontWeight.Normal) }
-            }
-        }
+        SegmentedTabs(
+            items = listOf(SegmentItem("Подписка", TitanIcons.Crown), SegmentItem("Оплатить", Icons.Filled.CreditCard)),
+            selectedIndex = tab,
+            onSelect = { tab = it },
+            modifier = Modifier.padding(horizontal = 16.dp).padding(top = 4.dp),
+        )
         val d = data
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-            when {
-                d == null && loading -> CircularProgressIndicator(Modifier.padding(top = 48.dp))
-                d == null -> ErrorBlock(error ?: "Ошибка") { load() }
-                else -> Column(
-                    Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    error?.let { Text(it, color = Danger, fontSize = 13.sp) }
-                    if (tab == 0) SubscriptionPane(d, devices) { id -> copy(context, id) }
-                    else PayPane(
-                        d,
-                        onPay = { tariff, method, done ->
-                            val a = api ?: return@PayPane
-                            scope.launch {
-                                try {
-                                    val url = withContext(Dispatchers.IO) { a.pay(tariff, method) }
-                                    PaymentActivity.open(context, url)
-                                } catch (e: Exception) {
-                                    toast(context, (e as? CabinetApi.CabinetException)?.message ?: "Ошибка соединения")
-                                } finally {
-                                    done()
+        when {
+            d != null -> PullToRefreshBox(
+                isRefreshing = pulling,
+                // Its own spinner for a pull only; the bar's arrow turns for any load.
+                onRefresh = {
+                    pulling = true
+                    scope.launch {
+                        load().join()
+                        pulling = false
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        note?.let { Banner(it, Icons.Filled.Info, palette.primary) }
+                        error?.let { Banner(it, Icons.Filled.Warning, palette.red) }
+                        Crossfade(targetState = tab, label = "cabinetTab") { shown ->
+                            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                if (shown == 0) {
+                                    SubscriptionPane(d, devices) { id -> copy(context, id) }
+                                } else {
+                                    PayPane(
+                                        d,
+                                        onPay = { tariff, method, done ->
+                                            val a = api
+                                            if (a == null) {
+                                                done()
+                                            } else {
+                                                scope.launch {
+                                                    try {
+                                                        val url = withContext(Dispatchers.IO) { a.pay(tariff, method) }
+                                                        PaymentActivity.open(
+                                                            context,
+                                                            url,
+                                                            title = tariff.name + " · " + Fmt.price(tariff.price),
+                                                            homeHost = home,
+                                                        )
+                                                        awaitingPayment = true
+                                                    } catch (e: CancellationException) {
+                                                        throw e
+                                                    } catch (e: Exception) {
+                                                        error = (e as? CabinetApi.CabinetException)?.message ?: "Ошибка соединения"
+                                                    } finally {
+                                                        done()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onCode = { code, done ->
+                                            val a = api
+                                            if (a == null) {
+                                                done(false)
+                                            } else {
+                                                scope.launch {
+                                                    var ok = false
+                                                    try {
+                                                        note = withContext(Dispatchers.IO) { a.applyCode(code) }
+                                                        ok = true
+                                                        load()
+                                                    } catch (e: CancellationException) {
+                                                        throw e
+                                                    } catch (e: Exception) {
+                                                        error = (e as? CabinetApi.CabinetException)?.message ?: "Ошибка соединения"
+                                                    } finally {
+                                                        done(ok)
+                                                    }
+                                                }
+                                            }
+                                        },
+                                    )
                                 }
                             }
-                        },
-                        onCode = { code, done ->
-                            val a = api ?: return@PayPane
-                            scope.launch {
-                                try {
-                                    toast(context, withContext(Dispatchers.IO) { a.applyCode(code) })
-                                    load()
-                                } catch (e: Exception) {
-                                    toast(context, (e as? CabinetApi.CabinetException)?.message ?: "Ошибка соединения")
-                                } finally {
-                                    done()
-                                }
-                            }
-                        },
-                    )
+                        }
+                    }
                 }
             }
+            loading -> LoadingShapes()
+            else -> Failure(error ?: LOAD_FAILED) { load() }
+        }
+    }
+}
+
+/** The round close button of a bar: a cross on the track colour. */
+@Composable
+private fun CloseCircle(onClick: () -> Unit, modifier: Modifier) {
+    val palette = Titan.palette
+    Box(
+        modifier
+            .pressable(onClick = onClick, scale = 0.9f)
+            .size(32.dp)
+            .background(palette.track, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Filled.Close, "Закрыть", Modifier.size(13.dp), tint = palette.textSecondary)
+    }
+}
+
+/** A note (a code applied, a payment being checked) or an error, above the cabinet. */
+@Composable
+private fun Banner(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color) {
+    Row(
+        Modifier.fillMaxWidth().background(color.copy(alpha = 0.12f), RoundedCornerShape(16.dp)).padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(icon, null, Modifier.size(20.dp), tint = color)
+        Text(text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+/** While the cabinet loads the first time: the shapes of what is coming, with a shine. */
+@Composable
+private fun LoadingShapes() {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Column(
+            Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(16.dp).semantics { contentDescription = "Загрузка" },
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Skeleton(Modifier.fillMaxWidth().height(200.dp), RoundedCornerShape(24.dp))
+            Skeleton(Modifier.fillMaxWidth().height(110.dp), RoundedCornerShape(20.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Skeleton(Modifier.weight(1f).height(130.dp), RoundedCornerShape(20.dp))
+                Skeleton(Modifier.weight(1f).height(130.dp), RoundedCornerShape(20.dp))
+            }
         }
     }
 }
 
 @Composable
-private fun ErrorBlock(message: String, onRetry: () -> Unit) {
-    Column(Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(message, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = onRetry) { Text("Повторить") }
-    }
-}
-
-@Composable
-private fun Card(content: @Composable () -> Unit) {
+private fun Failure(message: String, onRetry: () -> Unit) {
+    val palette = Titan.palette
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surface).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) { content() }
+        Modifier.fillMaxWidth().padding(32.dp).padding(top = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Box(Modifier.size(88.dp).background(palette.primary.copy(alpha = 0.12f), CircleShape), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.WifiOff, null, Modifier.size(38.dp), tint = palette.primary)
+        }
+        Text("Кабинет не загрузился", fontSize = 19.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        Text(message, color = palette.textSecondary, fontSize = 14.sp, textAlign = TextAlign.Center)
+        PrimaryButton(
+            "Повторить",
+            onRetry,
+            Modifier.widthIn(max = 240.dp).padding(top = 4.dp),
+            icon = Icons.Filled.Refresh,
+            minHeight = 50.dp,
+        )
+    }
 }
 
 @Composable
 private fun SubscriptionPane(d: CabinetApi.Data, devices: Pair<Int, Int>?, onCopyId: (String) -> Unit) {
-    Card {
-        val color = if (d.active) Connected else Danger
-        Row(
-            Modifier.clip(RoundedCornerShape(50)).background(color.copy(alpha = 0.14f)).padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(color))
-            Spacer(Modifier.width(6.dp))
-            Text(d.status.ifEmpty { if (d.active) "Активна" else "Неактивна" }, color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
-        Spacer(Modifier.height(6.dp))
-        if (d.days.isNotEmpty()) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(d.days, fontSize = 52.sp, fontWeight = FontWeight.Black, lineHeight = 52.sp)
-                Spacer(Modifier.width(6.dp))
-                Text(d.daysUnit, fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
-                if (d.hours.isNotEmpty()) {
-                    Spacer(Modifier.width(10.dp))
-                    Text(d.hours, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp))
-                }
-            }
-            Text("ОСТАЛОСЬ", fontSize = 11.sp, letterSpacing = 1.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else if (d.heroText.isNotEmpty()) {
-            Text(d.heroText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-        }
-        if (d.until.isNotEmpty()) Text(d.until, fontSize = 14.sp)
-    }
+    val palette = Titan.palette
+    Hero(d)
     d.traffic?.let { traffic ->
-        Card {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("ТРАФИК", fontSize = 11.sp, letterSpacing = 1.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                Text(traffic, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        // The page gives the share used in percent.
+        val used = ((d.trafficPercent ?: 0f) / 100f).coerceIn(0f, 1f)
+        TitanCard(contentPadding = PaddingValues(18.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    IconTile(Icons.Filled.PieChart, palette.primary, size = 38.dp)
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Трафик", color = palette.textSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            traffic,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            style = TextStyle(fontFeatureSettings = "tnum"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                // Green while there's plenty, orange then red as it runs out.
+                GradientBar(
+                    used,
+                    when {
+                        used < 0.7f -> GreenGradient
+                        used < 0.9f -> WarnGradient
+                        else -> DangerGradient
+                    },
+                )
+                d.trafficNote?.let { Text(it, color = palette.textSecondary, fontSize = 12.sp) }
             }
-            LinearProgressIndicator(
-                progress = { ((d.trafficPercent ?: 0f) / 100f).coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                color = Connected,
-            )
-            d.trafficNote?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
     val limit = d.deviceLimit ?: devices?.second?.takeIf { it > 0 }
-    if (limit != null || devices != null) Card {
-        Text("УСТРОЙСТВА", fontSize = 11.sp, letterSpacing = 1.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        val count = devices?.first
-        Text(
-            when {
-                count != null && limit != null -> "$count из $limit"
-                count != null -> "$count"
-                else -> "до $limit"
-            },
-            fontSize = 24.sp, fontWeight = FontWeight.Bold,
-        )
-        Text(
-            "Лимит: " + (limit?.let { devicesWord(it) } ?: "без ограничения"),
-            fontSize = 14.sp, fontWeight = FontWeight.Medium,
-        )
-    }
-    d.clientId?.let { id ->
-        Card {
-            Row(Modifier.fillMaxWidth().clickable { onCopyId(id) }, verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("ВАШ ID", fontSize = 11.sp, letterSpacing = 1.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(id, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+    val showDevices = limit != null || devices != null
+    if (showDevices || d.clientId != null) {
+        Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (showDevices) {
+                Tile(Modifier.weight(1f)) {
+                    IconTile(Icons.Filled.Smartphone, palette.violet, size = 38.dp)
+                    Text("Устройства", color = palette.textSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    val count = devices?.first
+                    Text(
+                        when {
+                            count != null && limit != null -> "$count из $limit"
+                            count != null -> "$count"
+                            else -> "до $limit"
+                        },
+                        fontSize = fixedSp(28f),
+                        lineHeight = fixedSp(34f),
+                        fontWeight = FontWeight.ExtraBold,
+                        style = TextStyle(fontFeatureSettings = "tnum"),
+                        maxLines = 1,
+                    )
+                    Text(
+                        "Лимит: " + (limit?.let { "$it " + Fmt.devicesWord(it) } ?: "без ограничения"),
+                        color = palette.textSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
                 }
-                Icon(Icons.Outlined.ContentCopy, "Скопировать", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            d.clientId?.let { id -> IdTile(id, Modifier.weight(1f)) { onCopyId(id) } }
+        }
+    }
+}
+
+/** Дни подписки on the brand gradient (red when it's over), a crown in the corner. */
+@Composable
+private fun Hero(d: CabinetApi.Data) {
+    val palette = Titan.palette
+    val shape = RoundedCornerShape(24.dp)
+    val glow = (if (d.active) palette.primary else palette.red).copy(alpha = 0.35f)
+    val white = Color.White
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .shadow(18.dp, shape, clip = false, ambientColor = glow, spotColor = glow)
+            .clip(shape)
+            .background(if (d.active) AccentGradient else HeroInactiveGradient)
+            .border(1.dp, white.copy(alpha = 0.15f), shape),
+    ) {
+        Box(Modifier.matchParentSize()) {
+            Icon(
+                TitanIcons.Crown,
+                null,
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 26.dp, y = (-6).dp)
+                    .requiredSize(130.dp)
+                    .rotate(-14f),
+                tint = white.copy(alpha = 0.12f),
+            )
+        }
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier
+                    .padding(bottom = 4.dp)
+                    .background(white.copy(alpha = 0.2f), CircleShape)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Box(Modifier.size(7.dp).background(white, CircleShape))
+                Text(
+                    d.status.ifEmpty { if (d.active) "Активна" else "Неактивна" },
+                    color = white,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            if (d.days.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        d.days,
+                        Modifier.alignByBaseline(),
+                        color = white,
+                        fontSize = fixedSp(64f),
+                        lineHeight = fixedSp(74f),
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1,
+                    )
+                    Text(
+                        d.daysUnit,
+                        Modifier.alignByBaseline(),
+                        color = white.copy(alpha = 0.85f),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                    if (d.hours.isNotEmpty()) {
+                        Text(
+                            d.hours,
+                            Modifier.alignByBaseline(),
+                            color = white.copy(alpha = 0.85f),
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                        )
+                    }
+                }
+                Text(
+                    "ОСТАЛОСЬ",
+                    color = white.copy(alpha = 0.75f),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.6.sp,
+                )
+            } else if (d.heroText.isNotEmpty()) {
+                Text(d.heroText, color = white, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+            if (d.until.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .padding(top = 8.dp)
+                        .background(Color.Black.copy(alpha = 0.18f), CircleShape)
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(Icons.Filled.CalendarMonth, null, Modifier.size(16.dp), tint = white)
+                    Text(d.until, color = white, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+/** A half-width card of the dashboard (devices, ID); as tall as its neighbour. */
+@Composable
+private fun Tile(modifier: Modifier, content: @Composable () -> Unit) {
+    TitanCard(modifier.fillMaxHeight(), contentPadding = PaddingValues(16.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { content() }
+    }
+}
+
+/** Ваш ID: a tap copies it, the tile says so for a moment. */
+@Composable
+private fun IdTile(id: String, modifier: Modifier, onCopy: () -> Unit) {
+    val palette = Titan.palette
+    val haptics = rememberHaptics()
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_600)
+            copied = false
+        }
+    }
+    Tile(
+        modifier.pressable(
+            onClick = {
+                onCopy()
+                haptics.success()
+                copied = true
+            },
+            scale = 0.97f,
+            onClickLabel = "Скопировать",
+        ),
+    ) {
+        IconTile(if (copied) Icons.Filled.Check else Icons.Filled.Badge, if (copied) palette.green else palette.orange, size = 38.dp)
+        Text("Ваш ID", color = palette.textSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            id,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.ExtraBold,
+            style = TextStyle(fontFeatureSettings = "tnum"),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val color = if (copied) palette.green else palette.textSecondary
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Icon(if (copied) Icons.Filled.CheckCircle else Icons.Filled.ContentCopy, null, Modifier.size(14.dp), tint = color)
+            Text(
+                if (copied) "Скопировано" else "Нажмите, чтобы скопировать",
+                color = color,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+            )
         }
     }
 }
@@ -311,99 +649,273 @@ private fun SubscriptionPane(d: CabinetApi.Data, devices: Pair<Int, Int>?, onCop
 private fun PayPane(
     d: CabinetApi.Data,
     onPay: (CabinetApi.Tariff, String, done: () -> Unit) -> Unit,
-    onCode: (String, done: () -> Unit) -> Unit,
+    onCode: (String, done: (Boolean) -> Unit) -> Unit,
 ) {
+    val palette = Titan.palette
     var busy by remember { mutableStateOf(false) }
+    // Лимит устройств chosen (first purchase), and the tariff picked in each section.
+    var limit by remember(d.limits) { mutableStateOf(d.limits.firstOrNull()) }
+    var picked by remember { mutableStateOf(mapOf<String, String>()) }
     for (kind in listOf("sub", "traffic")) {
         val all = d.tariffs.filter { it.kind == kind }
         if (all.isEmpty()) continue
-        Card {
-            Text(if (kind == "sub") "Продлить подписку" else "Докупить трафик", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            var limit by remember(d) { mutableStateOf(d.limits.firstOrNull()) }
-            if (kind == "sub" && d.limits.isNotEmpty()) {
-                Text("Лимит устройств — сколько одновременных подключений нужно. Фиксируется после первой оплаты.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    d.limits.forEach { l -> FilterChip(selected = limit == l, onClick = { limit = l }, label = { Text("$l") }) }
-                }
-            }
-            val visible = if (kind == "sub" && d.limits.isNotEmpty()) all.filter { it.limit == limit } else all.filter { it.shown }.ifEmpty { all }
-            var picked by remember(d, limit) { mutableStateOf(visible.singleOrNull()) }
-            visible.forEach { t ->
-                val on = picked?.id == t.id
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                        .border(BorderStroke(if (on) 1.5.dp else 1.dp, if (on) Brand else MaterialTheme.colorScheme.outlineVariant), RoundedCornerShape(14.dp))
-                        .clickable { picked = t }.heightIn(min = 56.dp).padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(t.name, fontWeight = FontWeight.Medium)
-                        val meta = listOf(t.limitLabel, t.trafficLabel).filter { it.isNotEmpty() }.joinToString(" · ")
-                        if (meta.isNotEmpty()) Text(meta, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Text(price(t.price), fontWeight = FontWeight.Bold)
-                }
-            }
-            picked?.let { t ->
-                val methods = d.methods[kind].orEmpty().filter { it.id in t.methods }
-                    .ifEmpty { t.methods.map { CabinetApi.Method(it, "") } }
-                if (methods.isEmpty()) Text("Оплата для этого тарифа недоступна", fontSize = 13.sp, color = Danger)
-                methods.forEach { m ->
-                    Button(
-                        onClick = { busy = true; onPay(t, m.id) { busy = false } },
-                        enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp),
-                    ) {
-                        if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                        else Text("Оплатить ${price(t.price)}" + if (m.title.isNotEmpty()) " · ${m.title}" else "", fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
+        val visible = if (kind == "sub" && d.limits.isNotEmpty()) all.filter { it.limit == limit } else all.filter { it.shown }.ifEmpty { all }
+        // A single tariff is picked already.
+        val selected = visible.firstOrNull { it.id == picked[kind] } ?: visible.singleOrNull()
+        key(kind) {
+            PaySection(
+                kind = kind,
+                limits = if (kind == "sub") d.limits else emptyList(),
+                limit = limit,
+                onLimit = {
+                    limit = it
+                    picked = picked - kind
+                },
+                visible = visible,
+                selected = selected,
+                onPick = { picked = picked + (kind to it.id) },
+                methods = d.methods[kind].orEmpty(),
+                busy = busy,
+                onPay = { t, method ->
+                    busy = true
+                    onPay(t, method) { busy = false }
+                },
+            )
         }
     }
-    if (d.tariffs.isEmpty()) Text("Сейчас оплата недоступна", color = MaterialTheme.colorScheme.onSurfaceVariant)
-    // A payment code is rare: a quiet link at the bottom, the field in a dialog.
+    if (d.tariffs.isEmpty()) {
+        Column(
+            Modifier.fillMaxWidth().padding(vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Filled.CreditCardOff, null, Modifier.size(34.dp), tint = palette.textSecondary)
+            Text("Сейчас оплата недоступна", color = palette.textSecondary)
+        }
+    }
+    // A payment code is rare: a quiet button at the bottom, the field in a dialog.
     if (d.promo) {
         var codeOpen by remember { mutableStateOf(false) }
-        Text(
+        var code by remember { mutableStateOf("") }
+        SecondaryButton(
             "Есть код оплаты?",
-            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().clickable { codeOpen = true }.padding(vertical = 10.dp),
-            textAlign = TextAlign.Center,
+            { codeOpen = true },
+            icon = Icons.Filled.ConfirmationNumber,
+            tint = palette.textSecondary,
+            minHeight = 46.dp,
         )
         if (codeOpen) {
-            var code by remember { mutableStateOf("") }
             AlertDialog(
                 onDismissRequest = { if (!busy) codeOpen = false },
-                title = { Text("Код оплаты") },
+                title = { ProvideTitanTextScale { Text("Код оплаты") } },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(code, { code = it.take(64) }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Введите код") })
-                        Text("Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    ProvideTitanTextScale {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                code,
+                                { code = it.take(64) },
+                                Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                placeholder = { Text("Введите код") },
+                                keyboardOptions = KeyboardOptions(
+                                    capitalization = KeyboardCapitalization.Characters,
+                                    autoCorrectEnabled = false,
+                                ),
+                            )
+                            Text(
+                                "Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.",
+                                color = palette.textSecondary,
+                                fontSize = 12.sp,
+                            )
+                        }
                     }
                 },
                 confirmButton = {
-                    Button(onClick = { busy = true; onCode(code.trim()) { busy = false; codeOpen = false } }, enabled = code.isNotBlank() && !busy) {
-                        Text("Применить")
+                    ProvideTitanTextScale {
+                        TextButton(
+                            onClick = {
+                                busy = true
+                                onCode(code.trim()) { ok ->
+                                    busy = false
+                                    codeOpen = false
+                                    if (ok) code = ""
+                                }
+                            },
+                            enabled = code.isNotBlank() && !busy,
+                        ) { Text("Применить") }
                     }
                 },
-                dismissButton = { TextButton(onClick = { codeOpen = false }, enabled = !busy) { Text("Отмена") } },
+                dismissButton = {
+                    ProvideTitanTextScale {
+                        TextButton(onClick = { codeOpen = false }, enabled = !busy) { Text("Отмена") }
+                    }
+                },
             )
         }
     }
 }
 
-private fun devicesWord(n: Int): String = "$n " + when {
-    n % 100 in 11..14 -> "устройств"
-    n % 10 == 1 -> "устройство"
-    n % 10 in 2..4 -> "устройства"
-    else -> "устройств"
+/** Продлить подписку / Докупить трафик: the device limit, the tariffs, the pay buttons. */
+@Composable
+private fun PaySection(
+    kind: String,
+    limits: List<Int>,
+    limit: Int?,
+    onLimit: (Int) -> Unit,
+    visible: List<CabinetApi.Tariff>,
+    selected: CabinetApi.Tariff?,
+    onPick: (CabinetApi.Tariff) -> Unit,
+    methods: List<CabinetApi.Method>,
+    busy: Boolean,
+    onPay: (CabinetApi.Tariff, String) -> Unit,
+) {
+    val palette = Titan.palette
+    val haptics = rememberHaptics()
+    val sub = kind == "sub"
+    TitanCard(contentPadding = PaddingValues(18.dp)) {
+        Column(Modifier.animateContentSize(tween(250)), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                IconTile(if (sub) TitanIcons.Crown else Icons.Filled.PieChart, if (sub) palette.primary else palette.violet, size = 38.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(if (sub) "Продлить подписку" else "Докупить трафик", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (sub) "Дни добавятся к текущей подписке" else "Гигабайты для обходов",
+                        color = palette.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+            if (limits.isNotEmpty()) {
+                LimitPicker(limits, limit) {
+                    haptics.selection()
+                    onLimit(it)
+                }
+            }
+            visible.forEach { t ->
+                TariffRow(t, on = selected?.id == t.id) {
+                    haptics.selection()
+                    onPick(t)
+                }
+            }
+            if (selected != null) {
+                val list = methods.filter { it.id in selected.methods }
+                    .ifEmpty { selected.methods.map { CabinetApi.Method(it, "") } }
+                if (list.isEmpty()) {
+                    Text("Оплата для этого тарифа недоступна", color = palette.red, fontSize = 13.sp)
+                }
+                list.forEach { m ->
+                    PrimaryButton(
+                        "Оплатить ${Fmt.price(selected.price)}" + if (m.title.isNotEmpty()) " · ${m.title}" else "",
+                        {
+                            haptics.medium()
+                            onPay(selected, m.id)
+                        },
+                        icon = Icons.Filled.CreditCard,
+                        busy = busy,
+                        minHeight = 52.dp,
+                    )
+                }
+            } else if (visible.isNotEmpty()) {
+                Text(
+                    "Выберите тариф, чтобы оплатить",
+                    Modifier.fillMaxWidth(),
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
 }
 
-private fun price(p: Double): String = (if (p % 1.0 == 0.0) p.toLong().toString() else "%.2f".format(p)) + " ₽"
+/** Лимит устройств: how many at once; fixed after the first payment. */
+@Composable
+private fun LimitPicker(limits: List<Int>, limit: Int?, onPick: (Int) -> Unit) {
+    val palette = Titan.palette
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(Icons.Filled.Smartphone, null, Modifier.size(15.dp), tint = palette.textSecondary)
+            Text("Лимит устройств", color = palette.textSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            limits.forEach { l ->
+                val on = limit == l
+                val fill by animateFloatAsState(if (on) 1f else 0f, iosSpring(0.3f, 0.8f), label = "limitFill")
+                val text by animateColorAsState(if (on) Color.White else MaterialTheme.colorScheme.onSurface, tween(200), label = "limitText")
+                val shape = RoundedCornerShape(12.dp)
+                val glow = palette.primary.copy(alpha = 0.35f)
+                Box(
+                    Modifier
+                        .pressable(onClick = { if (!on) onPick(l) }, scale = 0.9f, role = Role.RadioButton)
+                        .semantics { selected = on }
+                        .size(46.dp, 42.dp)
+                        .then(if (on) Modifier.shadow(6.dp, shape, clip = false, ambientColor = glow, spotColor = glow) else Modifier)
+                        .background(palette.track, shape)
+                        .background(AccentGradient, shape, alpha = fill.coerceIn(0f, 1f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("$l", color = text, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Text(
+            "Сколько устройств одновременно. Фиксируется после первой оплаты.",
+            color = palette.textSecondary,
+            fontSize = 12.sp,
+        )
+    }
+}
+
+/** A tariff to pick: a radio, its name and what it gives, the price. */
+@Composable
+private fun TariffRow(t: CabinetApi.Tariff, on: Boolean, onClick: () -> Unit) {
+    val palette = Titan.palette
+    val shape = RoundedCornerShape(16.dp)
+    val dot by animateFloatAsState(if (on) 1f else 0f, iosSpring(0.3f, 0.8f), label = "tariffDot")
+    val meta = listOf(t.limitLabel, t.trafficLabel).filter { it.isNotEmpty() }.joinToString(" · ")
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .pressable(onClick = onClick, scale = 0.98f, role = Role.RadioButton)
+            .semantics { selected = on }
+            .heightIn(min = 62.dp)
+            .background(if (on) palette.primary.copy(alpha = 0.1f) else palette.track.copy(alpha = 0.55f), shape)
+            .then(if (on) Modifier.border(1.5.dp, palette.primary, shape) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            Modifier.size(22.dp).border(2.dp, if (on) palette.primary else palette.outline, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier
+                    .size(12.dp)
+                    .graphicsLayer {
+                        scaleX = dot
+                        scaleY = dot
+                    }
+                    .background(palette.primary, CircleShape),
+            )
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(t.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (meta.isNotEmpty()) Text(meta, color = palette.textSecondary, fontSize = 12.sp)
+        }
+        Text(
+            Fmt.price(t.price),
+            color = if (on) palette.primary else MaterialTheme.colorScheme.onSurface,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.ExtraBold,
+            style = TextStyle(fontFeatureSettings = "tnum"),
+        )
+    }
+}
 
 private fun copy(context: Context, text: String) {
     context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("ID", text))
-    toast(context, "ID скопирован")
 }
-
-private fun toast(context: Context, text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()

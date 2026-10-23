@@ -2,179 +2,229 @@ package com.titanvps.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AccountCircle
-import androidx.compose.material.icons.outlined.Autorenew
-import androidx.compose.material.icons.outlined.Devices
-import androidx.compose.material.icons.outlined.DataUsage
-import androidx.compose.material.icons.outlined.Loyalty
-import androidx.compose.material.icons.outlined.SupportAgent
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.outlined.PieChart
+import androidx.compose.material.icons.outlined.Sell
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.titanvps.app.BuildConfig
+import com.titanvps.app.data.Fmt
 import com.titanvps.app.data.Subscription
-import com.titanvps.app.ui.theme.Connected
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.TimeUnit
+import com.titanvps.app.ui.kit.CircleIconButton
+import com.titanvps.app.ui.kit.GradientBar
+import com.titanvps.app.ui.kit.PrimaryButton
+import com.titanvps.app.ui.kit.SecondaryButton
+import com.titanvps.app.ui.kit.SettingsRow
+import com.titanvps.app.ui.kit.TitanCard
+import com.titanvps.app.ui.theme.AccentGradient
+import com.titanvps.app.ui.theme.DangerGradient
+import com.titanvps.app.ui.theme.Titan
+import com.titanvps.app.ui.theme.fixedSp
 
 /**
- * "Подписка" tab: only the expiry date, the bypass traffic and a "Личный кабинет"
- * button; renewing, buying GB etc. all happen in the cabinet.
+ * "Подписка" tab: the expiry date, the bypass traffic and a "Личный кабинет" button;
+ * renewing, buying GB etc. all happen in the cabinet. Two columns on a tablet.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onOpenDevices: () -> Unit, onBack: () -> Unit) {
+internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onOpenDevices: () -> Unit) {
     val info = sub.info
+    val context = LocalContext.current
+    val palette = Titan.palette
     val account by viewModel.account.collectAsState()
+    val busy by viewModel.busy.collectAsState()
     val now = System.currentTimeMillis() / 1000
     val active = info.expireAt <= 0 || info.expireAt > now
+    LaunchedEffect(Unit) { viewModel.loadAccount() }
 
-    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        val wide = maxWidth >= 720.dp
-        Column(
-            Modifier.widthIn(max = if (wide) 960.dp else 640.dp).fillMaxWidth()
-                .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            TopBar("Подписка", onBack = onBack)
-
-            val expiry: @Composable (Modifier) -> Unit = { m ->
-                SectionCard(m) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        androidx.compose.foundation.layout.Box(
-                            Modifier.size(10.dp).clip(CircleShape).background(if (active) Connected else MaterialTheme.colorScheme.error)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (active) "Подписка активна" else "Подписка истекла", color = if (active) Connected else MaterialTheme.colorScheme.error, fontSize = 14.sp)
-                    }
-                    Spacer(Modifier.height(6.dp))
+    val expiry: @Composable (Modifier) -> Unit = { m ->
+        TitanCard(m, contentPadding = PaddingValues(16.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val color = if (active) palette.green else palette.red
+                Row(
+                    Modifier.background(color.copy(alpha = 0.14f), CircleShape).padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(Modifier.size(8.dp).background(color, CircleShape))
                     Text(
-                        if (info.expireAt > 0) "до " + SimpleDateFormat("d MMMM yyyy", Locale("ru")).format(Date(info.expireAt * 1000)) else "Бессрочно",
-                        fontSize = 26.sp,
+                        if (active) "Подписка активна" else "Подписка истекла",
+                        color = color,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Text(
+                    if (info.expireAt > 0) "до " + Fmt.date(info.expireAt) else "Бессрочно",
+                    fontSize = fixedSp(26f),
+                    lineHeight = fixedSp(32f),
+                    fontWeight = FontWeight.Bold,
+                )
+                if (info.expireAt > 0) {
+                    Text("Осталось ${Fmt.daysLeft(info.expireAt, now)} дн.", color = palette.textSecondary)
+                }
+                Text("Обновлено " + Fmt.ago(sub.fetchedAt), color = palette.textTertiary, fontSize = 12.sp)
+            }
+        }
+    }
+    val traffic: @Composable (Modifier) -> Unit = { m ->
+        TitanCard(m, contentPadding = PaddingValues(16.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Трафик на обходах", color = palette.textSecondary, fontSize = 14.sp)
+                if (info.totalBytes > 0) {
+                    val left = (info.totalBytes - info.usedBytes).coerceAtLeast(0)
+                    Text(
+                        "${Fmt.bytes(left)} из ${Fmt.bytes(info.totalBytes)}",
+                        fontSize = fixedSp(26f),
+                        lineHeight = fixedSp(32f),
                         fontWeight = FontWeight.Bold,
                     )
-                    if (info.expireAt > 0) {
-                        val days = TimeUnit.SECONDS.toDays(info.expireAt - now).coerceAtLeast(0)
-                        Text("Осталось $days дн.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-            val traffic: @Composable (Modifier) -> Unit = { m ->
-                SectionCard(m) {
-                    Text("Трафик на обходах", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                    Spacer(Modifier.height(6.dp))
-                    if (info.totalBytes > 0) {
-                        val left = (info.totalBytes - info.usedBytes).coerceAtLeast(0)
-                        Text("${formatBytes(left)} из ${formatBytes(info.totalBytes)}", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(10.dp))
-                        LinearProgressIndicator(
-                            progress = { (left.toFloat() / info.totalBytes).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                        )
-                    } else {
-                        Text("Безлимит", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text("На обычных серверах — безлимит", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "Обходы — серверы для мобильного интернета, когда оператор пропускает только " +
-                            "разрешённые сайты (белые списки) и обычные серверы не работают. " +
-                            "Гигабайты списываются только пока вы подключены к обходу. " +
-                            "На Wi-Fi обходы не нужны и недоступны. Закончились ГБ — докупите в личном кабинете.",
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // Under a tenth left: orange to red.
+                    GradientBar(
+                        left.toFloat() / info.totalBytes,
+                        if (left * 10 < info.totalBytes) DangerGradient else AccentGradient,
                     )
+                } else {
+                    Text("Безлимит", fontSize = fixedSp(26f), lineHeight = fixedSp(32f), fontWeight = FontWeight.Bold)
                 }
-            }
-
-            if (wide) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    expiry(Modifier.weight(1f))
-                    traffic(Modifier.weight(1f))
-                }
-            } else {
-                expiry(Modifier.fillMaxWidth())
-                traffic(Modifier.fillMaxWidth())
-            }
-
-            SectionCard {
-                NavRow(
-                    "Мои устройства",
-                    icon = Icons.Outlined.Devices,
-                    value = account?.takeIf { it.devicesEnabled }?.devices?.size?.toString(),
-                    divider = false,
-                    onClick = onOpenDevices,
-                )
-            }
-
-            Button(
-                onClick = viewModel::openCabinet,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-            ) {
-                Icon(Icons.Outlined.AccountCircle, null)
-                Spacer(Modifier.width(10.dp))
-                Text("Личный кабинет", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            }
-
-            SectionCard {
-                Text("В личном кабинете", fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(10.dp))
-                Feature(Icons.Outlined.Autorenew, "Продление подписки")
-                Feature(Icons.Outlined.DataUsage, "Докупка ГБ для обходов")
-                Feature(Icons.Outlined.Loyalty, "Коды оплаты")
-            }
-
-            // What the in-app cabinet can't do: the bot or the full cabinet on the site.
-            val context = androidx.compose.ui.platform.LocalContext.current
-            SectionCard {
-                Text("Расширенные функции", fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(6.dp))
+                Text("На обычных серверах — безлимит", color = palette.textSecondary, fontSize = 13.sp)
                 Text(
-                    "Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте " +
-                        "или в полном кабинете на сайте (вход по почте или через Telegram).",
-                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "Обходы — серверы для мобильного интернета, когда оператор пропускает только " +
+                        "разрешённые сайты (белые списки) и обычные серверы не работают. " +
+                        "Гигабайты списываются только пока вы подключены к обходу. " +
+                        "На Wi-Fi обходы не нужны и недоступны. Закончились ГБ — докупите в личном кабинете.",
+                    Modifier.padding(top = 4.dp),
+                    color = palette.textSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
                 )
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    androidx.compose.material3.OutlinedButton(
-                        onClick = { context.openUrl(com.titanvps.app.BuildConfig.TELEGRAM_URL) }, modifier = Modifier.weight(1f),
-                    ) { Text("Открыть бота", maxLines = 1) }
-                    fullCabinetUrl(info.webPageUrl)?.let { url ->
-                        androidx.compose.material3.OutlinedButton(onClick = { context.openUrl(url) }, modifier = Modifier.weight(1f)) {
-                            Text("Открыть сайт", maxLines = 1)
+            }
+        }
+    }
+
+    PullToRefreshBox(isRefreshing = busy, onRefresh = { viewModel.refreshByHand() }, modifier = Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val wide = maxWidth >= 720.dp
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Column(
+                    Modifier.widthIn(max = if (wide) 960.dp else 640.dp).fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Подписка", Modifier.weight(1f), fontSize = fixedSp(28f), lineHeight = fixedSp(34f), fontWeight = FontWeight.Bold)
+                        // Not dimmed while it turns; a tap meanwhile does nothing.
+                        CircleIconButton(
+                            Icons.Filled.Refresh,
+                            "Обновить подписку",
+                            onClick = { if (!busy) viewModel.refreshByHand() },
+                            size = 42.dp,
+                            spinning = busy,
+                        )
+                    }
+
+                    if (wide) {
+                        Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            expiry(Modifier.weight(1f).fillMaxHeight())
+                            traffic(Modifier.weight(1f).fillMaxHeight())
+                        }
+                    } else {
+                        expiry(Modifier)
+                        traffic(Modifier)
+                    }
+
+                    PrimaryButton("Личный кабинет", { viewModel.openCabinet() }, icon = Icons.Filled.AccountCircle)
+
+                    account?.takeIf { it.devicesEnabled }?.let { acc ->
+                        TitanCard {
+                            SettingsRow(
+                                "Подключённые устройства",
+                                Icons.Filled.Smartphone,
+                                palette.primary,
+                                onClick = onOpenDevices,
+                                trailing = {
+                                    Text(
+                                        "${acc.devices.size}" + if (acc.deviceLimit > 0) " из ${acc.deviceLimit}" else "",
+                                        color = palette.textSecondary,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                },
+                            )
+                        }
+                    }
+
+                    TitanCard(contentPadding = PaddingValues(16.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text("В личном кабинете", fontWeight = FontWeight.SemiBold)
+                            Feature(Icons.Filled.Autorenew, "Продление подписки")
+                            Feature(Icons.Outlined.PieChart, "Докупка ГБ для обходов")
+                            Feature(Icons.Outlined.Sell, "Коды оплаты")
+                        }
+                    }
+
+                    // What the in-app cabinet can't do: the bot or the full cabinet on the site.
+                    TitanCard(contentPadding = PaddingValues(16.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Расширенные функции", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Изменение лимита устройств, отвязка устройств, рефералы и история платежей — в боте " +
+                                    "или в полном кабинете на сайте (вход по почте или через Telegram).",
+                                color = palette.textSecondary,
+                                fontSize = 13.sp,
+                            )
+                            val site = fullCabinetUrl(info.webPageUrl)
+                            SideBySideOrStacked(10.dp) {
+                                SecondaryButton(
+                                    "Открыть бота",
+                                    { context.openUrl(BuildConfig.TELEGRAM_URL) },
+                                    icon = Icons.AutoMirrored.Filled.Send,
+                                    minHeight = 46.dp,
+                                )
+                                if (site != null) {
+                                    SecondaryButton("Открыть сайт", { context.openUrl(site) }, icon = Icons.Filled.Language, minHeight = 46.dp)
+                                }
+                            }
                         }
                     }
                 }
@@ -189,9 +239,38 @@ private fun fullCabinetUrl(link: String?): String? =
 
 @Composable
 private fun Feature(icon: ImageVector, text: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.width(12.dp))
-        Text(text, fontSize = 15.sp)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Icon(icon, null, Modifier.size(22.dp), tint = Titan.palette.primary)
+        Text(text)
+    }
+}
+
+/** Equal widths side by side where every item fits on one line, else one under another. */
+@Composable
+private fun SideBySideOrStacked(spacing: Dp, content: @Composable () -> Unit) {
+    Layout(content) { measurables, constraints ->
+        val gap = spacing.roundToPx()
+        val count = measurables.size
+        if (count == 0) return@Layout layout(constraints.minWidth, 0) {}
+        val width = constraints.maxWidth
+        val share = ((width - gap * (count - 1)) / count).coerceAtLeast(0)
+        val fits = measurables.all { it.maxIntrinsicWidth(Constraints.Infinity) <= share }
+        if (fits) {
+            val placeables = measurables.map { it.measure(Constraints(minWidth = share, maxWidth = share)) }
+            val height = placeables.maxOf { it.height }
+            layout(width, height) {
+                placeables.forEachIndexed { i, p -> p.placeRelative(i * (share + gap), (height - p.height) / 2) }
+            }
+        } else {
+            val placeables = measurables.map { it.measure(Constraints(minWidth = width, maxWidth = width)) }
+            val height = placeables.sumOf { it.height } + gap * (count - 1)
+            layout(width, height) {
+                var y = 0
+                placeables.forEach { p ->
+                    p.placeRelative(0, y)
+                    y += p.height + gap
+                }
+            }
+        }
     }
 }

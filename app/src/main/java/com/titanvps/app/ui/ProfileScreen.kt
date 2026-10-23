@@ -1,27 +1,55 @@
 package com.titanvps.app.ui
 
 import android.os.SystemClock
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.BrightnessMedium
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.HeadsetMic
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -29,16 +57,34 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.titanvps.app.BuildConfig
+import com.titanvps.app.R
+import com.titanvps.app.data.AccountApi
+import com.titanvps.app.data.Flags
+import com.titanvps.app.data.Fmt
 import com.titanvps.app.data.Subscription
 import com.titanvps.app.data.ThemeMode
+import com.titanvps.app.ui.kit.FlagCircle
+import com.titanvps.app.ui.kit.RowDivider
+import com.titanvps.app.ui.kit.SectionTitle
+import com.titanvps.app.ui.kit.SegmentItem
+import com.titanvps.app.ui.kit.SegmentedTabs
+import com.titanvps.app.ui.kit.SettingsRow
+import com.titanvps.app.ui.kit.SettingsToggleRow
+import com.titanvps.app.ui.kit.TitanCard
+import com.titanvps.app.ui.kit.pressable
+import com.titanvps.app.ui.kit.rememberHaptics
+import com.titanvps.app.ui.theme.ProvideTitanTextScale
+import com.titanvps.app.ui.theme.Titan
+import com.titanvps.app.ui.theme.fixedSp
 
-/** "Профиль" tab = settings, as in the mockup. */
+/** "Профиль" tab = Настройки (iOS ProfileView), with the rows only Android has. */
 @Composable
 internal fun ProfileScreen(
     viewModel: MainViewModel,
@@ -47,127 +93,229 @@ internal fun ProfileScreen(
     onOpenDiagnostics: () -> Unit,
     onOpenHome: () -> Unit,
     onOpenTech: () -> Unit,
+    onOpenSubscription: () -> Unit,
 ) {
     val context = LocalContext.current
+    val palette = Titan.palette
+    val haptics = rememberHaptics()
     val theme by viewModel.theme.collectAsState()
     val autoConnect by viewModel.autoConnect.collectAsState()
     val autoBypass by viewModel.autoBypass.collectAsState()
     val notifications by viewModel.notifications.collectAsState()
     val selectedId by viewModel.selectedId.collectAsState()
+    val account by viewModel.account.collectAsState()
+    val busy by viewModel.busy.collectAsState()
+    val techMode by viewModel.techMode.collectAsState()
     var confirmReset by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
-    val techMode by viewModel.techMode.collectAsState()
     var askCode by remember { mutableStateOf(false) }
-    // Hidden entry: 7 taps on the version in «О приложении», at most 3 s apart.
-    var versionTaps by remember { mutableStateOf(0) }
-    var lastTapAt by remember { mutableStateOf(0L) }
+    // Hidden entry: 7 taps on Версия, at most 3 s apart.
+    var versionTaps by remember { mutableIntStateOf(0) }
+    var lastTapAt by remember { mutableLongStateOf(0L) }
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
+    val supportUrl = sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL
 
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+    Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) {
         Column(
-            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TopBar("Настройки", onBack = onOpenHome)
+            Text(
+                "Настройки",
+                Modifier.padding(start = 4.dp, top = 8.dp),
+                fontSize = fixedSp(28f),
+                lineHeight = fixedSp(34f),
+                fontWeight = FontWeight.Bold,
+            )
 
-            SectionCard(title = "Оформление") {
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    listOf(ThemeMode.LIGHT to "Светлая", ThemeMode.DARK to "Тёмная", ThemeMode.SYSTEM to "Системная").forEach { (mode, label) ->
-                        val on = theme == mode
-                        Box(
-                            Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
-                                .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
-                                .clickable { viewModel.setTheme(mode) }
-                                .padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center,
+            AccountCard(sub, account) {
+                haptics.selection()
+                onOpenSubscription()
+            }
+
+            SectionTitle("Оформление")
+            // The tiles are a card of their own.
+            SegmentedTabs(
+                items = listOf(
+                    SegmentItem("Системная", Icons.Filled.BrightnessMedium),
+                    SegmentItem("Светлая", Icons.Filled.LightMode),
+                    SegmentItem("Тёмная", Icons.Filled.DarkMode),
+                ),
+                selectedIndex = when (theme) {
+                    ThemeMode.SYSTEM -> 0
+                    ThemeMode.LIGHT -> 1
+                    ThemeMode.DARK -> 2
+                },
+                onSelect = { viewModel.setTheme(listOf(ThemeMode.SYSTEM, ThemeMode.LIGHT, ThemeMode.DARK)[it]) },
+                tiles = true,
+            )
+
+            SectionTitle("Подключение")
+            TitanCard {
+                SettingsRow(
+                    "Сервер",
+                    Icons.Filled.Storage,
+                    palette.primary,
+                    onClick = {
+                        haptics.selection()
+                        onOpenHome()
+                    },
+                    trailing = {
+                        Row(
+                            Modifier.widthIn(max = 170.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
+                            if (selected != null) FlagCircle(selected.name, 20.dp)
                             Text(
-                                label,
-                                color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                                selected?.takeUnless { "авто" in it.name.lowercase() }?.let { Flags.nameWithoutFlag(it.name) }
+                                    ?: "Автоматически",
+                                Modifier.weight(1f, fill = false),
+                                color = palette.textSecondary,
+                                fontSize = 15.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                    }
-                }
-            }
-
-            SectionCard(title = "Подключение") {
-                NavRow(
-                    "Выбор сервера",
-                    value = selected?.let { if ("авто" in it.name.lowercase()) "Автоматически" else it.name.trim() } ?: "—",
-                    onClick = onOpenHome,
+                    },
                 )
-                ToggleRow(
+                RowDivider()
+                SettingsToggleRow(
                     "Автоподключение",
-                    autoConnect,
-                    subtitle = "VPN включится сам при запуске приложения, включении и после сна устройства",
-                ) { viewModel.setAutoConnect(it) }
-                NavRow("Раздельное туннелирование", onClick = onOpenApps)
-                ToggleRow("Автопереход на обходы", autoBypass, divider = false) { viewModel.setAutoBypass(it) }
+                    Icons.Filled.Bolt,
+                    palette.green,
+                    checked = autoConnect,
+                    onCheckedChange = { viewModel.setAutoConnect(it) },
+                    subtitle = "VPN включится сам при открытии приложения, включении и после сна устройства",
+                )
+                KeepAliveRows()
+                RemindersRow()
+                LiveNotificationRow()
+                RowDivider()
+                SettingsRow(
+                    "Раздельное туннелирование",
+                    Icons.AutoMirrored.Filled.CallSplit,
+                    palette.violet,
+                    onClick = onOpenApps,
+                    subtitle = "Какие приложения идут мимо VPN",
+                )
+                RowDivider()
+                SettingsToggleRow(
+                    "Автопереход на обходы",
+                    Icons.Filled.Shuffle,
+                    palette.orange,
+                    checked = autoBypass,
+                    onCheckedChange = { viewModel.setAutoBypass(it) },
+                    subtitle = "Переключит на обход, если мобильный интернет ограничен белыми списками",
+                )
             }
 
-            SectionCard(title = "Приложение") {
-                NavRow("Язык", value = "Русский", onClick = {})
-                ToggleRow("Уведомления", notifications) { viewModel.setNotifications(it) }
-                NavRow("Поддержка") { context.openUrl(sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL) }
-                NavRow("Обновление приложения", value = "v${BuildConfig.VERSION_NAME}") { viewModel.checkUpdate() }
-                if (techMode) NavRow("Технический режим") { onOpenTech() }
-                NavRow("О приложении", divider = false) { about = true }
+            SectionTitle("Приложение")
+            TitanCard {
+                SettingsRow(
+                    "Поддержка",
+                    Icons.Filled.HeadsetMic,
+                    palette.primary,
+                    onClick = { context.openUrl(supportUrl) },
+                    subtitle = "Ответим в Telegram",
+                    showChevron = false,
+                    trailing = {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, null, Modifier.size(13.dp), tint = palette.textTertiary)
+                    },
+                )
+                RowDivider()
+                SettingsRow(
+                    "Обновить подписку",
+                    Icons.Filled.Refresh,
+                    palette.green,
+                    onClick = { if (!busy) viewModel.refreshByHand() },
+                    subtitle = "Обновлено " + Fmt.ago(sub.fetchedAt),
+                    showChevron = false,
+                    trailing = if (busy) {
+                        { CircularProgressIndicator(Modifier.size(18.dp), color = palette.textSecondary, strokeWidth = 2.dp) }
+                    } else {
+                        null
+                    },
+                )
+                RowDivider()
+                SettingsRow(
+                    "Обновление приложения",
+                    Icons.Filled.SystemUpdate,
+                    palette.primary,
+                    onClick = { viewModel.checkUpdate() },
+                    showChevron = false,
+                    trailing = {
+                        Text("v${BuildConfig.VERSION_NAME}", color = palette.textSecondary, fontSize = 15.sp)
+                    },
+                )
+                RowDivider()
+                SettingsToggleRow(
+                    "Уведомления",
+                    Icons.Filled.Notifications,
+                    palette.orange,
+                    checked = notifications,
+                    onCheckedChange = { viewModel.setNotifications(it) },
+                    subtitle = "Белые списки, Wi‑Fi и новые версии",
+                )
+                QuickTileRow()
+                RowDivider()
+                SettingsRow("О приложении", Icons.Filled.Info, palette.violet, onClick = { about = true })
+                RowDivider()
+                // No highlight: the way in to Технический режим stays hidden.
+                SettingsRow(
+                    "Версия",
+                    Icons.Filled.Tag,
+                    palette.gray,
+                    onClick = null,
+                    modifier = Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        val now = SystemClock.elapsedRealtime()
+                        versionTaps = if (now - lastTapAt <= 3_000) versionTaps + 1 else 1
+                        lastTapAt = now
+                        if (versionTaps >= 7) {
+                            versionTaps = 0
+                            if (techMode) onOpenTech() else askCode = true
+                        }
+                    },
+                    trailing = {
+                        Text(
+                            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                            color = palette.textSecondary,
+                            fontSize = 15.sp,
+                            style = TextStyle(fontFeatureSettings = "tnum"),
+                        )
+                    },
+                )
+                if (techMode) {
+                    RowDivider()
+                    SettingsRow("Технический режим", Icons.Filled.Build, palette.orange, onClick = onOpenTech)
+                }
+                RowDivider()
+                SettingsRow("Диагностика", Icons.Filled.Description, palette.gray, onClick = onOpenDiagnostics)
             }
 
-            Text(
-                "Titan VPS",
-                Modifier.fillMaxWidth().padding(8.dp),
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
-            )
+            TitanCard(Modifier.padding(top = 18.dp)) {
+                SettingsRow(
+                    "Сброс настроек",
+                    Icons.Filled.RestartAlt,
+                    palette.orange,
+                    onClick = { confirmReset = true },
+                    showChevron = false,
+                )
+                RowDivider()
+                SettingsRow(
+                    "Выйти из аккаунта",
+                    Icons.AutoMirrored.Filled.Logout,
+                    palette.red,
+                    onClick = { confirmLogout = true },
+                    titleColor = palette.red,
+                    showChevron = false,
+                )
+            }
         }
     }
 
-    if (about) {
-        // "О приложении": version plus the less frequent actions (not in the main list).
-        AlertDialog(
-            onDismissRequest = { about = false },
-            title = { Text("Titan VPS") },
-            text = {
-                Column {
-                    Text(
-                        "Версия ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ядро Xray",
-                        // No ripple: the tap target stays hidden.
-                        Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                            val now = SystemClock.elapsedRealtime()
-                            versionTaps = if (now - lastTapAt <= 3_000) versionTaps + 1 else 1
-                            lastTapAt = now
-                            if (versionTaps >= 7) {
-                                versionTaps = 0
-                                about = false
-                                if (techMode) {
-                                    onOpenTech()
-                                } else {
-                                    askCode = true
-                                }
-                            }
-                        },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (techMode) TextButton(onClick = { about = false; onOpenTech() }) { Text("Технический режим") }
-                    TextButton(onClick = { about = false; onOpenDiagnostics() }) { Text("Диагностика") }
-                    TextButton(onClick = { about = false; confirmReset = true }) { Text("Сброс настроек") }
-                    TextButton(onClick = { about = false; confirmLogout = true }) {
-                        Text("Выйти из аккаунта", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { about = false }) { Text("Закрыть") } },
-        )
-    }
+    if (about) AboutSheet(supportUrl) { about = false }
     if (askCode) {
         TechCodeDialog(
             onDismiss = { askCode = false },
@@ -175,16 +323,25 @@ internal fun ProfileScreen(
         )
     }
     if (confirmReset) {
-        AlertDialog(
+        TitanAlertDialog(
             onDismissRequest = { confirmReset = false },
             title = { Text("Сбросить настройки?") },
-            text = { Text("Тема, исключения приложений, избранное и выбранный сервер вернутся к исходным. Ключ останется.") },
-            confirmButton = { TextButton(onClick = { confirmReset = false; viewModel.resetSettings() }) { Text("Сбросить") } },
+            text = {
+                Text(
+                    "Тема, исключения приложений, избранное, автоподключение, «Не отключать VPN» и выбранный " +
+                        "сервер вернутся к исходным. Ключ останется.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmReset = false; viewModel.resetSettings() }) {
+                    Text("Сбросить", color = MaterialTheme.colorScheme.error)
+                }
+            },
             dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Отмена") } },
         )
     }
     if (confirmLogout) {
-        AlertDialog(
+        TitanAlertDialog(
             onDismissRequest = { confirmLogout = false },
             title = { Text("Выйти из аккаунта?") },
             text = { Text("VPN отключится, ключ нужно будет вставить заново.") },
@@ -194,6 +351,74 @@ internal fun ProfileScreen(
     }
 }
 
+/** Who this is: the subscription's state and devices; a tap opens Подписка. */
+@Composable
+private fun AccountCard(sub: Subscription, account: AccountApi.Info?, onClick: () -> Unit) {
+    val palette = Titan.palette
+    val expireAt = sub.info.expireAt
+    val active = expireAt <= 0 || expireAt > System.currentTimeMillis() / 1000
+    TitanCard(
+        Modifier.padding(top = 4.dp).pressable(onClick = onClick, scale = 0.98f),
+        contentPadding = PaddingValues(16.dp),
+        stroke = palette.primary.copy(alpha = 0.25f),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(
+                Modifier.size(60.dp).clip(RoundedCornerShape(16.dp)).background(palette.track).padding(8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(painterResource(R.drawable.logo), null, Modifier.size(44.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Titan VPS", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(Modifier.size(8.dp).background(if (active) palette.green else palette.red, CircleShape))
+                    Text(
+                        when {
+                            !active -> "Подписка истекла"
+                            expireAt > 0 -> "Активна до " + Fmt.date(expireAt)
+                            else -> "Подписка бессрочная"
+                        },
+                        color = if (active) MaterialTheme.colorScheme.onSurface else palette.red,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                account?.takeIf { it.devicesEnabled }?.let { acc ->
+                    Text(
+                        "Устройства: ${acc.devices.size}" + if (acc.deviceLimit > 0) " из ${acc.deviceLimit}" else "",
+                        color = palette.textSecondary,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(20.dp), tint = palette.textTertiary)
+        }
+    }
+}
+
+/**
+ * AlertDialog in the app's text size: a dialog is a window of its own, with the system's
+ * text size otherwise.
+ */
+@Composable
+private fun TitanAlertDialog(
+    onDismissRequest: () -> Unit,
+    confirmButton: @Composable () -> Unit,
+    dismissButton: (@Composable () -> Unit)? = null,
+    title: (@Composable () -> Unit)? = null,
+    text: (@Composable () -> Unit)? = null,
+) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        confirmButton = { ProvideTitanTextScale(confirmButton) },
+        dismissButton = dismissButton?.let { slot -> { ProvideTitanTextScale(slot) } },
+        title = title?.let { slot -> { ProvideTitanTextScale(slot) } },
+        text = text?.let { slot -> { ProvideTitanTextScale(slot) } },
+    )
+}
+
+
 /** Check / download / install flow for "Обновление приложения". */
 @Composable
 internal fun UpdateDialog(viewModel: MainViewModel) {
@@ -201,32 +426,32 @@ internal fun UpdateDialog(viewModel: MainViewModel) {
     val close = { viewModel.dismissUpdate() }
     when (val st = state) {
         com.titanvps.app.data.Updater.State.Idle -> Unit
-        com.titanvps.app.data.Updater.State.ConnectingVpn -> AlertDialog(
+        com.titanvps.app.data.Updater.State.ConnectingVpn -> TitanAlertDialog(
             onDismissRequest = close,
             title = { Text("Обновление") },
             text = { Text("Включаем VPN — обновление скачивается только через него…") },
             confirmButton = {},
         )
-        is com.titanvps.app.data.Updater.State.NeedPermission -> AlertDialog(
+        is com.titanvps.app.data.Updater.State.NeedPermission -> TitanAlertDialog(
             onDismissRequest = close,
             title = { Text("Разрешите установку") },
             text = { Text("В открывшихся настройках включите «Разрешить установку» для Titan VPS, вернитесь сюда и нажмите «Продолжить».") },
             confirmButton = { TextButton(onClick = { viewModel.downloadUpdate(st.release) }) { Text("Продолжить") } },
             dismissButton = { TextButton(onClick = { viewModel.openInstallPermission() }) { Text("Открыть настройки") } },
         )
-        com.titanvps.app.data.Updater.State.Checking -> AlertDialog(
+        com.titanvps.app.data.Updater.State.Checking -> TitanAlertDialog(
             onDismissRequest = close,
             title = { Text("Обновление") },
             text = { Text("Проверяем новую версию…") },
             confirmButton = {},
         )
-        com.titanvps.app.data.Updater.State.UpToDate -> AlertDialog(
+        com.titanvps.app.data.Updater.State.UpToDate -> TitanAlertDialog(
             onDismissRequest = close,
             title = { Text("Обновление") },
             text = { Text("У вас последняя версия ${BuildConfig.VERSION_NAME}") },
             confirmButton = { TextButton(onClick = close) { Text("OK") } },
         )
-        is com.titanvps.app.data.Updater.State.Available -> AlertDialog(
+        is com.titanvps.app.data.Updater.State.Available -> TitanAlertDialog(
             onDismissRequest = close,
             title = { Text("Доступна версия ${st.release.versionName}") },
             text = {
@@ -239,7 +464,7 @@ internal fun UpdateDialog(viewModel: MainViewModel) {
             confirmButton = { TextButton(onClick = { viewModel.downloadUpdate(st.release) }) { Text("Обновить") } },
             dismissButton = { TextButton(onClick = close) { Text("Позже") } },
         )
-        is com.titanvps.app.data.Updater.State.Downloading -> AlertDialog(
+        is com.titanvps.app.data.Updater.State.Downloading -> TitanAlertDialog(
             onDismissRequest = {},
             title = { Text("Скачиваем обновление") },
             text = {
@@ -256,7 +481,7 @@ internal fun UpdateDialog(viewModel: MainViewModel) {
             },
             confirmButton = {},
         )
-        is com.titanvps.app.data.Updater.State.Error -> AlertDialog(
+        is com.titanvps.app.data.Updater.State.Error -> TitanAlertDialog(
             onDismissRequest = close,
             title = { Text("Обновление") },
             text = { Text(st.message) },

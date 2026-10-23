@@ -113,12 +113,12 @@
             android:theme="@style/Theme.TitanVPS"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- The payment page of a purchase, inside the app. -->
+        <!-- The payment page of a purchase, inside the app under its own bar. -->
         <activity
             android:name=".ui.PaymentActivity"
             android:exported="false"
-            android:label="Оплата"
-            android:theme="@android:style/Theme.Material.Light.DarkActionBar"
+            android:theme="@style/Theme.TitanVPS"
+            android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
 
         <service

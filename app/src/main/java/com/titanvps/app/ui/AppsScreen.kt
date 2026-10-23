@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -45,7 +46,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.titanvps.app.data.RuApps
+import com.titanvps.app.ui.kit.SettingsToggleRow
+import com.titanvps.app.ui.kit.TitanCard
 import com.titanvps.app.ui.kit.TitanToggle
+import com.titanvps.app.ui.theme.Titan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -94,21 +98,17 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
-        Row(
-            Modifier.fillMaxWidth().clickable { viewModel.setRuAppsBypass(!ruApps) }.padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Российские приложения без VPN", fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Включает все сразу: банки, маркетплейсы, Госуслуги, Яндекс, VK, операторы. " +
-                        "Любое из них можно выключить ниже.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            TitanToggle(checked = ruApps, onCheckedChange = { viewModel.setRuAppsBypass(it) })
+        // A settings row as in Настройки: the whole row toggles the preset.
+        TitanCard(Modifier.padding(horizontal = 16.dp).padding(top = 12.dp)) {
+            SettingsToggleRow(
+                title = "Российские приложения без VPN",
+                icon = Icons.Filled.AccountBalance,
+                iconColor = Titan.palette.green,
+                checked = ruApps,
+                onCheckedChange = { viewModel.setRuAppsBypass(it) },
+                subtitle = "Включает все сразу: банки, маркетплейсы, Госуслуги, Яндекс, VK, операторы. " +
+                    "Любое из них можно выключить ниже.",
+            )
         }
         OutlinedTextField(
             value = query,
