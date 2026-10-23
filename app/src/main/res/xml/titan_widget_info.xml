@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 4x1 by default: the flag, two lines of text, ‹ ⏻ › (it can still be narrowed to 3 cells). -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:initialLayout="@layout/widget_titan"
     android:previewLayout="@layout/widget_titan"
-    android:minWidth="180dp"
+    android:minWidth="250dp"
     android:minHeight="56dp"
-    android:targetCellWidth="3"
+    android:minResizeWidth="180dp"
+    android:targetCellWidth="4"
     android:targetCellHeight="1"
     android:resizeMode="horizontal"
     android:updatePeriodMillis="0"

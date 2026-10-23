@@ -6,50 +6,78 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.net.VpnService
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.os.Build
+import android.os.Bundle
+import android.view.View
 import android.widget.RemoteViews
 import com.titanvps.app.MainActivity
 import com.titanvps.app.R
 import com.titanvps.app.TitanApp
-import com.titanvps.app.vpn.TitanVpnService
+import com.titanvps.app.data.Flags
+import com.titanvps.app.data.ServerOrder
 import com.titanvps.app.vpn.VpnState
 import com.titanvps.app.vpn.VpnStatus
 
-/** Home-screen widget: status, current server and a Вкл/Выкл button. */
+/**
+ * Home-screen widget: the server's flag, status and server, ‹ › for the previous / next
+ * server and a Вкл/Выкл button. The provider is exported (Android requires it) and only
+ * draws; the buttons go to the non-exported [WidgetActionReceiver], so no other app can
+ * switch the VPN through it.
+ */
 class TitanWidget : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
         update(context, VpnStatus.state.value)
     }
 
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        if (intent.action != ACTION_TOGGLE) return
-        when (VpnStatus.state.value) {
-            is VpnState.Connected, VpnState.Connecting -> TitanVpnService.stop(context)
-            VpnState.Disconnecting -> Unit
-            else -> {
-                val app = TitanApp.get(context)
-                // No key yet or no VPN permission: open the app, it asks for both.
-                if (app.repository.subscription.value == null || VpnService.prepare(context) != null) {
-                    context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } else {
-                    TitanVpnService.start(context)
-                }
-            }
-        }
+    // Resized: ‹ › appear or go (see ARROWS_MIN_WIDTH_DP).
+    override fun onAppWidgetOptionsChanged(context: Context, manager: AppWidgetManager, appWidgetId: Int, newOptions: Bundle?) {
+        update(context, VpnStatus.state.value)
     }
 
     companion object {
-        private const val ACTION_TOGGLE = "com.titanvps.app.widget.TOGGLE"
+        internal const val ACTION_TOGGLE = "com.titanvps.app.widget.TOGGLE"
+        internal const val ACTION_PREV = "com.titanvps.app.widget.PREV"
+        internal const val ACTION_NEXT = "com.titanvps.app.widget.NEXT"
+        private const val FLAG_PX = 96
+        /** Narrower than this (a widget placed at 3 cells before ‹ › came) the text needs the room. */
+        private const val ARROWS_MIN_WIDTH_DP = 260
 
         /** Redraws every widget for [state]; called on each VPN state change. */
         fun update(context: Context, state: VpnState) {
             val manager = AppWidgetManager.getInstance(context)
             val ids = manager.getAppWidgetIds(ComponentName(context, TitanWidget::class.java))
             if (ids.isEmpty()) return
+            val app = TitanApp.get(context)
+            val server = app.repository.selectedServer()
+
+            // The server's round flag; the logo without a server (or a flag) yet.
+            val flag = server?.let { s ->
+                val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+                runCatching {
+                    if (night) Flags.circleBitmap(context, s.name, FLAG_PX, 0x1AFFFFFF, 0x26FFFFFF)
+                    else Flags.circleBitmap(context, s.name, FLAG_PX, 0x14000000, 0x1F000000)
+                }.getOrNull()
+            }
+            // ‹ › only when the server's group has another one.
+            val all = app.repository.subscription.value?.servers.orEmpty()
+            val wifiLocked = !app.network.current() && !app.settings.techMode.value
+            val steps = server != null && ServerOrder.neighbor(all, server.id, true, app.settings.favorites.value, wifiLocked) != null
+
+            val wide by lazy { views(context, state, server?.name, flag, arrows = steps) }
+            val narrow by lazy { views(context, state, server?.name, flag, arrows = false) }
+            for (id in ids) {
+                // Portrait width in dp; 0 when the launcher doesn't tell.
+                val width = runCatching { manager.getAppWidgetOptions(id).getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0) }
+                    .getOrDefault(0)
+                manager.updateAppWidget(id, if (width in 1 until ARROWS_MIN_WIDTH_DP) narrow else wide)
+            }
+        }
+
+        private fun views(context: Context, state: VpnState, serverName: String?, flag: Bitmap?, arrows: Boolean): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_titan)
-            val server = TitanApp.get(context).repository.selectedServer()?.name?.trim()
             val (status, button) = when (state) {
                 is VpnState.Connected -> "Подключено" to R.drawable.widget_btn_on
                 VpnState.Connecting -> "Подключаемся…" to R.drawable.widget_btn_busy
@@ -57,23 +85,38 @@ class TitanWidget : AppWidgetProvider() {
                 else -> "Не подключено" to R.drawable.widget_btn_off
             }
             views.setTextViewText(R.id.widget_status, status)
-            views.setTextColor(R.id.widget_status, if (state is VpnState.Connected) 0xFF22C55E.toInt() else 0xFFE6EAF2.toInt())
-            views.setTextViewText(R.id.widget_server, server ?: "Titan VPS")
+            when {
+                state is VpnState.Connected -> views.setTextColor(R.id.widget_status, 0xFF22C55E.toInt())
+                // Resolved by the launcher, so it follows a later switch of the system theme.
+                Build.VERSION.SDK_INT >= 31 -> views.setColor(R.id.widget_status, "setTextColor", R.color.widget_text)
+                else -> views.setTextColor(R.id.widget_status, context.getColor(R.color.widget_text))
+            }
+            views.setTextViewText(R.id.widget_server, serverName?.let { Flags.nameWithoutFlag(it) } ?: "Titan VPS")
             views.setInt(R.id.widget_button, "setBackgroundResource", button)
 
-            val toggle = PendingIntent.getBroadcast(
-                context, 0,
-                Intent(context, TitanWidget::class.java).setAction(ACTION_TOGGLE),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-            )
+            if (flag != null) views.setImageViewBitmap(R.id.widget_flag, flag)
+            else views.setImageViewResource(R.id.widget_flag, R.drawable.logo)
+
+            val visibility = if (arrows) View.VISIBLE else View.GONE
+            views.setViewVisibility(R.id.widget_prev, visibility)
+            views.setViewVisibility(R.id.widget_next, visibility)
+
             val open = PendingIntent.getActivity(
                 context, 1,
                 Intent(context, MainActivity::class.java),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
-            views.setOnClickPendingIntent(R.id.widget_button, toggle)
+            views.setOnClickPendingIntent(R.id.widget_button, action(context, 0, ACTION_TOGGLE))
+            views.setOnClickPendingIntent(R.id.widget_prev, action(context, 2, ACTION_PREV))
+            views.setOnClickPendingIntent(R.id.widget_next, action(context, 3, ACTION_NEXT))
             views.setOnClickPendingIntent(R.id.widget_root, open)
-            manager.updateAppWidget(ids, views)
+            return views
         }
+
+        private fun action(context: Context, code: Int, action: String): PendingIntent = PendingIntent.getBroadcast(
+            context, code,
+            Intent(context, WidgetActionReceiver::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
     }
 }

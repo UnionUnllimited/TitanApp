@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- «Не отключать VPN»: the system dialog that lets the app run without battery limits. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Android 16: the VPN notification may be promoted to a Live Update. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <!-- In-app updates from GitHub Releases. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Автоподключение after boot / wake-up. -->
@@ -41,6 +45,8 @@
                 <action android:name="com.glsx.boot.ACCON" />
                 <action android:name="com.ts.boot.ACCON" />
                 <action android:name="android.intent.action.ACTION_ACC_ON" />
+                <!-- The app was updated: «Не отключать VPN» brings the VPN back, reminders are set again. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
@@ -93,6 +99,11 @@
                 <data android:scheme="https" />
                 <data android:host="${appLinkHost}" />
             </intent-filter>
+
+            <!-- Launcher shortcuts: Включить / Выключить / Переключить. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- Personal cabinet: the site's limited cabinet read natively (link from the subscription). -->
@@ -140,6 +151,28 @@
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
         </service>
+
+        <!-- Subscription reminders (alarms set by the app itself). -->
+        <receiver
+            android:name=".reminders.ReminderReceiver"
+            android:exported="false" />
+
+        <!-- The widget's buttons; not exported, so no other app can switch the VPN. -->
+        <receiver
+            android:name=".widget.WidgetActionReceiver"
+            android:exported="false" />
+
+        <!-- Launcher shortcuts land here: no window, it acts and closes. Not exported: the
+             launcher starts static shortcuts as this app. -->
+        <activity
+            android:name=".vpn.ShortcutActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>

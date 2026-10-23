@@ -179,6 +179,9 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
     private var process: Process? = null
     val port: Int = java.net.ServerSocket(0).use { it.localPort }
 
+    /** The client still runs (the VPN restarts the core and it when it exits). */
+    val isAlive: Boolean get() = process?.isAlive == true
+
     /** Starts the client and waits until its SOCKS port answers. */
     fun start() {
         val exe = File(context.applicationInfo.nativeLibraryDir, endpoint.kind.lib ?: error("${endpoint.kind} needs no client"))

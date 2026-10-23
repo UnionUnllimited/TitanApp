@@ -5,4 +5,22 @@
     <string name="notification_connected">Подключено: %1$s</string>
     <string name="notification_connecting">Подключение…</string>
     <string name="action_disconnect">Отключить</string>
+
+    <!-- The VPN notification with the server («Уведомление с сервером»). -->
+    <string name="action_prev">‹ Пред.</string>
+    <string name="action_next">След. ›</string>
+    <string name="notification_status_connecting">Подключаемся…</string>
+    <string name="notification_status_connected">Подключено</string>
+    <string name="notification_switching">Переключаемся…</string>
+    <string name="notification_reconnecting">Переподключаемся…</string>
+
+    <string name="reminders_channel">Напоминания</string>
+
+    <!-- Launcher shortcuts (long press on the icon). -->
+    <string name="shortcut_on_short">Включить</string>
+    <string name="shortcut_on_long">Включить Titan VPS</string>
+    <string name="shortcut_off_short">Выключить</string>
+    <string name="shortcut_off_long">Выключить Titan VPS</string>
+    <string name="shortcut_toggle_short">Переключить</string>
+    <string name="shortcut_toggle_long">Переключить Titan VPS</string>
 </resources>
