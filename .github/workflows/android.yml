@@ -59,6 +59,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: ./scripts/download-plugins.sh
 
+      # Round flags (FlagCircle, the VPN notification, the widget): flag-icons' square SVGs as PNGs.
+      - name: Download flag images
+        run: bash scripts/download-flags-android.sh
+
       - name: Unit tests
         run: ./gradlew testDebugUnitTest
 
@@ -118,6 +122,7 @@ jobs:
           mkdir -p deps/app/libs deps/app/src/main/assets
           cp app/libs/libXray.aar deps/app/libs/
           cp app/src/main/assets/*.dat deps/app/src/main/assets/
+          cp -r app/src/main/assets/flags deps/app/src/main/assets/
 
       - uses: actions/upload-artifact@v4
         with:

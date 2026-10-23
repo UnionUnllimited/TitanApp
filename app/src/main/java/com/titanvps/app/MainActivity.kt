@@ -70,14 +70,7 @@ class MainActivity : ComponentActivity() {
                 enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
             }
             TitanTheme(mode) {
-                // Text a notch smaller than the system default everywhere.
-                val density = androidx.compose.ui.platform.LocalDensity.current
-                androidx.compose.runtime.CompositionLocalProvider(
-                    androidx.compose.ui.platform.LocalDensity provides
-                        androidx.compose.ui.unit.Density(density.density, density.fontScale * 0.88f),
-                ) {
-                    TitanScreen(viewModel = viewModel, onConnect = ::connect)
-                }
+                TitanScreen(viewModel = viewModel, onConnect = ::connect)
             }
         }
     }
