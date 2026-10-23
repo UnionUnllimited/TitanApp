@@ -189,6 +189,8 @@ struct TFOStats {
             "  ядро отправило обычный SYN: \(c("kernelPlain"))",
             "Без TFO: \(c("plain")) (TFO к серверу недавно не прошёл), \(c("notSafe")) (данные нельзя повторять)",
             "Ошибок TFO-подключения: \(c("failed"))",
+            // TLS or HTTP sent, closed with nothing back: what a DPI box dropping the data after a TFO handshake looks like.
+            "Данные ушли, ответа нет: \(c("noAnswer")) (TFO-соединение закрыто, не получив ни байта)",
         ]
         if c("unchecked") > 0 { lines.append("Без записи ядра: \(c("unchecked"))") }
         return lines.joined(separator: "\n")
@@ -279,12 +281,12 @@ struct TechModeView: View {
                         .buttonStyle(.bordered).disabled(checkingServers)
                 }
                 card("TCP Fast Open", tfoRows,
-                     caption: "По записи ядра iOS о каждом соединении (TCP_CONNECTION_INFO), а не по настройкам: «приняты сервером» — данные действительно ушли в SYN. TFO включается для серверов с «tfo» в имени.") {
+                     caption: "По записи ядра iOS о каждом соединении (TCP_CONNECTION_INFO), а не по настройкам: «приняты сервером» — данные действительно ушли в SYN. TFO — на обходах, если он задан в подписке, и на серверах с «tfo» или «pktup» в имени; на остальных серверах его нет.") {
                     Button { Task { await refreshTFO() } } label: { Text("Обновить").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
                 }
                 card("Память туннеля", memRows,
-                     caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 5 МБ до лимита туннель сам перезапускает Xray, не выключая VPN. Обновляется каждые 2 с.")
+                     caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 5 МБ до лимита туннель сам перезапускает Xray, не выключая VPN. При смене сети Xray перезапускается не чаще раза в 20 с; та же сеть после паузы короче 15 с с тем же адресом — без перезапуска. Обновляется каждые 2 с.")
                 journalCard
             }
             .padding(16)

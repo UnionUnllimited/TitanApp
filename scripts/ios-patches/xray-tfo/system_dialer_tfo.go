@@ -61,13 +61,16 @@ func tfoNote(format string, args ...any) {
 		tfoLog = tfoLog[len(tfoLog)-6:]
 	}
 	tfoRecent = append(tfoRecent, note)
-	if len(tfoRecent) > 20 {
-		tfoRecent = tfoRecent[len(tfoRecent)-20:]
+	if len(tfoRecent) > tfoRecentMax {
+		tfoRecent = tfoRecent[len(tfoRecent)-tfoRecentMax:]
 	}
 }
 
-// The last notes, kept for TitanTFOStats (TitanTFOLog takes its own away).
+// The last notes, kept for TitanTFOStats (TitanTFOLog takes its own away): enough to see a
+// pattern across a balancer's nodes.
 var tfoRecent []string
+
+const tfoRecentMax = 60
 
 // What the dials did since start, by the kernel's account where there is one.
 var tfoStat struct {
@@ -80,6 +83,7 @@ var tfoStat struct {
 	plain        atomic.Int64 // dialed without TFO: a TFO dial to the host failed lately
 	notSafe      atomic.Int64 // dialed without TFO: the first write isn't safe to repeat
 	failed       atomic.Int64 // TFO dials that failed
+	noAnswer     atomic.Int64 // TFO connections closed with nothing received after a TLS or HTTP first write
 }
 
 // What the kernel did with a dialed connection (tfoKernel, per system).
@@ -161,6 +165,7 @@ func TitanTFOStats() string {
 		"plain":        tfoStat.plain.Load(),
 		"notSafe":      tfoStat.notSafe.Load(),
 		"failed":       tfoStat.failed.Load(),
+		"noAnswer":     tfoStat.noAnswer.Load(),
 		"recent":       recent,
 	})
 	return string(b)
@@ -194,6 +199,7 @@ type tfoConn struct {
 	start     time.Time
 	sent, got int
 	firstByte time.Duration
+	kind      string // the first write's, on a TFO connection (tfoSynPart)
 }
 
 func (c *tfoConn) traffic() string {
@@ -212,14 +218,15 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 		c.started = true
 		c.start = time.Now()
 		c.mu.Unlock()
-		conn, viaTFO, err := c.open(b)
+		conn, kind, err := c.open(b)
 		c.mu.Lock()
 		c.conn, c.err = conn, err
 		if conn != nil {
 			c.sent += len(b)
 			_ = conn.SetReadDeadline(c.deadline[0])
 			_ = conn.SetWriteDeadline(c.deadline[1])
-			if viaTFO {
+			if kind != "" {
+				c.kind = kind
 				tfoLive.Store(c, struct{}{})
 			}
 		}
@@ -242,8 +249,9 @@ func (c *tfoConn) Write(b []byte) (int, error) {
 }
 
 // open dials with TFO (the first part of b in the SYN, as much of it as is safe to repeat),
-// or the usual way for a host where a TFO dial failed lately.
-func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
+// or the usual way for a host where a TFO dial failed lately. It says what the first write
+// was if the connection is a TFO one ("" if not).
+func (c *tfoConn) open(b []byte) (stdnet.Conn, string, error) {
 	safe, kind := tfoSynPart(c.ctx, b)
 	if safe == 0 {
 		tfoStat.notSafe.Add(1)
@@ -270,11 +278,11 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
 			if rest := b[len(first):]; len(rest) > 0 {
 				if _, err = conn.Write(rest); err != nil {
 					conn.Close()
-					return nil, false, err
+					return nil, "", err
 				}
 			}
 			tfoNote("tfo %s %d+%d B in %d ms: %s", kind, len(first), len(b)-len(first), time.Since(c.start).Milliseconds(), verdict)
-			return conn, true, nil
+			return conn, kind, nil
 		}
 		tfoStat.failed.Add(1)
 		tfoBroken.Store(c.address, time.Now())
@@ -286,18 +294,18 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, bool, error) {
 }
 
 // openPlain dials without TFO and sends b after the handshake.
-func (c *tfoConn) openPlain(b []byte, note string) (stdnet.Conn, bool, error) {
+func (c *tfoConn) openPlain(b []byte, note string) (stdnet.Conn, string, error) {
 	conn, err := c.dialer.Dialer.DialContext(c.ctx, c.network, c.address)
 	if err != nil {
 		tfoNote("plain dial: %v", err)
-		return nil, false, err
+		return nil, "", err
 	}
 	if _, err := conn.Write(b); err != nil {
 		conn.Close()
-		return nil, false, err
+		return nil, "", err
 	}
 	tfoNote("%s", note)
-	return conn, false, nil
+	return conn, "", nil
 }
 
 // Read waits for the first Write: the protocols this is used for speak first.
@@ -350,6 +358,15 @@ func (c *tfoConn) Close() error {
 		resent := ""
 		if k, ok := tfoKernel(c.conn); ok && k.retransmit > 0 {
 			resent = fmt.Sprintf(", resent %d B", k.retransmit)
+		}
+		// A TLS or HTTP request gets an answer: none at all, its data (or the rest of it,
+		// after the handshake) never reached the server, the way a DPI box drops it.
+		c.mu.Lock()
+		silent := c.got == 0 && (c.kind == "tls" || strings.HasPrefix(c.kind, "http"))
+		c.mu.Unlock()
+		if silent {
+			tfoStat.noAnswer.Add(1)
+			resent += ", no answer"
 		}
 		tfoNote("closed: %s%s", c.traffic(), resent)
 	}

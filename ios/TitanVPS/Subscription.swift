@@ -222,6 +222,41 @@ enum SubscriptionAPI {
         return String(data: d, encoding: .utf8)?.nilIfEmpty
     }
 
+    /// iOS: regular servers (all but «Обходы») dial without TCP Fast Open, whatever the panel
+    /// set. On mobile networks the DPI drops the client data that follows a TFO handshake (an
+    /// XHTTP stream-up body, the rest of a ClientHello longer than the ~470 B a SYN takes on
+    /// iOS) while the dial itself succeeds, so the connection hangs; a plain SYN gets through.
+    /// Bypass servers keep the panel's TFO: under whitelists it is what gets them through.
+    /// Runs before applyTfo / applyPacketUp, so the "tfo" and "pktup" markers still turn it on.
+    /// The subscription is untouched: Android dials the same config as before.
+    static func dropTfo(_ outbound: inout [String: Any]) {
+        guard var stream = outbound["streamSettings"] as? [String: Any] else { return }
+        withoutTfo(&stream)
+        outbound["streamSettings"] = stream
+    }
+
+    /// Stream settings without tcpFastOpen, an XHTTP download leg's own (downloadSettings) too.
+    private static func withoutTfo(_ stream: inout [String: Any]) {
+        if var sockopt = stream["sockopt"] as? [String: Any], sockopt["tcpFastOpen"] != nil {
+            sockopt.removeValue(forKey: "tcpFastOpen")
+            stream["sockopt"] = sockopt
+        }
+        func leg(_ s: inout [String: Any]) {
+            guard var download = s["downloadSettings"] as? [String: Any] else { return }
+            withoutTfo(&download)
+            s["downloadSettings"] = download
+        }
+        for key in ["xhttpSettings", "splithttpSettings"] {
+            guard var xhttp = stream[key] as? [String: Any] else { continue }
+            leg(&xhttp)
+            if var extra = xhttp["extra"] as? [String: Any] {
+                leg(&extra)
+                xhttp["extra"] = extra
+            }
+            stream[key] = xhttp
+        }
+    }
+
     /// TCP Fast Open, as on Android: hosts whose name (or Host Mapper "titan" field) says
     /// "tfo" dial with TFO.
     static func applyTfo(_ name: String, _ proxy: inout [String: Any]) {
@@ -326,6 +361,10 @@ enum SubscriptionAPI {
             // Remnawave may omit the tag; routing and ping need one.
             if ((outbounds[proxyIndex]["tag"] as? String) ?? "").isEmpty { outbounds[proxyIndex]["tag"] = "proxy" }
             let name = ((cfg["remarks"] as? String)?.nilIfEmpty) ?? "Сервер \(i + 1)"
+            // No TFO on regular servers; «Обходы» (the same rule as ServerGroup.isBypass) keep the panel's.
+            if !TunnelSwitch.isBypass(name) {
+                for i in outbounds.indices { dropTfo(&outbounds[i]) }
+            }
             applyTfo(name, &outbounds[proxyIndex])
             applyPacketUp(name, &outbounds[proxyIndex])
             for i in outbounds.indices { fitXhttpInSyn(&outbounds[i]) }

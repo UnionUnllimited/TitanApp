@@ -144,6 +144,28 @@ func TestTitanTFO(t *testing.T) {
 	titanRoundTrip(t, titanSafe, slow.Addr().String())
 	t.Log(TitanTFOLog())
 
+	// A ClientHello the server never answers (the DPI box took the data): counted.
+	mute, _ := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	defer mute.Close()
+	hello := []byte{0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x03}
+	titanServe(mute, len(hello), func(stdnet.Conn, []byte) {})
+	noAnswer := tfoStat.noAnswer.Load()
+	mc, err := dialTFO(context.Background(), &stdnet.Dialer{Timeout: 5 * time.Second}, "tcp", mute.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mc.Write(hello); err != nil {
+		t.Fatal("write: ", err)
+	}
+	mc.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if b, _ := io.ReadAll(mc); len(b) > 0 {
+		t.Fatalf("mute server answered %q", b)
+	}
+	mc.Close()
+	if tfoStat.noAnswer.Load() != noAnswer+1 {
+		t.Fatal("a TFO connection closed with no answer not counted")
+	}
+
 	var stats map[string]any
 	err = json.Unmarshal([]byte(TitanTFOStats()), &stats)
 	if dials, _ := stats["dials"].(float64); err != nil || dials < 1 {

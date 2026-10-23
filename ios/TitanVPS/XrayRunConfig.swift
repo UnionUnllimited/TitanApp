@@ -9,9 +9,10 @@ enum XrayRunConfig {
     static let tunTag = "tun-in"
     static let dnsOutTag = "dns-out"
     static let sniffingKey = "_titanSniffing"
-    /// Bumped when build() makes a different config: a profile saved by an older one is rebuilt
+    /// Bumped when build() makes a different config, or parseServers a different server config
+    /// (3: no TCP Fast Open on regular servers): a profile saved by an older one is rebuilt
     /// (VPNController.source).
-    static let version = 2
+    static let version = 3
     /// The DNS outbounds' policy level (or the next one the panel's config doesn't use).
     static let dnsLevel = 9
     private static let blockTag = "titan-block"
