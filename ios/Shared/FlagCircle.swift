@@ -3,12 +3,13 @@ import UIKit
 
 /// A server's flag filled into a circle, as on Windows: the square flag from Flags.xcassets
 /// (flag-icons, drawn to PNG by librsvg in CI: scripts/download-flags-ios.sh), else
-/// the flag emoji as large as the circle needs. No flag: a bolt for АВТО, else a server.
+/// the flag emoji as large as the circle needs. No flag: a bolt for АВТО and the unlimited
+/// servers' row (UnlimitedServer), else a server.
 /// The app's list and status, Настройки and the Live Activity give it their colours.
 struct FlagCircle: View {
     /// The name's leading flag emoji (String.splitFlag in the app).
     let flag: String?
-    /// The name without it: АВТО gets the bolt.
+    /// The name without it: АВТО and UnlimitedServer get the bolt.
     var name = ""
     let size: CGFloat
     /// The disc behind the flag (image or emoji), the bolt and the server.
@@ -21,6 +22,9 @@ struct FlagCircle: View {
     var body: some View {
         let code = Flags.code(flag)
         let country = code.flatMap(Flags.country)
+        let unlimited = flag == nil && UnlimitedServer.isNamed(name)
+        // VoiceOver says the country, or what the unlimited row's bolt stands for.
+        let label = country ?? (unlimited ? UnlimitedServer.spokenName : nil)
         ZStack {
             // Under the image too, as Windows' disc: Nepal's flag is transparent round its pennant.
             fill
@@ -31,7 +35,7 @@ struct FlagCircle: View {
                 // The emoji's flag is wider than tall and has a margin: large enough that
                 // its height fills the circle.
                 Text(flag).font(.system(size: size * 1.6)).fixedSize()
-            } else if name.lowercased().contains("авто") {
+            } else if unlimited || name.lowercased().contains("авто") {
                 Image(systemName: "bolt.fill").font(.system(size: size * 0.5)).foregroundStyle(bolt)
             } else {
                 Image(systemName: "server.rack").font(.system(size: size * 0.5)).foregroundStyle(symbol)
@@ -40,10 +44,10 @@ struct FlagCircle: View {
         .frame(width: size, height: size)
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(stroke, lineWidth: size < 24 ? 0.5 : 1))
-        // VoiceOver says the country; the bolt and the server add nothing to the name.
+        // АВТО's bolt and the server add nothing to the name.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(country ?? "")
-        .accessibilityHidden(country == nil)
+        .accessibilityLabel(label ?? "")
+        .accessibilityHidden(label == nil)
     }
 }
 

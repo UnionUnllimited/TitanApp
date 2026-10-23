@@ -242,7 +242,8 @@ enum SubscriptionAPI {
     }
 
     /// Xray JSON (array of configs or one config): name from `remarks`, endpoint of the
-    /// first proxy outbound for the TCP ping.
+    /// first proxy outbound for the TCP ping. The unlimited servers' row (UnlimitedServer) gets
+    /// its name and id here, for every screen alike, and comes first.
     static func parseServers(_ body: String) throws -> [Server] {
         let text = body.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
         guard let data = text.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) else {
@@ -250,7 +251,9 @@ enum SubscriptionAPI {
         }
         let configs: [[String: Any]] = (json as? [[String: Any]]) ?? ((json as? [String: Any]).map { [$0] } ?? [])
         let service: Set<String> = ["freedom", "blackhole", "dns", "loopback"]
-        return configs.enumerated().compactMap { i, source in
+        // One such row at most: a second one stays a hidden header.
+        var unlimitedFound = false
+        let servers: [Server] = configs.enumerated().compactMap { i, source in
             var cfg = source
             guard var outbounds = cfg["outbounds"] as? [[String: Any]],
                   let proxyIndex = outbounds.firstIndex(where: { !service.contains(($0["protocol"] as? String) ?? "") }) else { return nil }
@@ -276,9 +279,19 @@ enum SubscriptionAPI {
             // VPNController.source hashes this to tell a changed server.
             let json = (try? JSONSerialization.data(withJSONObject: cfg, options: .sortedKeys)).map { String(decoding: $0, as: UTF8.self) }
             // Stable across launches (hashValue isn't): the picked server stays picked.
-            return Server(id: "json-\(i)-\(name)", name: name, host: host, port: port,
+            var id = "json-\(i)-\(name)", shown = name
+            // «👇БЕЗЛИМИТНЫЕ👇» with a real address: the unlimited servers' balancer, not a header
+            // (those and the info entries point nowhere).
+            if !unlimitedFound, UnlimitedServer.matches(name), !(host ?? "").isEmpty,
+               !ServerGroup.isPlaceholder(host: host, port: port) {
+                unlimitedFound = true
+                (id, shown) = (UnlimitedServer.id, UnlimitedServer.name)
+            }
+            return Server(id: id, name: shown, host: host, port: port,
                           proto: (proxy["protocol"] as? String) ?? "", xrayJson: json, proxyTag: proxyTag)
         }
+        // First in «Серверы»; favourites still go before it (ServerGroup.ordered).
+        return servers.filter(ServerGroup.isUnlimited) + servers.filter { !ServerGroup.isUnlimited($0) }
     }
 
     private static func endpoint(_ ob: [String: Any]) -> (String?, Int?) {
@@ -308,7 +321,8 @@ enum SubscriptionAPI {
 }
 
 /// Серверы / Обходы, same rules as Android (data/ServerGroups.kt): "Обходы" are the servers
-/// with "обход" in the name; section headers and the panel's info entries aren't servers.
+/// with "обход" in the name; section headers and the panel's info entries aren't servers
+/// (the unlimited servers' row, which looks like one, is).
 enum ServerGroup: String, CaseIterable, Identifiable {
     case servers = "Серверы", bypass = "Обходы"
     var id: String { rawValue }
@@ -342,13 +356,23 @@ enum ServerGroup: String, CaseIterable, Identifiable {
             .filter(\.isLetter).map { map[$0] ?? $0 })
     }
 
-    /// Headers ("👇БЕЗЛИМИТНЫЕ👇", "ЛИМИТНЫЕ ОСТ: …") and notices with a dummy address.
+    /// Headers ("👇БЕЗЛИМИТНЫЕ👇", "ЛИМИТНЫЕ ОСТ: …") and notices with a dummy address. The
+    /// unlimited servers' row (UnlimitedServer, named so by parseServers) is a server.
     static func isHidden(_ s: Server) -> Bool {
+        if isPlaceholder(host: s.host, port: s.port) { return true }
+        if isUnlimited(s) { return false }
         let n = s.name.lowercased()
-        if n.contains("лимитн") || ["сервер для", "обновления подписки"].contains(where: n.contains) { return true }
-        let host = (s.host ?? "").lowercased()
-        return ["127.0.0.1", "0.0.0.0", "localhost", "::1"].contains(host) || (s.port.map { $0 <= 1 } ?? false)
+        return n.contains("лимитн") || ["сервер для", "обновления подписки"].contains(where: n.contains)
     }
+
+    /// The proxy points nowhere (127.0.0.1, 0.0.0.0, port 0/1): the panel's info entry.
+    static func isPlaceholder(host: String?, port: Int?) -> Bool {
+        ["127.0.0.1", "0.0.0.0", "localhost", "::1"].contains((host ?? "").lowercased()) || (port.map { $0 <= 1 } ?? false)
+    }
+
+    /// «⚡ Безлимитные · все серверы»: a regular server (Серверы), its ping on its balancer's
+    /// members as АВТО's (XrayPing.tags), the bolt for its flag (FlagCircle).
+    static func isUnlimited(_ s: Server) -> Bool { s.id == UnlimitedServer.id }
 }
 
 /// Why a subscription that answered can't be used, in words (same as Android).

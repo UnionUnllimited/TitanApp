@@ -10,7 +10,8 @@ enum XrayPing {
     /// Balancer members measured per server (each its own call; the first that answers counts).
     private static let maxMembers = 30
 
-    /// Outbound tags worth measuring: the proxy, or the members of the catch-all balancer.
+    /// Outbound tags worth measuring: the proxy, or the members of the catch-all balancer (АВТО,
+    /// UnlimitedServer). Its rule may name a network ("tcp,udp" is all traffic): not a condition here.
     static func tags(_ cfg: [String: Any], proxyTag: String) -> [String] {
         guard let routing = cfg["routing"] as? [String: Any],
               let rules = routing["rules"] as? [[String: Any]],
