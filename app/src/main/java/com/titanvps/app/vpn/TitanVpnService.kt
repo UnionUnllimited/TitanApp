@@ -838,6 +838,7 @@ class TitanVpnService : VpnService() {
         tunApps = emptySet()
         localProxy = null
         since = 0L
+        postedAt = 0L
         VpnStatus.set(VpnState.Disconnected)
     }
 
@@ -863,23 +864,29 @@ class TitanVpnService : VpnService() {
     /** The server shown: the current one, or the one being switched to. */
     @Volatile private var statusServer: String? = null
     @Volatile private var statusSince = 0L
+    /**
+     * The notification's time, which ranks it among equal ones: the connect, kept while
+     * connecting, switching and reconnecting, so its updates don't move it. 0 while off.
+     */
+    @Volatile private var postedAt = 0L
 
     private var iconKey: String? = null
     private var icon: Bitmap? = null
 
     /**
-     * The VPN's own notification, kept at the top of the shade while on: a channel of
-     * default importance (the main section, not "Silent") without sound, colorized in our
-     * blue unless it is a Live Update, connection time on a timer, and shown again if swiped
-     * away. «Уведомление с сервером» on: the server's flag and name as the title, the status
-     * below and ‹ Отключить › (also on the lock screen; on Android 16 asked to be promoted to
-     * a Live Update). [since]: connected at.
+     * The VPN's own notification, kept at the top of the shade while on (like other VPN
+     * apps): a channel of default importance (the main section, not "Silent") without sound,
+     * colorized in our blue unless it is a Live Update, a time that stays put, connection time
+     * on a timer, also on the lock screen, and shown again if swiped away. «Уведомление с
+     * сервером» on: the server's flag and name as the title, the status below and
+     * ‹ Отключить › (on Android 16 asked to be promoted to a Live Update). [since]: connected at.
      */
     @Synchronized
     private fun showStatus(s: Status, server: String?, since: Long = 0L) {
         status = s
         statusServer = server
         statusSince = since
+        if (since > 0) postedAt = since else if (postedAt == 0L) postedAt = System.currentTimeMillis()
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type) }
             .onFailure { Log.w("Titan", "foreground", it) }
@@ -887,9 +894,11 @@ class TitanVpnService : VpnService() {
 
     private fun buildNotification(): Notification {
         val nm = getSystemService(NotificationManager::class.java)
-        // The old low-importance channel went to "Silent" at the bottom; a channel's
-        // importance can't be raised, hence a new one.
-        nm.deleteNotificationChannel(OLD_CHANNEL_ID)
+        // Earlier channels: "vpn" was of low importance ("Silent", at the bottom), and either
+        // may have been lowered since, by hand or by Android. A channel's importance can't be
+        // raised and a deleted one comes back as it was, hence a new id. Not while it holds
+        // our foreground notification (Android refuses), which only the new one does.
+        for (old in OLD_CHANNEL_IDS) runCatching { nm.deleteNotificationChannel(old) }
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_DEFAULT).apply {
                 setSound(null, null)
@@ -913,22 +922,25 @@ class TitanVpnService : VpnService() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setShowWhen(timer)
-            .setWhen(if (timer) statusSince else System.currentTimeMillis())
+            // Connected at (the timer's start; first shown while connecting), not now: a
+            // redraw doesn't reorder the shade.
+            .setWhen(postedAt)
             .setUsesChronometer(timer)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setDeleteIntent(reshow)
             .setContentIntent(open)
         val name = statusServer
         val stop = serviceIntent(1, ACTION_STOP)
         val live = name != null && TitanApp.get(this).settings.liveNotification.value
-        // Android 16 is asked to promote it to a Live Update, which a colorized one can't be.
-        val promoted = live && Build.VERSION.SDK_INT >= 36
+        // Android 16 is asked to promote it to a Live Update, which a colorized one can't be;
+        // only while Live Updates are allowed for the app, or it would lose the top as well.
+        val promoted = live && Build.VERSION.SDK_INT >= 36 && canPromote(nm)
         // Elsewhere our blue: Android ranks a colorized foreground service first (Android 12+:
         // in the top section, with media and calls), not under every newer notification.
         if (!promoted) builder.setColorized(true).setColor(BRAND_COLOR)
         if (name != null && live) {
             builder.setContentTitle(Flags.nameWithoutFlag(name))
                 .setContentText(statusText(live = true, name))
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             flagIcon(name, onBrand = !promoted)?.let { builder.setLargeIcon(it) }
             val steps = canStep()
             if (steps) builder.addAction(0, getString(R.string.action_prev), serviceIntent(6, ACTION_PREV))
@@ -968,6 +980,14 @@ class TitanVpnService : VpnService() {
     }
 
     /**
+     * Android 16: Live Updates allowed for the app (the user can turn them off). Looked up by
+     * name, so any compile SDK builds it; false where there is no such call.
+     */
+    private fun canPromote(nm: NotificationManager): Boolean = runCatching {
+        NotificationManager::class.java.getMethod("canPostPromotedNotifications").invoke(nm) as Boolean
+    }.getOrDefault(false)
+
+    /**
      * The round flag. On our blue ([onBrand]): a white disc, so the shield of a server without
      * a flag still shows; otherwise the shade follows the system theme, so do the disc and the ring.
      */
@@ -1004,8 +1024,9 @@ class TitanVpnService : VpnService() {
         private const val UPDATE_CHANNEL_ID = "updates"
         private const val UPDATE_ID = 3
         private const val ALERT_ID = 2
-        private const val CHANNEL_ID = "vpn_status"
-        private const val OLD_CHANNEL_ID = "vpn"
+        private const val CHANNEL_ID = "vpn_ongoing"
+        /** Never to be used again: a channel created under a deleted id gets its old settings back. */
+        private val OLD_CHANNEL_IDS = arrayOf("vpn", "vpn_status")
         private const val NOTIFICATION_ID = 1
         /** The colour of the VPN notification (the app's blue). */
         private val BRAND_COLOR = 0xFF1A66FF.toInt()
