@@ -10,6 +10,9 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.View
 import android.widget.RemoteViews
 import com.titanvps.app.MainActivity
@@ -42,6 +45,7 @@ class TitanWidget : AppWidgetProvider() {
         internal const val ACTION_PREV = "com.titanvps.app.widget.PREV"
         internal const val ACTION_NEXT = "com.titanvps.app.widget.NEXT"
         private const val FLAG_PX = 96
+        private val CONNECTED_COLOR = 0xFF22C55E.toInt()
         /** Narrower than this (a widget placed at 3 cells before ‹ › came) the text needs the room. */
         private const val ARROWS_MIN_WIDTH_DP = 260
 
@@ -84,12 +88,16 @@ class TitanWidget : AppWidgetProvider() {
                 VpnState.Disconnecting -> "Отключаемся…" to R.drawable.widget_btn_busy
                 else -> "Не подключено" to R.drawable.widget_btn_off
             }
-            views.setTextViewText(R.id.widget_status, status)
-            when {
-                state is VpnState.Connected -> views.setTextColor(R.id.widget_status, 0xFF22C55E.toInt())
+            val connected = state is VpnState.Connected
+            if (Build.VERSION.SDK_INT >= 31) {
+                views.setTextViewText(R.id.widget_status, status)
                 // Resolved by the launcher, so it follows a later switch of the system theme.
-                Build.VERSION.SDK_INT >= 31 -> views.setColor(R.id.widget_status, "setTextColor", R.color.widget_text)
-                else -> views.setTextColor(R.id.widget_status, context.getColor(R.color.widget_text))
+                if (connected) views.setTextColor(R.id.widget_status, CONNECTED_COLOR)
+                else views.setColor(R.id.widget_status, "setTextColor", R.color.widget_text)
+            } else {
+                // No colour from here (it would keep this theme's): the layout's @color/widget_text,
+                // which the launcher resolves, and a green «Подключено» as a span of the text.
+                views.setTextViewText(R.id.widget_status, if (connected) green(status) else status)
             }
             views.setTextViewText(R.id.widget_server, serverName?.let { Flags.nameWithoutFlag(it) } ?: "Titan VPS")
             views.setInt(R.id.widget_button, "setBackgroundResource", button)
@@ -111,6 +119,10 @@ class TitanWidget : AppWidgetProvider() {
             views.setOnClickPendingIntent(R.id.widget_next, action(context, 3, ACTION_NEXT))
             views.setOnClickPendingIntent(R.id.widget_root, open)
             return views
+        }
+
+        private fun green(text: String): CharSequence = SpannableString(text).apply {
+            setSpan(ForegroundColorSpan(CONNECTED_COLOR), 0, length, Spanned.SPAN_INCLUSIVE_EXCLUSIVE)
         }
 
         private fun action(context: Context, code: Int, action: String): PendingIntent = PendingIntent.getBroadcast(
