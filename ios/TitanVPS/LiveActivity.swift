@@ -5,12 +5,18 @@ import UIKit
 
 /// The Live Activity (TitanWidgets draws it, iOS 18+), with the VPN on and off. On: the server,
 /// «Подключено» with the timer, the speed, the ping and what the session used; "Переключаемся…"
-/// while it connects again (another server, a ping's pause), "Подключаемся…" while it comes on.
-/// Off: «Выключено» with the server ⏻ would connect to (a pick in the app shows there too); ‹ ›
-/// then only move the pick. At once when turned off in the app, with the activity's ⏻, in Пункт
-/// управления or by Siri. Turned off in iOS Settings, or on demand giving up, no code of ours
-/// runs (the app is suspended, the tunnel can't): the activity still says «Подключено», its
-/// numbers stale, until the app runs again (opened, or woken by an intent) and says «Выключено».
+/// while it connects again (another server, a ping's pause, iOS reconnecting), "Подключаемся…"
+/// while it comes on. Off: «Выключено» with the server ⏻ would connect to (a pick in the app
+/// shows there too); ‹ › then only move the pick. At once when turned off in the app (Выкл,
+/// VPNController.disconnect), with the activity's ⏻, in Пункт управления or by Siri. Turned off
+/// in iOS Settings, or on demand giving up, no code of ours runs (the app is suspended, the
+/// tunnel can't): the activity still says «Подключено», its numbers stale, until the app runs
+/// again (opened, or woken by an intent) and says «Выключено». The app left with the VPN still
+/// on its way (its own connect, which gives its background time back once the start is asked
+/// for, or iOS reconnecting): followed in background time until it settles. Work for a VPN
+/// change runs in background time too. Any "Подключаемся…" / "Переключаемся…" but a ping's goes
+/// stale a minute on (settleLimit): an outcome never seen reads «Состояние неизвестно», not a
+/// connect with no end.
 /// It ends only when Настройки → Dynamic Island is turned off, on Выйти, or with no key; one the
 /// system ended (after 8 h) or that was swiped away comes back, on or off, when the app is
 /// opened (sync), or with the next ⏻, ‹ ›, Пункт управления or Siri (a LiveActivityIntent may
@@ -73,7 +79,7 @@ enum LiveActivityController {
         guard #available(iOS 18.0, *) else { return }
         generation += 1
         let gen = generation
-        Task { await apply(state, server: server, paused: paused, gen: gen) }
+        held { await apply(state, server: server, paused: paused, gen: gen) }
     }
 
     /// At launch and each time the app is opened: the activity and the toggle follow the VPN
@@ -84,7 +90,34 @@ enum LiveActivityController {
         guard #available(iOS 18.0, *) else { return }
         generation += 1
         let gen = generation
-        Task { await apply(state, server: server, paused: paused, gen: gen, opened: true) }
+        held { await apply(state, server: server, paused: paused, gen: gen, opened: true) }
+    }
+
+    /// Выкл in the app (VPNController.disconnect, Выйти too): «Выключено» at once, as an intent's
+    /// off. apply waits 2.5 s before it for a drop on the way to another server; this one is by
+    /// hand, and the island shows the activity only once the app is left, often a moment after
+    /// the tap (the app may be suspended before a wait ends).
+    static func turnedOffInApp() {
+        guard #available(iOS 18.0, *) else { return }
+        // Work still waiting gives way (an apply about to say "Подключено").
+        generation += 1
+        held {
+            // Выйти: the key is gone by now, and signedOut ends it.
+            guard enabled, hasKey else { return }
+            await showOff(start: false)
+        }
+    }
+
+    /// Work for a VPN change in background time: the app left during apply's wait (or its look
+    /// at the profile) would else be suspended with the activity saying what it said before.
+    /// Free while the app is in the foreground.
+    private static func held(_ work: @escaping @MainActor () async -> Void) {
+        let time = BackgroundTime("Live Activity: VPN change")
+        time.begin()
+        Task { @MainActor in
+            await work()
+            time.end()
+        }
     }
 
     /// Turned on without the app's screen (Пункт управления, Siri, the activity's ‹ › ⏻): their
@@ -160,9 +193,12 @@ enum LiveActivityController {
 
     /// Leaving the app (inactive, then background) with the VPN up: the numbers of this moment,
     /// whatever went out last. The island shows the activity only now, and nothing updates it
-    /// once the app is suspended: this is its speed for the next 15 s.
+    /// once the app is suspended: this is its speed for the next 15 s. With the activity still
+    /// saying "Подключаемся…" / "Переключаемся…": the VPN followed until it settles, in
+    /// background time, as after an intent (Вкл and leaving at once, iOS reconnecting).
     static func leaving() {
         guard #available(iOS 18.0, *), enabled else { return }
+        guard VPNController.current?.isConnected == true else { return followLeft() }
         // Inactive, then background a moment later: one is enough.
         guard Date().timeIntervalSince(leftAt) >= 1, Date().timeIntervalSince(sentAt) >= 1 else { return }
         leftAt = Date()
@@ -170,6 +206,22 @@ enum LiveActivityController {
         time.begin()
         Task { @MainActor in
             _ = await tick(force: true)
+            time.end()
+        }
+    }
+
+    /// leaving's follow under way (inactive, then background: one is enough).
+    private static var followingLeft = false
+
+    @available(iOS 18.0, *)
+    private static func followLeft() {
+        guard !followingLeft, let phase = live()?.content.state.shown, phase == .connecting || phase == .switching else { return }
+        followingLeft = true
+        let time = BackgroundTime("Live Activity: VPN settling")
+        time.begin()
+        Task { @MainActor in
+            await follow()
+            followingLeft = false
             time.end()
         }
     }
@@ -198,8 +250,15 @@ enum LiveActivityController {
             let name = await TunnelSwitch.serverName() ?? server ?? "Titan VPS"
             guard gen == generation else { return }
             await showOn(name, since: since)
-        case .connecting, .disconnecting where paused, .off where paused:
-            // The app's own: it sees the VPN settle (and holds background time for it).
+        case .connecting:
+            // The app's own connect, or iOS reconnecting (a network change, on demand after the
+            // tunnel fell): no background time holds the app until it is up (connect gives its
+            // own back once the start is asked for), so leaving follows it; never seen to
+            // settle, it goes stale as an intent's does.
+            await showConnecting(fromOffOnly: false, staleDate: Date().addingTimeInterval(settleLimit))
+        case .disconnecting where paused, .off where paused:
+            // Off for a ping: the app brings it back (pauseTime). No stale date, a Пинг may run
+            // longer than settleLimit.
             await showConnecting(fromOffOnly: false, staleDate: nil)
         case .disconnecting, .off, .error:
             // Another server: off for a moment, then on again; the activity stays on through it.
@@ -234,31 +293,37 @@ enum LiveActivityController {
     }
 
     /// Not up for a moment: "Переключаемся…" from on (another server, a ping's pause, iOS
-    /// reconnecting), "Подключаемся…" from off. No numbers meanwhile. staleDate: set by an
-    /// intent's (settleLimit on), whose app may be suspended before the VPN settles.
+    /// reconnecting), "Подключаемся…" from off. No numbers meanwhile. staleDate: settleLimit on
+    /// (the app may be suspended before the VPN settles), nil for a ping's pause. Already on its
+    /// way: only the stale date changes (a ping's pause has none, the connect after it one).
     @available(iOS 18.0, *)
     private static func showConnecting(fromOffOnly: Bool, staleDate: Date?) async {
         guard let activity = live() else { return }
         let now = activity.content.state
         let phase: VPNActivityAttributes.ContentState.Phase
         switch now.shown {
-        case .off: phase = .connecting
-        case .on where !fromOffOnly: phase = .switching
-        default: return
+        case .off:
+            phase = .connecting
+        case .on:
+            guard !fromOffOnly else { return }
+            phase = .switching
+        case .connecting, .switching:
+            guard !fromOffOnly, activity.content.staleDate != staleDate else { return }
+            phase = now.shown
         }
         let state = VPNActivityAttributes.ContentState(server: now.server, flag: now.flag, connected: false, phase: phase)
         await activity.update(ActivityContent(state: state, staleDate: staleDate))
     }
 
-    /// An intent's "Подключаемся…" / "Переключаемся…" goes stale this long after: no update by
-    /// then (the app suspended before the VPN settled) and the widget says it doesn't know.
-    /// Longer than start's 12 s and follow's 20 s.
+    /// "Подключаемся…" / "Переключаемся…" (an intent's or the app's, not a ping's) goes stale this
+    /// long after: no update by then (the app suspended before the VPN settled) and the widget
+    /// says it doesn't know. Longer than start's 12 s and follow's 20 s.
     private static let settleLimit: TimeInterval = 60
 
-    /// The VPN wasn't up when turnedOn looked: its status every 0.5 s for up to 20 s more, then
-    /// the activity says on or «Выключено». Only while it still says what it said here: an off,
-    /// a switch or the app's own look since has seen to it. Still not up after that: left as it
-    /// is, it goes stale (settleLimit).
+    /// The VPN wasn't up when turnedOn looked, or the app is left with it on its way (leaving):
+    /// its status every 0.5 s for up to 20 s more, then the activity says on or «Выключено».
+    /// Only while it still says what it said here: an off, a switch or the app's own look since
+    /// has seen to it. Still not up after that: left as it is, it goes stale (settleLimit).
     @available(iOS 18.0, *)
     private static func follow() async {
         // The manager kept for the whole watch: its connection's status follows the VPN.
@@ -273,10 +338,12 @@ enum LiveActivityController {
                 generation += 1
                 return await apply(.connected(since: connection.connectedDate ?? Date()), server: nil, paused: false, gen: generation)
             case .disconnected, .invalid:
-                // Down for 2 s: not just between two servers, nor on demand starting it again.
+                // Down for 2 s: not just between two servers, nor on demand starting it again,
+                // nor off for a ping (the app brings it back).
                 let at = offSince ?? Date()
                 offSince = at
-                if Date().timeIntervalSince(at) >= 2, VPNController.current?.connectsUnderWay != true {
+                if Date().timeIntervalSince(at) >= 2, VPNController.current?.connectsUnderWay != true,
+                   AppStore.current?.vpnPaused != true {
                     generation += 1
                     return await showOff(start: false)
                 }

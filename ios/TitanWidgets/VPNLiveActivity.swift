@@ -27,18 +27,20 @@ struct VPNLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 4) {
+                        // With the numbers under it, on one line: a second would push ‹ ⏻ › past
+                        // the island's height (up to 160 pt; the bottom region is under the rest).
                         Text(state.server)
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(.white)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.8)
+                            .lineLimit(numbers.isEmpty ? 2 : 1)
+                            .minimumScaleFactor(numbers.isEmpty ? 0.8 : 0.7)
                         StatusLine(state: state, stale: context.isStale, size: 12)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 2)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 6) {
                         if !numbers.isEmpty { NumbersRow(numbers: numbers) }
                         HStack(spacing: 10) {
                             SwitchButton(forward: false, titled: true)
@@ -267,46 +269,48 @@ private struct NumbersLines: View {
     }
 }
 
-/// The expanded island's: on one line where it fits, else on two, centred.
+/// The expanded island's, centred and always on one line: a second would push ‹ ⏻ › past the
+/// island's height (up to 160 pt). Where the whole doesn't fit (MB/s both ways and «Потрачено …»
+/// on a narrow island), the traffic after an ↑↓ icon without the word; then a little smaller.
 private struct NumbersRow: View {
     let numbers: Numbers
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                first
-                rest
-            }
-            VStack(spacing: 3) {
-                first
-                HStack(spacing: 10) { rest }
-            }
+            row(spent: true)
+            row(spent: false)
         }
         .lineLimit(1)
-        .minimumScaleFactor(0.8)
+        .minimumScaleFactor(0.75)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(numbers.accessibility)
     }
 
-    @ViewBuilder private var first: some View {
-        if let speed = numbers.speedText {
-            Text(speed)
+    private func row(spent: Bool) -> some View {
+        HStack(spacing: spent ? 12 : 10) {
+            if let speed = numbers.speedText {
+                Text(speed)
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Color.white.opacity(0.75))
+            } else if let asOf = numbers.asOf {
+                Text(asOf)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.5))
+            }
+            if let ping = numbers.ping { PingLabel(ms: ping) }
+            if let traffic = numbers.traffic {
+                HStack(spacing: 3) {
+                    if spent {
+                        Text("Потрачено " + TrafficText.bytes(traffic))
+                    } else {
+                        Image(systemName: "arrow.up.arrow.down").font(.system(size: 10, weight: .semibold))
+                        Text(TrafficText.bytes(traffic))
+                    }
+                }
                 .font(.system(size: 12, weight: .medium).monospacedDigit())
                 .foregroundStyle(Color.white.opacity(0.75))
-        } else if let asOf = numbers.asOf {
-            Text(asOf)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.5))
-        }
-    }
-
-    @ViewBuilder private var rest: some View {
-        if let ping = numbers.ping { PingLabel(ms: ping) }
-        if let traffic = numbers.trafficText {
-            Text(traffic)
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                .foregroundStyle(Color.white.opacity(0.75))
+            }
         }
     }
 }

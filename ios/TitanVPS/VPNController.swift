@@ -256,11 +256,17 @@ final class VPNController: ObservableObject {
         offsByHand += 1
         forgetStart()
         state = .disconnecting
+        // The Live Activity says «Выключено» now, not after its wait for a switch's drop.
+        LiveActivityController.turnedOffInApp()
         guard let m = manager else { return }
+        // Left right after Выкл: the stop still happens (else the VPN stays on, the activity off).
+        let time = BackgroundTime("VPN stop")
+        time.begin()
         Task {
             // Turned off by hand: iOS must not bring it back on its own.
             await holdOnDemand(m)
             m.connection.stopVPNTunnel()
+            time.end()
         }
     }
 
