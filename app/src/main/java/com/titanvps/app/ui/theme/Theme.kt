@@ -24,7 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
 import com.titanvps.app.data.ThemeMode
 import com.titanvps.app.ui.kit.ToastHost
 import kotlin.math.PI
@@ -177,10 +177,11 @@ const val MAX_FONT_SCALE = 1.25f
 /**
  * A font size that never grows with the phone's text size: iOS sizes of 24 and up (titles,
  * big numbers), so that the design holds. Smaller sizes use plain .sp, capped by [TitanTheme].
+ * Converted from dp by the density itself: exact with Android 14's non-linear text scaling too.
  */
 @Composable
 @ReadOnlyComposable
-fun fixedSp(size: Float): TextUnit = (size * TEXT_BASE / LocalDensity.current.fontScale).sp
+fun fixedSp(size: Float): TextUnit = with(LocalDensity.current) { (size * TEXT_BASE).dp.toSp() }
 
 /** SwiftUI's spring(response:dampingFraction:) as a Compose spring. */
 fun <T> iosSpring(response: Float, damping: Float): SpringSpec<T> =
