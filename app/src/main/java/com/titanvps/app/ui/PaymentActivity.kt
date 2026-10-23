@@ -311,9 +311,12 @@ class PaymentActivity : ComponentActivity() {
             }
         } else Intent(Intent.ACTION_VIEW, uri)
         if (intent != null && launch(intent)) return true
-        // No app for it: an intent: link may name a web fallback.
+        // No app for it: an intent: link may name a web fallback. Only a web page, and only for
+        // the page itself or a tap: a javascript: or content: one would run in, or replace, the
+        // payment page for any frame of it (a third-party iframe too).
         val fallback = runCatching { Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).getStringExtra("browser_fallback_url") }
             .getOrNull()
+            ?.takeIf { asked && isWeb(it) }
         if (fallback != null) {
             web.loadUrl(fallback)
         } else if (asked && scheme !in IN_PAGE_SCHEMES) {
@@ -493,6 +496,8 @@ class PaymentActivity : ComponentActivity() {
         private val IN_PAGE_SCHEMES = setOf("about", "data", "blob", "javascript")
 
         private fun bare(host: String): String = host.removePrefix("www.")
+
+        private fun isWeb(url: String): Boolean = Uri.parse(url).scheme?.lowercase().let { it == "http" || it == "https" }
 
         /**
          * [title]: the tariff and its price, under «Оплата». [homeHost]: the site (the cabinet
