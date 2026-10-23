@@ -200,17 +200,24 @@ class PingService : Service() {
             remaining[id] = keysOf.getValue(id).size
             keysOf.getValue(id).forEach { serversByKey.getOrPut(it) { mutableListOf() }.add(id) }
         }
-        targets.filter { remaining[it] == 0 }.forEach { send(receiver, it, -1L) }
+        targets.filter { remaining[it] == 0 }.forEach { send(receiver, it, -1L, "нет адреса сервера") }
         val lock = Any()
-        fun report(key: String, r: Long) = synchronized(lock) {
+        /** Why a member last failed: a server that got no answer at all says why. */
+        val lastError = HashMap<String, String>()
+        fun report(key: String, r: Long, error: String? = null) = synchronized(lock) {
             for (id in serversByKey.getValue(key)) {
                 if (r >= 0 && (best[id] ?: -1L).let { it < 0 || r < it }) best[id] = r
+                if (r < 0 && error != null) lastError[id] = error
                 remaining[id] = remaining.getValue(id) - 1
-                if (remaining[id] == 0) send(receiver, id, best[id] ?: -1L)
+                if (remaining[id] == 0) {
+                    val result = best[id] ?: -1L
+                    send(receiver, id, result, if (result < 0) lastError[id] else null)
+                }
             }
         }
         // Keys go into the pool in the order of the servers asked for, so the list fills top-down.
         val recheck = java.util.Collections.synchronizedMap(LinkedHashMap<String, Long>())
+        val recheckError = java.util.Collections.synchronizedMap(HashMap<String, String>())
         serversByKey.map { (key, ids) ->
             pool.submit {
                 if (cancelled()) return@submit
@@ -220,12 +227,21 @@ class PingService : Service() {
                 }
                 // Through a protocol client: once it is up (it didn't start: no answer).
                 s.ready[key]?.let { start ->
-                    if (runCatching { start.get(30, java.util.concurrent.TimeUnit.SECONDS) }.isFailure) { report(key, -1L); return@submit }
+                    if (runCatching { start.get(30, java.util.concurrent.TimeUnit.SECONDS) }.isFailure) {
+                        report(key, -1L, "клиент протокола не запустился")
+                        return@submit
+                    }
                 }
-                val r = measureKey(s.ports.getValue(key))
+                var error: String? = null
+                val r = measureKey(s.ports.getValue(key)) { error = it }
                 // In a full run a bad result over UDP (Hysteria, TUIC) is often just the crowd:
                 // measured again alone once the list is done. TCP results stand as they are.
-                if (!single && key in s.udp && (r < 0 || r > RECHECK_ABOVE_MS)) recheck[key] = r else report(key, r)
+                if (!single && key in s.udp && (r < 0 || r > RECHECK_ABOVE_MS)) {
+                    error?.let { recheckError[key] = it }
+                    recheck[key] = r
+                } else {
+                    report(key, r, error)
+                }
             }
         }.forEach { runCatching { it.get() } }
         if (cancelled()) return best.isNotEmpty()
@@ -234,9 +250,14 @@ class PingService : Service() {
         val (needed, settled) = recheck.toList().partition { (key, _) ->
             synchronized(lock) { serversByKey.getValue(key).any { (best[it] ?: -1L) < 0 } }
         }
-        settled.forEach { (key, first) -> report(key, first) }
+        settled.forEach { (key, first) -> report(key, first, recheckError[key]) }
         needed.map { (key, first) ->
-            recheckPool.submit { if (!cancelled()) report(key, bestOf(first, measure(s.ports.getValue(key), RECHECK_TIMEOUT_SEC))) }
+            recheckPool.submit {
+                if (cancelled()) return@submit
+                var error: String? = null
+                val again = measure(s.ports.getValue(key), RECHECK_TIMEOUT_SEC) { error = it }
+                report(key, bestOf(first, again), error ?: recheckError[key])
+            }
         }.forEach { runCatching { it.get() } }
         return best.isNotEmpty()
     }
@@ -245,9 +266,9 @@ class PingService : Service() {
      * One cold attempt; if it answered, a second one (the first handshake is often the
      * slow part) and the better of the two. A dead server costs [TIMEOUT_SEC] here.
      */
-    private fun measureKey(port: Int): Long {
-        val first = measure(port, TIMEOUT_SEC)
-        return if (first < 0) first else bestOf(first, measure(port, SECOND_TIMEOUT_SEC))
+    private fun measureKey(port: Int, onError: (String) -> Unit = {}): Long {
+        val first = measure(port, TIMEOUT_SEC, onError)
+        return if (first < 0) first else bestOf(first, measure(port, SECOND_TIMEOUT_SEC, onError))
     }
 
     /** Hysteria, QUIC, mKCP… outbounds: they go over UDP. */
@@ -265,8 +286,8 @@ class PingService : Service() {
         else -> minOf(a, b)
     }
 
-    /** Time of one request through the server on a fresh connection, or -1. */
-    private fun measure(port: Int, timeoutSec: Int): Long {
+    /** Time of one request through the server on a fresh connection, or -1 (why: [onError]). */
+    private fun measure(port: Int, timeoutSec: Int, onError: (String) -> Unit = {}): Long {
         val client = OkHttpClient.Builder()
             .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
             .connectTimeout(timeoutSec.toLong(), TimeUnit.SECONDS)
@@ -282,6 +303,7 @@ class PingService : Service() {
             client.newCall(request).execute().use { it.body.bytes() }
             ((System.nanoTime() - start) / 1_000_000).coerceAtLeast(1)
         } catch (e: Exception) {
+            onError(PingReasons.short(e))
             -1L
         } finally {
             client.connectionPool.evictAll()
@@ -295,17 +317,21 @@ class PingService : Service() {
         items.chunked(BATCH_LIMIT).forEach { chunk ->
             val pings = runCatching {
                 XrayCore.ping(chunk.map { it.getString("json") to it.getString("tag") }, RETRY_TIMEOUT_SEC)
-            }.getOrElse { List(chunk.size) { -1L to null } }
-            chunk.zip(pings).forEach { (item, p) -> send(receiver, item.getString("id"), p.first) }
+            }.getOrElse { e -> List(chunk.size) { -1L to e.message } }
+            chunk.zip(pings).forEach { (item, p) ->
+                send(receiver, item.getString("id"), p.first, if (p.first < 0) p.second?.let(PingReasons::clean) else null)
+            }
             anyOk = anyOk || pings.any { it.first >= 0 }
         }
         return anyOk
     }
 
-    private fun send(receiver: ResultReceiver?, id: String, delay: Long) {
+    /** One server's result; [error]: why it got no answer (aligned with [KEY_IDS], "" for none). */
+    private fun send(receiver: ResultReceiver?, id: String, delay: Long, error: String? = null) {
         receiver?.send(RESULT_PARTIAL, Bundle().apply {
             putStringArray(KEY_IDS, arrayOf(id))
             putLongArray(KEY_DELAYS, longArrayOf(delay))
+            putStringArray(KEY_ERRORS, arrayOf(error.orEmpty()))
         })
     }
 
@@ -346,6 +372,7 @@ class PingService : Service() {
         const val EXTRA_CANCEL = "cancel"
         const val KEY_IDS = "ids"
         const val KEY_DELAYS = "delays"
+        const val KEY_ERRORS = "errors"
         const val KEY_ERROR = "error"
         const val RESULT_PARTIAL = 1
         const val RESULT_STARTED = 2

@@ -5,11 +5,20 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.titanvps.app.BuildConfig
 import com.titanvps.app.TitanApp
+import com.titanvps.app.core.ConnectionCheck
 import com.titanvps.app.core.PingClient
+import com.titanvps.app.data.ServerGroups
+import com.titanvps.app.data.SubscriptionRepository
+import com.titanvps.app.ui.kit.ToastKind
+import com.titanvps.app.ui.kit.Toasts
 import com.titanvps.app.vpn.TitanVpnService
 import com.titanvps.app.vpn.VpnState
 import com.titanvps.app.vpn.VpnStatus
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
@@ -19,6 +28,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = TitanApp.get(app).repository
     private val settings = TitanApp.get(app).settings
+    private val network = TitanApp.get(app).network
 
     val subscription = repo.subscription
     val selectedId = repo.selectedId
@@ -53,6 +63,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun explainBypassOnWifi() {
         _message.value = com.titanvps.app.data.NetworkMonitor.BYPASS_WIFI_MESSAGE
+    }
+
+    /**
+     * Why Выкл | Вкл can't connect now (shown as a toast, the knob goes back), or null. Only
+     * looks: [canConnect] stays the check MainActivity makes.
+     */
+    fun connectRefusal(): String? {
+        val sub = subscription.value ?: return null
+        val server = sub.servers.firstOrNull { it.id == selectedId.value } ?: sub.servers.firstOrNull()
+            ?: return "Выберите сервер в списке ниже"
+        if (ServerGroups.isBypass(server) && !settings.techMode.value && !network.current()) {
+            return "Обходы недоступны на Wi-Fi — выберите сервер во вкладке «Серверы»"
+        }
+        return null
     }
 
     fun setTheme(mode: com.titanvps.app.data.ThemeMode) = settings.setTheme(mode)
@@ -93,6 +117,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _pinging = MutableStateFlow(false)
     val pinging = _pinging.asStateFlow()
 
+    /** serverId → why its last ping got no answer (gone once it answers). */
+    private val _pingErrors = MutableStateFlow<Map<String, String>>(emptyMap())
+    val pingErrors: StateFlow<Map<String, String>> = _pingErrors.asStateFlow()
+
+    /** How much of the running Пинг is done, 0…1 (0 while none runs; single pings don't count). */
+    private val _pingProgress = MutableStateFlow(0f)
+    val pingProgress: StateFlow<Float> = _pingProgress.asStateFlow()
+
+    /** Проверить соединение on Главная: made by itself after each connect, or by hand. */
+    private val _connectionCheck = MutableStateFlow<ConnectionCheck.State>(ConnectionCheck.State.Idle)
+    val connectionCheck: StateFlow<ConnectionCheck.State> = _connectionCheck.asStateFlow()
+    private var checkJob: Job? = null
+
     /** Account status and devices from the bot (null until loaded or if unavailable). */
     private val _account = MutableStateFlow<com.titanvps.app.data.AccountApi.Info?>(null)
     val account = _account.asStateFlow()
@@ -102,6 +139,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     init {
         if (repo.isStale()) refresh(silent = true)
         loadAccount()
+        // Each new connection (or another server) is checked by itself; going off forgets it.
+        viewModelScope.launch {
+            var last: VpnState.Connected? = null
+            vpnState.collect { state ->
+                val now = state as? VpnState.Connected
+                if (now == last) return@collect
+                last = now
+                checkJob?.cancel()
+                _connectionCheck.value = ConnectionCheck.State.Idle
+                if (now != null) checkConnection(auto = true)
+            }
+        }
+    }
+
+    /**
+     * A request through the VPN: does it work, how fast, which address the sites see. After a
+     * connect ([auto]) it waits a moment and tries up to three times; by hand up to twice.
+     */
+    fun checkConnection(auto: Boolean = false) {
+        if (_connectionCheck.value == ConnectionCheck.State.Checking) return
+        if (vpnState.value !is VpnState.Connected) return
+        _connectionCheck.value = ConnectionCheck.State.Checking
+        checkJob = viewModelScope.launch {
+            // Right after connecting the tunnel may not carry traffic yet.
+            if (auto) delay(1200)
+            val tries = if (auto) 3 else 2
+            var result: ConnectionCheck.State = ConnectionCheck.State.Failed(null)
+            for (attempt in 0 until tries) {
+                if (attempt > 0) delay(1500)
+                result = ConnectionCheck.once()
+                if (result is ConnectionCheck.State.Ok) break
+            }
+            _connectionCheck.value = result
+        }
     }
 
     fun loadAccount() {
@@ -134,6 +205,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         repo.refresh()
     }
 
+    /** Обновить подписку (the header button, pull to refresh): says how it went in a toast. */
+    fun refreshByHand() {
+        if (_busy.value) return
+        _busy.value = true
+        viewModelScope.launch {
+            try {
+                repo.refresh()
+                loadAccount()
+                Toasts.show("Подписка обновлена", ToastKind.SUCCESS)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("Titan", "refresh failed", e)
+                // Only our own, human-readable messages reach the user.
+                val reason = (e as? SubscriptionRepository.SubscriptionException)?.message ?: "сервер не ответил"
+                Toasts.show("Не удалось обновить подписку: " + reason.replaceFirstChar { it.lowercase() }, ToastKind.WARNING)
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
     fun select(serverId: String) {
         if (serverId == repo.selectedId.value) return
         repo.select(serverId)
@@ -158,8 +251,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun logout() {
         disconnect()
+        stopPing()
         repo.logout()
         _pings.value = emptyMap()
+        _pingErrors.value = emptyMap()
+        checkJob?.cancel()
+        _connectionCheck.value = ConnectionCheck.State.Idle
         _account.value = null
     }
 
@@ -182,8 +279,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         stoppedIds.clear()
         // Spinners right away: getting the ping core ready can take a few seconds.
         _measuring.value = _measuring.value + ids
+        _pingProgress.value = 0f
         val run = ++pingRun
-        ping(servers, order) { error ->
+        ping(servers, order, listRun = run) { error ->
             // A stopped run finishing late mustn't end a newer one.
             if (run != pingRun || pingStopped) return@ping
             _pinging.value = false
@@ -199,6 +297,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pingStopped = true
         PingClient.cancel(getApplication<Application>())
         _pinging.value = false
+        _pingProgress.value = 0f
         _measuring.value = emptySet()
     }
 
@@ -222,10 +321,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ping(servers, listOf(serverId)) {}
     }
 
-    private fun ping(servers: List<com.titanvps.app.data.Server>, targets: List<String>, onDone: (String?) -> Unit) {
+    /** [listRun]: the Пинг run this is (its progress shows on the button); null for one server. */
+    private fun ping(
+        servers: List<com.titanvps.app.data.Server>,
+        targets: List<String>,
+        listRun: Int? = null,
+        onDone: (String?) -> Unit,
+    ) {
         viewModelScope.launch {
             val answered = HashSet<String>()
+            val wanted = targets.toSet()
             var error: String? = null
+            // Only the newest list run, while not stopped, moves the progress.
+            val current = { listRun != null && listRun == pingRun && !pingStopped }
             try {
                 withTimeoutOrNull(240_000) {
                     PingClient.ping(getApplication<Application>(), servers, targets).collect { event ->
@@ -235,7 +343,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                                 answered += event.delays.keys
                                 val kept = event.delays.filterKeys { it !in stoppedIds }
                                 _pings.value = _pings.value + kept
+                                // An answer clears the old reason; a new failure brings its own.
+                                val errors = _pingErrors.value.toMutableMap()
+                                kept.forEach { (id, delay) ->
+                                    val why = event.errors[id]
+                                    if (delay >= 0 || why == null) errors.remove(id) else errors[id] = why
+                                }
+                                _pingErrors.value = errors
                                 _measuring.value = _measuring.value - event.delays.keys
+                                if (current()) {
+                                    _pingProgress.value = answered.count { it in wanted } / targets.size.coerceAtLeast(1).toFloat()
+                                }
                             }
                             is PingClient.Event.Done -> error = event.error
                         }
@@ -244,7 +362,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 // Anything still unanswered counts as a timeout.
                 val missing = targets.filter { it !in answered && it !in stoppedIds }
-                if (!pingStopped) _pings.value = _pings.value + missing.associateWith { -1L }
+                if (!pingStopped && missing.isNotEmpty()) {
+                    _pings.value = _pings.value + missing.associateWith { -1L }
+                    _pingErrors.value = _pingErrors.value + missing.associateWith { "нет ответа" }
+                }
+                if (current()) _pingProgress.value = 0f
                 _measuring.value = _measuring.value - targets.toSet()
                 error?.let { android.util.Log.w("Titan", "ping failed: $it") }
             }

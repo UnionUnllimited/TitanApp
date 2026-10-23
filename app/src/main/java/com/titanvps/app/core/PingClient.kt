@@ -20,8 +20,8 @@ object PingClient {
     sealed interface Event {
         /** These servers are being measured right now. */
         data class Started(val ids: List<String>) : Event
-        /** serverId → ms (-1 = timeout / unreachable). */
-        data class Partial(val delays: Map<String, Long>) : Event
+        /** serverId → ms (-1 = timeout / unreachable); [errors]: why a -1 got no answer. */
+        data class Partial(val delays: Map<String, Long>, val errors: Map<String, String> = emptyMap()) : Event
         /** Batch finished; [error] is set when nothing answered. */
         data class Done(val error: String?) : Event
     }
@@ -49,7 +49,12 @@ object PingClient {
                 } else if (resultCode == PingService.RESULT_PARTIAL) {
                     val ids = data?.getStringArray(PingService.KEY_IDS) ?: return
                     val delays = data.getLongArray(PingService.KEY_DELAYS) ?: return
-                    trySend(Event.Partial(ids.zip(delays.toList()).toMap()))
+                    // Aligned with the ids; "" where there's no reason.
+                    val reasons = data.getStringArray(PingService.KEY_ERRORS)
+                    val errors: Map<String, String> = if (reasons == null) emptyMap() else {
+                        ids.indices.mapNotNull { i -> reasons.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { ids[i] to it } }.toMap()
+                    }
+                    trySend(Event.Partial(ids.zip(delays.toList()).toMap(), errors))
                 } else {
                     trySend(Event.Done(data?.getString(PingService.KEY_ERROR)))
                     close()
