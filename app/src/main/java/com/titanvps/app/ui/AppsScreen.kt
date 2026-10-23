@@ -27,7 +27,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.titanvps.app.data.RuApps
+import com.titanvps.app.ui.kit.TitanToggle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -107,7 +107,8 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Switch(checked = ruApps, onCheckedChange = { viewModel.setRuAppsBypass(it) })
+            Spacer(Modifier.width(12.dp))
+            TitanToggle(checked = ruApps, onCheckedChange = { viewModel.setRuAppsBypass(it) })
         }
         OutlinedTextField(
             value = query,
@@ -140,7 +141,8 @@ internal fun AppsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                             Text(app.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             if (ru) Text("российское приложение", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Switch(checked = checked, onCheckedChange = { viewModel.setExcluded(app.packageName, it) })
+                        Spacer(Modifier.width(12.dp))
+                        TitanToggle(checked = checked, onCheckedChange = { viewModel.setExcluded(app.packageName, it) })
                     }
                 }
             }

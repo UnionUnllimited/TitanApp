@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -21,7 +22,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -29,10 +29,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.titanvps.app.ui.kit.TitanToggle
+import com.titanvps.app.ui.kit.rememberHaptics
+import com.titanvps.app.ui.theme.Titan
 
 /** Rounded card used by all screens (surface on the background, as in the mockups). */
 @Composable
@@ -41,10 +45,10 @@ internal fun SectionCard(
     title: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxWidth()) {
+    Surface(shape = RoundedCornerShape(20.dp), color = Titan.palette.surface, modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             if (title != null) {
-                Text(title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.size(8.dp))
             }
             content()
@@ -64,7 +68,7 @@ internal fun NavRow(
 ) {
     Column {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(onClick = onClick),
+            Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (icon != null) {
@@ -81,12 +85,14 @@ internal fun NavRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(6.dp))
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(18.dp), tint = Titan.palette.textTertiary)
         }
-        if (divider) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        if (divider) HorizontalDivider(thickness = 0.5.dp, color = Titan.palette.outline.copy(alpha = 0.7f))
     }
 }
 
+/** A setting with a switch: the whole row toggles it. */
 @Composable
 internal fun ToggleRow(
     title: String,
@@ -95,9 +101,17 @@ internal fun ToggleRow(
     divider: Boolean = true,
     onChange: (Boolean) -> Unit,
 ) {
+    val haptics = rememberHaptics()
     Column {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { onChange(!checked) }.padding(vertical = 6.dp),
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 52.dp)
+                .toggleable(value = checked, role = Role.Switch) {
+                    haptics.toggle(it)
+                    onChange(it)
+                }
+                .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -105,9 +119,9 @@ internal fun ToggleRow(
                 if (subtitle != null) Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.width(8.dp))
-            Switch(checked = checked, onCheckedChange = onChange)
+            TitanToggle(checked = checked, onCheckedChange = null)
         }
-        if (divider) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        if (divider) HorizontalDivider(thickness = 0.5.dp, color = Titan.palette.outline.copy(alpha = 0.7f))
     }
 }
 
@@ -115,7 +129,7 @@ internal fun ToggleRow(
 @Composable
 internal fun InfoBanner(text: String, modifier: Modifier = Modifier) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
         modifier = modifier.fillMaxWidth(),
     ) {
@@ -147,7 +161,7 @@ internal fun TopBar(
             }
             if (!centered) Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         }
-        if (centered) Text(title, Modifier.align(Alignment.Center), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        if (centered) Text(title, Modifier.align(Alignment.Center), fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Box(Modifier.align(Alignment.CenterEnd)) { action() }
     }
 }
