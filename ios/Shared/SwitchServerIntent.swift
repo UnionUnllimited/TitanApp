@@ -28,8 +28,9 @@ struct SwitchServerIntent: LiveActivityIntent {
     }
 }
 
-/// The Dynamic Island's ⏻: the VPN off, as Siri's «Выключить» (Не отключать VPN held off, the
-/// activity closes). A LiveActivityIntent in both targets, so it runs in the app's process.
+/// The activity's ⏻ while the VPN is on: off, as Siri's «Выключить» (Не отключать VPN held off;
+/// the activity stays, «Выключено»). A LiveActivityIntent in both targets, so it runs in the
+/// app's process.
 @available(iOS 18.0, *)
 struct StopVPNIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Выключить Titan VPS"
@@ -39,6 +40,24 @@ struct StopVPNIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         #if TITAN_APP
         await VPNIntents.turnOff()
+        #endif
+        // The extension's copy never runs: iOS runs the app's.
+        return .result()
+    }
+}
+
+/// The activity's ⏻ while the VPN is off: on, as Siri's «Включить», on the server the activity
+/// shows (the one picked in the app). A LiveActivityIntent in both targets, so it runs in the
+/// app's process; a failure («Обходы … только через мобильный интернет») goes back as its error.
+@available(iOS 18.0, *)
+struct StartVPNIntent: LiveActivityIntent {
+    static let title: LocalizedStringResource = "Включить Titan VPS"
+    /// Only the activity's button: Siri and Команды have TurnOnVPNIntent.
+    static let isDiscoverable = false
+
+    func perform() async throws -> some IntentResult {
+        #if TITAN_APP
+        _ = try await VPNIntents.turnOn()
         #endif
         // The extension's copy never runs: iOS runs the app's.
         return .result()

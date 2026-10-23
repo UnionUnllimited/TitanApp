@@ -453,8 +453,8 @@ struct ProfileView: View {
         }
     }
 
-    /// Dynamic Island: the Live Activity while connected (on by default). Off ends it at once;
-    /// on while connected starts it.
+    /// Dynamic Island: the Live Activity, the VPN on or off (on by default). Off ends it at once;
+    /// on starts it.
     private var liveActivityRow: some View {
         VStack(alignment: .leading, spacing: 0) {
             Toggle(isOn: $liveActivity) {
@@ -463,7 +463,7 @@ struct ProfileView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Dynamic Island").font(.scaled(16, weight: .medium))
                             .lineLimit(1).minimumScaleFactor(0.75)
-                        Text("Сервер и его смена на экране блокировки")
+                        Text("Сервер, скорость и пинг на экране блокировки — и когда VPN выключен")
                             .font(.scaled(12)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

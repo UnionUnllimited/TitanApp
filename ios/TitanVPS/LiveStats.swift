@@ -84,7 +84,8 @@ final class TrafficMonitor: ObservableObject {
         if history.count > Self.window { history.removeFirst(history.count - Self.window) }
     }
 
-    /// The tunnel interface's name and byte counters; nil while there's no tunnel.
+    /// The tunnel interface's name and byte counters; nil while there's no tunnel. The Live
+    /// Activity's speed and traffic come from it too (LiveActivityController).
     nonisolated static func counters() -> (name: String, down: UInt32, up: UInt32)? {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return nil }

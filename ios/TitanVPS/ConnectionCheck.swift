@@ -16,24 +16,14 @@ enum ConnectionCheck {
     }
 
     static func run() async -> Status {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 8
-        config.timeoutIntervalForResource = 10
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.urlCache = nil
         // A new session each time: a new connection, as a ping measures it.
-        let session = URLSession(configuration: config)
+        let session = freshSession(timeout: 8)
         defer { session.finishTasksAndInvalidate() }
         async let exitInfo = exitAddress(session)
         guard let url = URL(string: XrayPing.url) else { return .failed("неверный адрес") }
-        var req = URLRequest(url: url, timeoutInterval: 8)
-        req.httpMethod = "HEAD"
-        req.setValue(Config.userAgent, forHTTPHeaderField: "User-Agent")
-        let start = Date()
         var why = "нет ответа"
         do {
-            _ = try await session.data(for: req)
-            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            let ms = try await head(url, session, timeout: 8)
             let address = await exitInfo
             return .ok(Result(ms: ms, ip: address.ip, country: address.country))
         } catch {
@@ -46,6 +36,35 @@ enum ConnectionCheck {
             return .ok(Result(ms: ms, ip: address.ip, country: address.country))
         }
         return .failed(why)
+    }
+
+    /// The Live Activity's ping (LiveActivityController, at most once a minute): run's request
+    /// alone, through the VPN on a fresh connection; nil if it didn't answer.
+    static func probe() async -> Int? {
+        guard let url = URL(string: XrayPing.url) else { return nil }
+        let session = freshSession(timeout: 5)
+        defer { session.finishTasksAndInvalidate() }
+        return try? await head(url, session, timeout: 5)
+    }
+
+    /// No cache, no cookies: each request on a new connection.
+    private static func freshSession(timeout: TimeInterval) -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout + 2
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }
+
+    /// A HEAD of [url]: how long it took, in ms.
+    private static func head(_ url: URL, _ session: URLSession, timeout: TimeInterval) async throws -> Int {
+        var req = URLRequest(url: url, timeoutInterval: timeout)
+        req.httpMethod = "HEAD"
+        req.setValue(Config.userAgent, forHTTPHeaderField: "User-Agent")
+        let start = Date()
+        _ = try await session.data(for: req)
+        return Int(Date().timeIntervalSince(start) * 1000)
     }
 
     /// The exit's address and country from Cloudflare's trace (ip= and loc=), and how long it took.

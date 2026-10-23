@@ -2,7 +2,7 @@ import SwiftUI
 import WidgetKit
 
 /// The app's widget extension (iOS 18): the VPN toggle for Пункт управления, the Lock Screen and
-/// the Action button, and the Live Activity while connected.
+/// the Action button, and the Live Activity (the VPN on or off).
 @main
 struct TitanWidgetsBundle: WidgetBundle {
     var body: some Widget {
@@ -19,6 +19,8 @@ enum Brand {
     static let violet = Color(hex: 0x5B3DF5)
     /// The brand blue, lighter: readable on navy.
     static let sky = Color(hex: 0x7EA6FF)
+    /// Выключено: the red of Выкл | Вкл while off.
+    static let red = Color(hex: 0xEF4444)
 }
 
 extension Color {

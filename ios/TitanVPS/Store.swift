@@ -5,7 +5,13 @@ import UserNotifications
 
 @MainActor
 final class AppStore: ObservableObject {
-    @Published var subscription: Subscription? { didSet { indexServers() } }
+    @Published var subscription: Subscription? {
+        didSet {
+            indexServers()
+            // Выйти (logout): the Live Activity goes with the key.
+            if subscription == nil, oldValue != nil { LiveActivityController.signedOut() }
+        }
+    }
     @Published var selectedId: String?
     @Published var busy = false
     @Published var message: String?

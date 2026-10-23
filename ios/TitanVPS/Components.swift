@@ -376,12 +376,10 @@ extension Font {
 }
 
 enum Fmt {
-    /// "2.4 МБ/с" as number and unit (the number drawn larger).
+    /// "2.4 МБ/с" as number and unit (the number drawn larger). The Live Activity writes it the
+    /// same way (TrafficText, ios/Shared).
     static func speedParts(_ bytesPerSecond: Double) -> (number: String, unit: String) {
-        let b = max(bytesPerSecond, 0)
-        if b >= 1_048_576 { return (String(format: "%.1f", b / 1_048_576), "МБ/с") }
-        if b >= 1024 { return (String(format: "%.0f", b / 1024), "КБ/с") }
-        return (String(format: "%.0f", b), "Б/с")
+        TrafficText.speedParts(bytesPerSecond)
     }
 
     static func speed(_ bytesPerSecond: Double) -> String {
