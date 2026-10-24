@@ -185,9 +185,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (result is ConnectionCheck.State.Ok) break
             }
             _connectionCheck.value = result
-            // The minute is taken by a check that got through (its samples went, a number or
-            // not), not by a cancelled or failed one.
-            if (auto && warm && result is ConnectionCheck.State.Ok) autoWarm = connection to now
+            // The minute is taken by a check whose samples went (a number or not), not by a
+            // cancelled or failed one, nor by one where only Cloudflare answered.
+            if (auto && result is ConnectionCheck.State.Ok && result.sampled) autoWarm = connection to now
         }
     }
 

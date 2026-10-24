@@ -36,8 +36,9 @@ object ConnectionCheck {
         /**
          * [ms]: the warm latency, null when it couldn't be measured (shown without a number).
          * [country]: ISO code of the exit (Cloudflare's loc=), upper case.
+         * [sampled]: the latency samples went (a number or not).
          */
-        data class Ok(val ms: Long?, val ip: String?, val country: String?) : State
+        data class Ok(val ms: Long?, val ip: String?, val country: String?, val sampled: Boolean = false) : State
         /** [reason]: why, for Технический режим. */
         data class Failed(val reason: String?) : State
     }
@@ -87,7 +88,7 @@ object ConnectionCheck {
                 val trace = exit.await().getOrNull()
                 val result: State = when {
                     // Sampled once the trace is done: nothing else of ours on the line.
-                    head.isSuccess -> State.Ok(if (warm) latency(client, opened) else null, trace?.ip, trace?.country)
+                    head.isSuccess -> State.Ok(if (warm) latency(client, opened) else null, trace?.ip, trace?.country, sampled = warm)
                     // Google didn't answer but Cloudflare did: the VPN carries traffic (the
                     // panel's routing may send Google another way), so it isn't "no answer".
                     trace != null && trace.ip != null -> State.Ok(null, trace.ip, trace.country)
