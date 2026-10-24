@@ -16,9 +16,11 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
   closes at once, not after 300 s idle.
 - Receive windows: XHTTP's HTTP/2 1 MiB per stream / 4 MiB per connection (Go: 4 MiB / 1 GiB),
   16 KiB frames both ways (the server's 1 MiB frame size gave each stream-up upload a 512 KiB
-  buffer); gRPC fixed 1 / 4 MiB (the BDP estimate grows to 16 MiB); QUIC 1 / 2 MiB (with the
-  quic-go patch, quic_go.py). Which servers are used doesn't change.
-- The burst observatory probes at most 4 subjects at once (all 60-85 together at each start).
+  buffer); gRPC fixed 1 / 4 MiB (the BDP estimate grows to 16 MiB); QUIC 1 / 8 MiB (with the
+  quic-go patch, quic_go.py; 8 MiB: a new stream still opens with Chrome's 6). Which servers
+  are used doesn't change.
+- The burst observatory probes at most 4 subjects at once in its rounds (all 60-85 together at
+  each start before); the first check at a start 12 at once, in random order.
 Every anchor must be found: a different Xray-core stops the build.
 """
 import pathlib, re, shutil, sys
@@ -94,18 +96,22 @@ here = pathlib.Path(__file__).parent
 changes = {
     "app/observatory/burst/healthping.go": [
         ("\tticker        *time.Ticker\n",
-         "\tticker        *time.Ticker\n\t// Titan patch: probes running now (titan_mem.go).\n\ttitanSlots chan struct{}\n"),
+         "\tticker        *time.Ticker\n\t// Titan patch: the rounds' probes running now (titan_mem.go).\n\ttitanSlots chan struct{}\n"),
         ("\t\tdispatcher: dispatcher,\n",
          "\t\tdispatcher: dispatcher,\n\t\ttitanSlots: make(chan struct{}, titanProbesAtOnce),\n"),
+        ("\tcount := len(tags) * rounds\n\tif count == 0 {\n\t\treturn\n\t}\n",
+         "\tcount := len(tags) * rounds\n\tif count == 0 {\n\t\treturn\n\t}\n"
+         "\t// Titan patch: the first check in random order with slots of its own (titan_mem.go).\n"
+         "\ttags, slots, end := h.titanCheck(tags, duration)\n\tdefer end()\n"),
         ("\t\t\ttimers = append(timers, time.AfterFunc(delay, func() {\n"
          "\t\t\t\terrors.LogDebug(h.ctx, \"checking \", handler)\n"
          "\t\t\t\tdelay, err := client.MeasureDelay(h.Settings.HttpMethod)\n",
          "\t\t\ttimers = append(timers, time.AfterFunc(delay, func() {\n"
          "\t\t\t\t// Titan patch: a few probes at once (titan_mem.go).\n"
-         "\t\t\t\tif !h.titanSlot(ctx) {\n\t\t\t\t\treturn\n\t\t\t\t}\n"
+         "\t\t\t\tif !h.titanSlot(ctx, slots) {\n\t\t\t\t\treturn\n\t\t\t\t}\n"
          "\t\t\t\terrors.LogDebug(h.ctx, \"checking \", handler)\n"
          "\t\t\t\tdelay, err := client.MeasureDelay(h.Settings.HttpMethod)\n"
-         "\t\t\t\th.titanFree()\n"),
+         "\t\t\t\th.titanFree(slots)\n"),
     ],
     "transport/internet/splithttp/dialer.go": [
         ('\t"golang.org/x/net/http2"\n', ""),

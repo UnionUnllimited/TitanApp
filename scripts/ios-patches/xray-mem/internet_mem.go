@@ -48,9 +48,13 @@ func TitanCloseTransports() int {
 
 // QUIC receive windows (Hysteria, XHTTP over HTTP/3): at most this much of a stream or a
 // connection waits unread in memory when the reader stalls (a player with a full buffer).
+// With Chrome parroting every new stream still opens with Chrome's 6 MiB (the handshake's
+// fingerprint, granted at once): a new stream that stalls may hold that much, and only what
+// the connection has left goes to its other streams. 8 MiB leaves them 2 MiB with one such
+// stream (2 MiB left them nothing: the video playing on the connection froze).
 const (
 	TitanQUICStreamWindow = 1 << 20
-	TitanQUICConnWindow   = 2 << 20
+	TitanQUICConnWindow   = 8 << 20
 )
 
 // TitanQUICWindows caps c's receive windows (0, quic-go's default, is 6 / 15 MiB: capped too).

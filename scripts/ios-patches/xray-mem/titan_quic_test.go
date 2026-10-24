@@ -20,7 +20,8 @@ import (
 
 // With Chrome parroting (as Hysteria dials) a stalled stream holds at most about the capped
 // window unread once Chrome's opening windows are used up, not 6 MiB (xray-mem patch, with
-// quic-go patched by quic_go.py).
+// quic-go patched by quic_go.py). A new stream that stalls still holds Chrome's 6 MiB: the
+// connection's other streams go on with what is left of its window.
 func TestTitanQUICWindows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -37,24 +38,32 @@ func TestTitanQUICWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	var sent atomic.Int64
+	// Each stream: its number first, then the server writes to it as fast as it may.
+	var sent [4]atomic.Int64
 	go func() {
 		conn, err := ln.Accept(ctx)
 		if err != nil {
 			return
 		}
-		str, err := conn.AcceptStream(ctx)
-		if err != nil {
-			return
-		}
-		str.Read(make([]byte, 1))
-		buf := make([]byte, 16<<10)
 		for {
-			n, err := str.Write(buf)
-			sent.Add(int64(n))
+			str, err := conn.AcceptStream(ctx)
 			if err != nil {
 				return
 			}
+			go func() {
+				b := make([]byte, 1)
+				if _, err := io.ReadFull(str, b); err != nil || int(b[0]) >= len(sent) {
+					return
+				}
+				buf := make([]byte, 16<<10)
+				for {
+					n, err := str.Write(buf)
+					sent[b[0]].Add(int64(n))
+					if err != nil {
+						return
+					}
+				}
+			}()
 		}
 	}()
 
@@ -76,21 +85,62 @@ func TestTitanQUICWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.CloseWithError(0, "")
-	str, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		t.Fatal(err)
+	open := func(n byte) *quic.Stream {
+		str, err := conn.OpenStreamSync(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		str.Write([]byte{n})
+		return str
 	}
-	str.Write([]byte{1})
+	str := open(1)
 	// Past Chrome's opening windows (15 MiB for the connection); then the reader stalls.
 	const read = 16 << 20
 	if _, err := io.ReadFull(str, make([]byte, read)); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Second)
-	if unread := sent.Load() - read; unread > 2<<20 {
+	if unread := sent[1].Load() - read; unread > 2<<20 {
 		t.Fatalf("%d KiB sent and not read", unread>>10)
 	} else {
 		t.Logf("%d KiB sent and not read", unread>>10)
+	}
+
+	// A new stream whose reader stalls from the start (an app in the background): it takes
+	// Chrome's 6 MiB, the stream above (the video playing) and a third one still get data.
+	open(2)
+	time.Sleep(500 * time.Millisecond)
+	var got [4]atomic.Int64
+	readOn := func(n byte, s *quic.Stream, done chan<- struct{}) {
+		defer close(done)
+		buf := make([]byte, 32<<10)
+		for {
+			k, err := s.Read(buf)
+			got[n].Add(int64(k))
+			if err != nil {
+				return
+			}
+		}
+	}
+	third := open(3)
+	done1, done3 := make(chan struct{}), make(chan struct{})
+	go readOn(1, str, done1)
+	go readOn(3, third, done3)
+	time.Sleep(2 * time.Second)
+	str.SetReadDeadline(time.Now())
+	third.SetReadDeadline(time.Now())
+	<-done1
+	<-done3
+	t.Logf("with a new stream stalled: %d KiB and %d KiB read in 2 s", got[1].Load()>>10, got[3].Load()>>10)
+	if got[1].Load() < 8<<20 || got[3].Load() < 8<<20 {
+		t.Fatalf("a new stalled stream held up the others: %d KiB and %d KiB in 2 s", got[1].Load()>>10, got[3].Load()>>10)
+	}
+	// All stalled now: the new one holds Chrome's opening at most, the connection its cap.
+	time.Sleep(500 * time.Millisecond)
+	unread := sent[1].Load() - read - got[1].Load() + sent[2].Load() + sent[3].Load() - got[3].Load()
+	t.Logf("the new stalled stream holds %d KiB, the connection %d KiB unread", sent[2].Load()>>10, unread>>10)
+	if sent[2].Load() > 6<<20+256<<10 || unread > internet.TitanQUICConnWindow+256<<10 {
+		t.Fatalf("unread: %d KiB on the new stream, %d KiB on the connection", sent[2].Load()>>10, unread>>10)
 	}
 
 	// Pooled, it is closed by titanCloseAll; the sweep later closes what the old stream

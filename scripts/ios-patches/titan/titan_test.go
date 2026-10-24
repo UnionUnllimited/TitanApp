@@ -135,7 +135,7 @@ func TestMemStats(t *testing.T) {
 }
 
 // The soft limit: the extension's limit less the rest (at least 12 MiB) and 8 MiB, at least
-// 24 MiB; memStats reports it.
+// 24 MiB, while Go needs no more (this test's heap is small); memStats reports it.
 func TestMemoryLimit(t *testing.T) {
 	defer debug.SetMemoryLimit(math.MaxInt64)
 	call(t, map[string]any{"method": "freeMemory"})
@@ -161,6 +161,38 @@ func TestMemoryLimit(t *testing.T) {
 	b, _ := json.Marshal(map[string]any{"method": "setMemoryLimit"})
 	if out := Invoke(string(b)); !strings.Contains(out, "error") {
 		t.Fatalf("no limit: %s", out)
+	}
+}
+
+// What Go needs raises the limit up to the watchdog's threshold (limit − the rest − 5 MiB),
+// a busy GC to it; never under 24 MiB.
+func TestGoLimitFor(t *testing.T) {
+	const mib = 1 << 20
+	// Go with this live heap and 7 MiB besides objects and free pages, GOGC 10.
+	go_ := func(live uint64) map[string]uint64 {
+		return map[string]uint64{"liveHeap": live * mib, "objects": (live + 2) * mib, "free": 1 * mib,
+			"total": (live + 12) * mib, "released": 2 * mib, "gogc": 10}
+	}
+	for _, c := range []struct {
+		limit, live, rest uint64
+		busy              bool
+		want, need        int64
+		why               string
+	}{
+		{50, 18, 10, false, 30, 28, "fit"},  // needs 18 + 7 + 3
+		{50, 22, 12, false, 32, 32, "need"}, // over 30: raised to it
+		{50, 26, 12, false, 33, 36, "need"}, // up to 50 − 12 − 5 at most
+		{50, 18, 12, true, 33, 28, "gc"},    // the GC busy: to the threshold
+		{30, 18, 10, false, 24, 28, "min"},
+		{30, 18, 10, true, 24, 28, "min"},
+	} {
+		m := go_(c.live)
+		retained := m["total"] - m["released"]
+		got, nonGo, need, why := goLimitFor(int64(c.limit*mib), int64(retained+c.rest*mib), m, c.busy)
+		if got != c.want*mib || need != c.need*mib || why != c.why || nonGo != int64(max(c.rest, 12)*mib) {
+			t.Fatalf("limit %d, live %d, rest %d, busy %v: %d MiB (%s, need %d, rest %d), want %d (%s, need %d)",
+				c.limit, c.live, c.rest, c.busy, got/mib, why, need/mib, nonGo/mib, c.want, c.why, c.need)
+		}
 	}
 }
 
