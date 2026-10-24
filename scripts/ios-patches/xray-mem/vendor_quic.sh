@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # quic-go (Hysteria, XHTTP over HTTP/3) with its receive windows within Xray's caps, the
-# connection's window updated next to stalled streams too, and the stalled stream holding the
-# most cancelled past three quarters of it (quic_go.py, quic_mem.go): a patched copy next to
-# libXray's Xray-core, put in place of the module for
-# the build (libXray) and for Xray-core's own tests. iOS only, like the rest of xray-mem.
+# connection's window updated next to stalled streams too, stalled streams cancelled past half
+# of it and small frames copied out of their packet buffers (quic_go.py, quic_mem.go): a patched
+# copy next to libXray's Xray-core, put in place of the module for the build (libXray) and for
+# Xray-core's own tests. iOS only, like the rest of xray-mem.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
