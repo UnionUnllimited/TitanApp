@@ -389,6 +389,9 @@ struct TechModeView: View {
             rows.append(("Подписка", (active ? "активна, " : "истекла, ") + until))
             rows.append(("Трафик обходов", i.total > 0 ? "\(formatBytes(i.remaining)) из \(formatBytes(i.total))" : "безлимит"))
             rows.append(("Подписка обновлена", stamp(sub.fetchedAt)))
+            // «sniffing-enable» of the subscription's answer; it applies from the next connect.
+            let sniffing: String = i.sniffing.map { $0 ? "включён" : "выключен" }.map { "\($0) (заголовок подписки)" } ?? "включён (по умолчанию)"
+            rows.append(("Сниффинг", sniffing))
         } else {
             rows.append(("Подписка", "нет"))
         }
