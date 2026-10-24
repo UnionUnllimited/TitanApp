@@ -285,8 +285,9 @@ final class VPNController: ObservableObject {
         try? await m.saveToPreferences()
     }
 
-    /// What a profile's config was built from: the subscription's server as it was then, and the
-    /// XrayRunConfig that built it.
+    /// What a profile's config was built from: the subscription's server as it was then (its
+    /// «sniffing-enable: 0» too: parseServers marks the server's config), and the XrayRunConfig
+    /// that built it.
     nonisolated static func source(_ server: Server) -> String {
         SHA256.hash(data: Data((server.xrayJson ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
             + "-v\(XrayRunConfig.version)"

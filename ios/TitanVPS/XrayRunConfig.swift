@@ -9,6 +9,8 @@ enum XrayRunConfig {
     static let tunTag = "tun-in"
     static let dnsOutTag = "dns-out"
     static let sniffingKey = "_titanSniffing"
+    /// Put in a server's config by parseServers when the subscription says «sniffing-enable: 0».
+    static let sniffingOffKey = "_titanSniffingOff"
     /// Bumped when build() makes a different config, or parseServers a different server config
     /// (3: no TCP Fast Open on regular servers): a profile saved by an older one is rebuilt
     /// (VPNController.source), from servers this build parsed (Subscription.parsedBy): the
@@ -43,6 +45,12 @@ enum XrayRunConfig {
         var sniffing = cfg.removeValue(forKey: sniffingKey) as? [String: Any]
             ?? ["destOverride": ["http", "tls", "quic"], "routeOnly": false]
         sniffing["enabled"] = true
+        // The subscription's «sniffing-enable: 0»: none. A connection from the TUN then has only
+        // the IP the phone got from Xray's DNS, so domain rules (the panel's, the YouTube QUIC
+        // block below) don't match it, only IP rules do: IPIfNonMatch resolves a name to try the
+        // IP rules, it never turns an IP back into a name. Domain lists of the DNS settings still
+        // pick who resolves each name the phone asks for.
+        if cfg.removeValue(forKey: sniffingOffKey) != nil { sniffing = ["enabled": false] }
         cfg["inbounds"] = [[
             "tag": tunTag,
             "protocol": "tun",

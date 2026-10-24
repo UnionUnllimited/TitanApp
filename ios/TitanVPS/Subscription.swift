@@ -55,6 +55,10 @@ struct SubscriptionInfo: Codable, Equatable {
     var webPageUrl: String?
     var supportUrl: String?
     var announce: String?
+    /// The panel's «sniffing-enable» header (as Happ reads it): false turns the tunnel's sniffing
+    /// off (XrayRunConfig.build), nil (no header, another value, a subscription saved before it)
+    /// keeps it on as always.
+    var sniffing: Bool? = nil
 
     var used: Int64 { upload + download }
     var remaining: Int64 { max(total - used, 0) }
@@ -155,7 +159,7 @@ enum SubscriptionAPI {
             for candidate in [url] + alternates(url) {
                 do {
                     let (info, body) = try await download(candidate, userAgent: ua)
-                    let all = (try? parseServers(body)) ?? []
+                    let all = (try? parseServers(body, sniffing: info.sniffing)) ?? []
                     if all.isEmpty && ua != Config.userAgents.last { continue }
                     if all.isEmpty { throw SubscriptionError(message: SubscriptionErrors.unusable(info, body)) }
                     if let stub = SubscriptionErrors.stub(all.map(\.name)) { throw SubscriptionError(message: stub) }
@@ -219,7 +223,18 @@ enum SubscriptionAPI {
         info.webPageUrl = header("profile-web-page-url")?.trimmingCharacters(in: .whitespaces).nilIfEmpty
         info.supportUrl = header("support-url")?.trimmingCharacters(in: .whitespaces).nilIfEmpty
         info.announce = decodeText(header("announce"))
+        // No Provider ID needed, unlike Happ: our own hosts only.
+        info.sniffing = flag(header("sniffing-enable"))
         return info
+    }
+
+    /// A header's yes or no: «1», «true», «on» / «0», «false», «off» in any case; anything else
+    /// (or none) is no instruction.
+    static func flag(_ value: String?) -> Bool? {
+        guard let v = value?.trimmingCharacters(in: .whitespaces).lowercased() else { return nil }
+        if ["1", "true", "on"].contains(v) { return true }
+        if ["0", "false", "off"].contains(v) { return false }
+        return nil
     }
 
     private static func decodeText(_ value: String?) -> String? {
@@ -353,13 +368,15 @@ enum SubscriptionAPI {
     /// Xray JSON (array of configs or one config): name from `remarks`, endpoint of the
     /// first proxy outbound for the TCP ping. The unlimited servers' row (UnlimitedServer) gets
     /// its name and id here, for every screen alike, and comes right after АВТО.
-    static func parseServers(_ body: String) throws -> [Server] {
+    /// sniffing: the subscription's «sniffing-enable» (SubscriptionInfo.sniffing).
+    static func parseServers(_ body: String, sniffing: Bool? = nil) throws -> [Server] {
         let text = body.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
         guard let data = text.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) else {
             throw SubscriptionError(message: "Подписка пришла не в формате Xray JSON")
         }
         let configs: [[String: Any]] = (json as? [[String: Any]]) ?? ((json as? [String: Any]).map { [$0] } ?? [])
         let service: Set<String> = ["freedom", "blackhole", "dns", "loopback"]
+        let sniffingOff = sniffing == false
         // One such row at most: a second one stays a hidden header.
         var unlimitedFound = false
         let servers: [Server] = configs.enumerated().compactMap { i, source in
@@ -385,6 +402,9 @@ enum SubscriptionAPI {
             let inbounds = cfg["inbounds"] as? [[String: Any]] ?? []
             let oldTags = Set(inbounds.compactMap { ($0["tag"] as? String)?.nilIfEmpty })
             if let sniffing = inbounds.compactMap({ $0["sniffing"] as? [String: Any] }).first { cfg[XrayRunConfig.sniffingKey] = sniffing }
+            // «sniffing-enable: 0»: build turns it off. In the server's config, so a change of the
+            // header changes VPNController.source and the profile is rebuilt; none: as before.
+            if sniffingOff { cfg[XrayRunConfig.sniffingOffKey] = true }
             cfg.removeValue(forKey: "inbounds")
             XrayRunConfig.retargetInboundRules(&cfg, oldTags: oldTags)
             let (host, port) = endpoint(proxy)
