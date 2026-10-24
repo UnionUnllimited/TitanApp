@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -90,7 +91,8 @@ import com.titanvps.app.ui.theme.pingColor
 /**
  * Страны | Обходы (only those that have servers) and the Пинг button. [progress]: how much of
  * a running Пинг is done, read only by the button. Each tab says where its servers work: after
- * the count when the window has room, under the title otherwise (phones).
+ * the count when the window has room, under the title otherwise (phones, Пинг's icon above
+ * the word there, so the tabs get more room).
  */
 @Composable
 internal fun ServerTabs(
@@ -124,7 +126,7 @@ internal fun ServerTabs(
                     TabChip(group, count, group == page, fit, Modifier.weight(1f).fillMaxHeight()) { onPage(group) }
                 }
             }
-            PingButton(pinging, progress, onPing, Modifier.fillMaxHeight())
+            PingButton(pinging, progress, onPing, column = !fit.oneLine, Modifier.fillMaxHeight())
         }
     }
 }
@@ -140,20 +142,29 @@ private object TabSize {
     val icon = 16.dp
     val wideSpacing = 6.dp
     val narrowSpacing = 5.dp
+    /** Tight: smaller gaps and badge sides, so the icon stays. */
+    val tightSpacing = 3.dp
     /** More room before the network on one line. */
     val wideNetworkGap = 4.dp
     val wideGlyph = 13.dp
     val narrowGlyph = 11.dp
     val networkSpacing = 4.dp
     val badgePad = 7.dp
+    val tightBadgePad = 5.dp
     val pingPad = 14.dp
     val pingIcon = 18.dp
     val pingSpacing = 7.dp
+    /** Phones: Пинг as a column, the icon above the word (as in the mock). */
+    val pingColumn = 58.dp
+    val pingColumnPad = 6.dp
+    val pingColumnSpacing = 3.dp
     /** What the layout may round up. */
     val slack = 2.dp
     val title = 14.sp
     val badge = 12.sp
     val ping = 14.sp
+    val pingColumnText = 13.sp
+    val pingColumnLine = 16.sp
     val wideNetwork = 12.sp
     val narrowNetwork = 11.sp
     /** Smaller than this the network line is left out (the largest text sizes, a narrow screen). */
@@ -161,12 +172,12 @@ private object TabSize {
 }
 
 /**
- * How the tabs fit: [oneLine], the network after the count; else under the title, at
- * [networkSize] (smaller when tight; null: no room even so), without the [icon] when the
- * title row is tight.
+ * How the tabs fit: [oneLine], the network after the count; else under the title (Пинг a
+ * column), at [networkSize] (smaller when tight; null: no room even so). A tight title row:
+ * first smaller gaps and badge sides ([tight]), only then without the [icon].
  */
 @Immutable
-private data class TabsFit(val oneLine: Boolean, val icon: Boolean, val networkSize: TextUnit?)
+private data class TabsFit(val oneLine: Boolean, val tight: Boolean, val icon: Boolean, val networkSize: TextUnit?)
 
 /** Measures the tabs' words at the app's text size: what fits [width], the row with Пинг. */
 @Composable
@@ -177,32 +188,39 @@ private fun rememberTabsFit(counts: List<Pair<Group, Int>>, width: Dp): TabsFit 
     return remember(counts, width, density, base, measurer) {
         fun textWidth(text: String, size: TextUnit, weight: FontWeight = FontWeight.Medium): Float =
             measurer.measure(text, base.merge(TextStyle(fontSize = size, fontWeight = weight)), maxLines = 1).size.width.toFloat()
+        fun pingWord(size: TextUnit): Float =
+            maxOf(textWidth("Пинг", size, FontWeight.SemiBold), textWidth("Стоп", size, FontWeight.SemiBold))
         with(density) {
             val n = counts.size.coerceAtLeast(1)
-            val ping = (TabSize.pingPad * 2 + TabSize.pingIcon + TabSize.pingSpacing).toPx() +
-                maxOf(textWidth("Пинг", TabSize.ping, FontWeight.SemiBold), textWidth("Стоп", TabSize.ping, FontWeight.SemiBold))
-            // One tab's room, less what the layout may round up.
-            val tab = (width.toPx() - TabSize.gap.toPx() - ping - (TabSize.stripPad * 2).toPx() -
+            // One tab's room next to Пинг, less what the layout may round up.
+            fun tabRoom(ping: Float): Float = (width.toPx() - TabSize.gap.toPx() - ping - (TabSize.stripPad * 2).toPx() -
                 TabSize.chipGap.toPx() * (n - 1)) / n - TabSize.slack.toPx()
             // The icon, the title and the count.
-            fun titleRow(group: Group, count: Int, spacing: Dp, icon: Boolean): Float =
+            fun titleRow(group: Group, count: Int, spacing: Dp, badgePad: Dp, icon: Boolean): Float =
                 (if (icon) (TabSize.icon + spacing).toPx() else 0f) + textWidth(group.title, TabSize.title) + spacing.toPx() +
-                    textWidth("$count", TabSize.badge, FontWeight.SemiBold) + (TabSize.badgePad * 2).toPx()
+                    textWidth("$count", TabSize.badge, FontWeight.SemiBold) + (badgePad * 2).toPx()
+            val pingRow = (TabSize.pingPad * 2 + TabSize.pingIcon + TabSize.pingSpacing).toPx() + pingWord(TabSize.ping)
             val oneLine = counts.all { (group, count) ->
                 val network = (TabSize.wideSpacing + TabSize.wideNetworkGap + TabSize.wideGlyph + TabSize.networkSpacing).toPx() +
                     textWidth(group.networks, TabSize.wideNetwork)
-                (TabSize.widePad * 2).toPx() + titleRow(group, count, TabSize.wideSpacing, icon = true) + network <= tab
+                (TabSize.widePad * 2).toPx() + titleRow(group, count, TabSize.wideSpacing, TabSize.badgePad, icon = true) + network <=
+                    tabRoom(pingRow)
             }
-            if (oneLine) return@remember TabsFit(oneLine = true, icon = true, networkSize = TabSize.wideNetwork)
-            val inner = tab - (TabSize.narrowPad * 2).toPx()
-            val icon = counts.all { (group, count) -> titleRow(group, count, TabSize.narrowSpacing, icon = true) <= inner }
+            if (oneLine) return@remember TabsFit(oneLine = true, tight = false, icon = true, networkSize = TabSize.wideNetwork)
+            // Two lines: Пинг as a column is narrower, the tabs get the rest.
+            val pingColumn = maxOf(TabSize.pingColumn.toPx(), (TabSize.pingColumnPad * 2).toPx() + pingWord(TabSize.pingColumnText))
+            val inner = tabRoom(pingColumn) - (TabSize.narrowPad * 2).toPx()
+            fun rowsFit(spacing: Dp, badgePad: Dp): Boolean =
+                counts.all { (group, count) -> titleRow(group, count, spacing, badgePad, icon = true) <= inner }
+            val tight = !rowsFit(TabSize.narrowSpacing, TabSize.badgePad)
+            val icon = !tight || rowsFit(TabSize.tightSpacing, TabSize.tightBadgePad)
             // The network line at its size, else half a point smaller at a time, else none.
             val room = inner - (TabSize.narrowGlyph + TabSize.networkSpacing).toPx()
             var size = TabSize.narrowNetwork.value
             while (size >= TabSize.minNetwork.value &&
                 counts.any { (group, _) -> textWidth(group.networks, size.sp) > room }
             ) size -= 0.5f
-            TabsFit(oneLine = false, icon = icon, networkSize = if (size >= TabSize.minNetwork.value) size.sp else null)
+            TabsFit(oneLine = false, tight = tight, icon = icon, networkSize = if (size >= TabSize.minNetwork.value) size.sp else null)
         }
     }
 }
@@ -212,10 +230,11 @@ private fun TabChip(group: Group, count: Int, selected: Boolean, fit: TabsFit, m
     val palette = Titan.palette
     val haptics = rememberHaptics()
     val shape = RoundedCornerShape(13.dp)
-    // Where it works: a lighter blue under the picked tab's title.
-    val lighter = if (palette.isDark) lerp(palette.primary, Color.White, 0.55f) else palette.primary.copy(alpha = 0.85f)
+    // Where it works, under the picked tab's title: a lighter blue on dark; on light a little
+    // darker than the title, as small text needs (about 5.4:1 on the tab's tint, not 3.4).
+    val picked = if (palette.isDark) lerp(palette.primary, Color.White, 0.55f) else lerp(palette.primary, Color.Black, 0.1f)
     val text by animateColorAsState(if (selected) palette.primary else palette.textSecondary, tween(200), label = "tabText")
-    val network by animateColorAsState(if (selected) lighter else palette.textSecondary, tween(200), label = "tabNetwork")
+    val network by animateColorAsState(if (selected) picked else palette.textSecondary, tween(200), label = "tabNetwork")
     val fill by animateColorAsState(if (selected) palette.primary.copy(alpha = 0.08f) else Color.Transparent, tween(200), label = "tabFill")
     val stroke by animateColorAsState(if (selected) palette.primary.copy(alpha = 0.35f) else Color.Transparent, tween(200), label = "tabStroke")
     val badge by animateColorAsState(if (selected) palette.primary else palette.outline, tween(200), label = "tabBadge")
@@ -261,12 +280,15 @@ private fun TabChip(group: Group, count: Int, selected: Boolean, fit: TabsFit, m
         } else {
             Column(parts, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(TabSize.narrowSpacing, Alignment.CenterHorizontally),
+                    horizontalArrangement = Arrangement.spacedBy(
+                        if (fit.tight) TabSize.tightSpacing else TabSize.narrowSpacing,
+                        Alignment.CenterHorizontally,
+                    ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (fit.icon) Icon(icon, null, Modifier.size(TabSize.icon), tint = text)
                     TabTitle(group.title, text, Modifier.weight(1f, fill = false))
-                    CountBadge(count, badge, badgeText)
+                    CountBadge(count, badge, badgeText, if (fit.tight) TabSize.tightBadgePad else TabSize.badgePad)
                 }
                 fit.networkSize?.let { NetworkLabel(group, network, it, TabSize.narrowGlyph) }
             }
@@ -288,12 +310,12 @@ private fun TabTitle(title: String, color: Color, modifier: Modifier) {
 }
 
 @Composable
-private fun CountBadge(count: Int, background: Color, color: Color) {
+private fun CountBadge(count: Int, background: Color, color: Color, pad: Dp = TabSize.badgePad) {
     Box(
         Modifier
             .clip(RoundedCornerShape(10.dp))
             .background(background)
-            .padding(horizontal = TabSize.badgePad, vertical = 2.dp),
+            .padding(horizontal = pad, vertical = 2.dp),
     ) {
         Text("$count", color = color, fontSize = TabSize.badge, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
@@ -316,36 +338,61 @@ private fun NetworkLabel(group: Group, color: Color, size: TextUnit, glyph: Dp, 
     }
 }
 
-/** Пинг for every server (the tab on screen first); Стоп with a progress ring while it runs. */
+/**
+ * Пинг for every server (the tab on screen first); Стоп with a progress ring while it runs.
+ * [column]: the icon above the word (phones, two-line tabs), else beside it.
+ */
 @Composable
-private fun PingButton(pinging: Boolean, progress: () -> Float, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun PingButton(pinging: Boolean, progress: () -> Float, onClick: () -> Unit, column: Boolean, modifier: Modifier = Modifier) {
     val palette = Titan.palette
     val haptics = rememberHaptics()
     val shape = RoundedCornerShape(16.dp)
     val lit by animateFloatAsState(if (pinging) 1f else 0f, tween(200), label = "pingFill")
     val text by animateColorAsState(if (pinging) Color.White else MaterialTheme.colorScheme.onSurface, tween(200), label = "pingText")
     val description = if (pinging) "Остановить пинг" else "Пинг всех серверов"
-    Row(
-        modifier
-            .pressable(onClick = {
-                haptics.tap()
-                onClick()
-            })
-            .semantics { contentDescription = description }
-            .heightIn(min = 52.dp)
-            .clip(shape)
-            .background(palette.surface)
-            .background(AccentGradient, shape, alpha = lit)
-            .padding(horizontal = TabSize.pingPad),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(TabSize.pingSpacing),
-    ) {
+    val button = modifier
+        .pressable(onClick = {
+            haptics.tap()
+            onClick()
+        })
+        .semantics { contentDescription = description }
+        .heightIn(min = 52.dp)
+        .clip(shape)
+        .background(palette.surface)
+        .background(AccentGradient, shape, alpha = lit)
+    val icon = @Composable {
         if (pinging) {
             ProgressRing(progress(), Modifier.size(17.dp))
         } else {
             Icon(Icons.Filled.Speed, null, Modifier.size(TabSize.pingIcon), tint = text)
         }
-        Text(if (pinging) "Стоп" else "Пинг", color = text, fontSize = TabSize.ping, fontWeight = FontWeight.SemiBold, maxLines = 1)
+    }
+    val word = if (pinging) "Стоп" else "Пинг"
+    if (column) {
+        Column(
+            button.widthIn(min = TabSize.pingColumn).padding(horizontal = TabSize.pingColumnPad),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(TabSize.pingColumnSpacing, Alignment.CenterVertically),
+        ) {
+            icon()
+            Text(
+                word,
+                color = text,
+                fontSize = TabSize.pingColumnText,
+                lineHeight = TabSize.pingColumnLine,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+    } else {
+        Row(
+            button.padding(horizontal = TabSize.pingPad),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(TabSize.pingSpacing),
+        ) {
+            icon()
+            Text(word, color = text, fontSize = TabSize.ping, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
     }
 }
 
