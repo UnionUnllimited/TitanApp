@@ -2,7 +2,7 @@ import Foundation
 
 /// The subscription's «👇БЕЗЛИМИТНЫЕ👇» row (a placeholder flag before it): it looks like a
 /// section header, yet it is a working config, a balancer over the unlimited servers with
-/// YouTube through nodes of its own. The app lists it first in «Серверы» under one name
+/// YouTube through nodes of its own. The app lists it first in «Страны» under one name
 /// everywhere (Главная, Настройки, the Live Activity, Siri), with АВТО's bolt for its flag.
 enum UnlimitedServer {
     /// Its name in the app, given once where the subscription is parsed (SubscriptionAPI.parseServers).

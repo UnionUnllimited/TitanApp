@@ -403,7 +403,7 @@ enum SubscriptionAPI {
             return Server(id: id, name: shown, host: host, port: port,
                           proto: (proxy["protocol"] as? String) ?? "", xrayJson: json, proxyTag: proxyTag)
         }
-        // First in «Серверы»; favourites still go before it (ServerGroup.ordered).
+        // First in «Страны»; favourites still go before it (ServerGroup.ordered).
         return servers.filter(ServerGroup.isUnlimited) + servers.filter { !ServerGroup.isUnlimited($0) }
     }
 
@@ -433,11 +433,12 @@ enum SubscriptionAPI {
     }
 }
 
-/// Серверы / Обходы, same rules as Android (data/ServerGroups.kt): "Обходы" are the servers
+/// Страны / Обходы, same rules as Android (data/ServerGroups.kt): "Обходы" are the servers
 /// with "обход" in the name; section headers and the panel's info entries aren't servers
-/// (the unlimited servers' row, which looks like one, is).
+/// (the unlimited servers' row, which looks like one, is). The raw value is the tab's title
+/// and is never saved (Главная starts on Страны).
 enum ServerGroup: String, CaseIterable, Identifiable {
-    case servers = "Серверы", bypass = "Обходы"
+    case servers = "Страны", bypass = "Обходы"
     var id: String { rawValue }
 
     static func split(_ servers: [Server]) -> [ServerGroup: [Server]] {
@@ -483,7 +484,7 @@ enum ServerGroup: String, CaseIterable, Identifiable {
         ["127.0.0.1", "0.0.0.0", "localhost", "::1"].contains((host ?? "").lowercased()) || (port.map { $0 <= 1 } ?? false)
     }
 
-    /// «⚡ Безлимитные · все серверы»: a regular server (Серверы), its ping on its balancer's
+    /// «⚡ Безлимитные · все серверы»: a regular server (Страны), its ping on its balancer's
     /// members as АВТО's (XrayPing.tags), the bolt for its flag (FlagCircle).
     static func isUnlimited(_ s: Server) -> Bool { s.id == UnlimitedServer.id }
 }

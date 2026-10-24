@@ -136,7 +136,7 @@ enum VPNIntents {
     /// Bumped on off only: a background switch already starting the tunnel stops it again.
     @MainActor private static var offs = 0
 
-    /// The previous or the next server (SwitchServerIntent): in the current one's tab (Серверы
+    /// The previous or the next server (SwitchServerIntent): in the current one's tab (Страны
     /// or Обходы) as Главная lists it, round the end; on Wi-Fi from a bypass server to a regular
     /// one, as in the app.
     /// Through the app's own objects when they are alive (its screen follows), else with the

@@ -30,7 +30,7 @@ struct HomeView: View {
                                 .padding(.horizontal, 24)
                         }
                         .scrollDisabled(holdingDrag)
-                        ScrollView { VStack(spacing: 10) { list }.padding(16) }
+                        ScrollView { VStack(spacing: 10) { list(wide: true) }.padding(16) }
                             .scrollDisabled(holdingDrag)
                             .refreshable { await store.refreshFromPull() }
                     }
@@ -38,7 +38,7 @@ struct HomeView: View {
                     ScrollView {
                         VStack(spacing: 12) {
                             controls
-                            list
+                            list(wide: false)
                         }
                         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: vpn.isConnected)
                         .padding(16)
@@ -61,7 +61,7 @@ struct HomeView: View {
         .alert("Недоступно на Wi-Fi", isPresented: $wifiInfo) {
             Button("Понятно", role: .cancel) {}
         } message: {
-            Text("Обходы работают только через мобильный интернет и нужны при его ограничениях. На Wi-Fi подключиться к ним нельзя — выберите сервер во вкладке «Серверы».")
+            Text("Обходы работают только через мобильный интернет и нужны при его ограничениях. На Wi-Fi подключиться к ним нельзя — выберите сервер во вкладке «Страны».")
         }
         // Wi-Fi came while on a bypass server: move to a regular one (same as Android).
         .onChange(of: store.onWifi) { wifi in
@@ -195,7 +195,7 @@ struct HomeView: View {
                 return false
             }
             if store.blockedOnWifi(server) {
-                store.showToast("Обходы недоступны на Wi-Fi — выберите сервер во вкладке «Серверы»", .warning)
+                store.showToast("Обходы недоступны на Wi-Fi — выберите сервер во вкладке «Страны»", .warning)
                 return false
             }
             Task { await vpn.connect(server) }
@@ -312,24 +312,26 @@ struct HomeView: View {
         }
     }
 
-    @ViewBuilder private var list: some View {
+    /// Wide: a desktop-sized window, its tabs on one line when they fit.
+    @ViewBuilder private func list(wide: Bool) -> some View {
         if let sub = store.subscription {
             let groups = ServerGroup.split(sub.servers)
             // The tabs and the lines under them kept close: more rows on screen.
             VStack(spacing: 6) {
                 HStack(spacing: 8) {
-                    HStack(spacing: 2) {
-                        ForEach(ServerGroup.allCases) { g in
-                            if let items = groups[g], !items.isEmpty { tabChip(g, items.count) }
+                    if wide {
+                        ViewThatFits(in: .horizontal) {
+                            tabs(groups, oneLine: true)
+                            tabs(groups, oneLine: false)
                         }
+                    } else {
+                        tabs(groups, oneLine: false)
                     }
-                    .padding(4)
-                    .background(Palette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     pingButton(groups)
                 }
                 Group {
                     if page == .servers {
-                        Text("Безлимит на обычных серверах")
+                        Text("Безлимит · работают и на Wi‑Fi, и в мобильной сети")
                     } else if sub.info.total > 0 {
                         HStack(spacing: 6) {
                             Text("Трафик: \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
@@ -344,7 +346,7 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
 
                 if page == .bypass && store.bypassLockedOnWifi {
-                    Text("Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Серверы».")
+                    Text("Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Страны».")
                         .font(.scaled(13)).foregroundStyle(.orange)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
                 }
@@ -386,7 +388,8 @@ struct HomeView: View {
             }
             .font(.scaled(14))
             .foregroundStyle(store.pinging ? Color.white : Color.primary)
-            .padding(.horizontal, 14).frame(height: 52)
+            // As tall as the tabs (50 and their 4 pt padding).
+            .padding(.horizontal, 14).frame(height: 58)
             .background(store.pinging ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Palette.surface),
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .animation(.easeInOut(duration: 0.2), value: store.pinging)
@@ -403,27 +406,83 @@ struct HomeView: View {
         if changed, !store.resumingAfterPing { Task { await vpn.switchTo(s) } }
     }
 
-    private func tabChip(_ g: ServerGroup, _ count: Int) -> some View {
+    /// Страны and Обходы (a group with no servers has no tab).
+    private func tabs(_ groups: [ServerGroup: [Server]], oneLine: Bool) -> some View {
+        HStack(spacing: 2) {
+            ForEach(ServerGroup.allCases) { g in
+                if let items = groups[g], !items.isEmpty { tabChip(g, items.count, oneLine: oneLine) }
+            }
+        }
+        .padding(4)
+        .background(Palette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    /// The name and count, the networks its servers work on under them (beside them on one line).
+    private func tabChip(_ g: ServerGroup, _ count: Int, oneLine: Bool) -> some View {
         let selected = g == page
+        let title = HStack(spacing: 6) {
+            Image(systemName: g.icon)
+            Text(g.rawValue).lineLimit(1).minimumScaleFactor(0.65)
+            Text("\(count)").font(.scaled(12, weight: .semibold))
+                .foregroundStyle(selected ? .white : .secondary)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(selected ? Palette.primary : Palette.outline, in: RoundedRectangle(cornerRadius: 10))
+        }
+        // Smaller when it doesn't fit (a 375 pt iPhone, large text), never cut off.
+        let networks = HStack(spacing: 4) {
+            Image(systemName: g.networksIcon)
+            Text(g.networks).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .font(.scaled(oneLine ? 12 : 11, weight: .medium))
+        .foregroundStyle(selected ? Palette.softPrimary : .secondary)
         return Button {
             if !selected { Haptics.selection() }
             withAnimation(.easeInOut(duration: 0.2)) { page = g }
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: g == .servers ? "server.rack" : "shuffle")
-                Text(g.rawValue).lineLimit(1).minimumScaleFactor(0.7)
-                Text("\(count)").font(.scaled(12, weight: .semibold))
-                    .foregroundStyle(selected ? .white : .secondary)
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(selected ? Palette.primary : Palette.outline, in: RoundedRectangle(cornerRadius: 10))
+            Group {
+                if oneLine {
+                    HStack(spacing: 8) {
+                        title
+                        networks
+                    }
+                } else {
+                    VStack(spacing: 2) {
+                        title
+                        networks
+                    }
+                }
             }
             .font(.scaled(14, weight: .medium))
             .foregroundStyle(selected ? Palette.primary : .secondary)
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .padding(.horizontal, 3)
+            .frame(maxWidth: .infinity, minHeight: 50)
             .background(selected ? Palette.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 13))
             .overlay(RoundedRectangle(cornerRadius: 13).stroke(selected ? Palette.primary.opacity(0.35) : .clear))
         }
         .buttonStyle(PressableStyle(scale: 0.97))
+        .accessibilityLabel("\(g.rawValue), \(ServerGroup.spokenCount(count)), \(g.spokenNetworks)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private extension Palette {
+    /// The selected tab's networks: its blue, lighter.
+    static let softPrimary = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x8AB0FF) : UIColor(hex: 0x3D7BFF) })
+}
+
+/// A tab's look on Главная.
+private extension ServerGroup {
+    var icon: String { self == .servers ? "globe" : "shuffle" }
+    /// Обходы work only over mobile internet (store.bypassLockedOnWifi).
+    var networks: String { self == .servers ? "Wi‑Fi / LTE" : "только LTE" }
+    var networksIcon: String { self == .servers ? "wifi" : "cellularbars" }
+    var spokenNetworks: String { self == .servers ? "работают на Wi-Fi и LTE" : "только LTE" }
+
+    /// 1 сервер, 3 сервера, 29 серверов.
+    static func spokenCount(_ n: Int) -> String {
+        let word = (11...14).contains(n % 100) ? "серверов"
+            : n % 10 == 1 ? "сервер" : (2...4).contains(n % 10) ? "сервера" : "серверов"
+        return "\(n) \(word)"
     }
 }
 
