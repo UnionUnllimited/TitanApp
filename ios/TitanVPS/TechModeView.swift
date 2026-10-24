@@ -212,12 +212,22 @@ struct TunnelMemory {
     func rows(stamp: (Date) -> String) -> [(String, String)] {
         let go = o["go"] as? [String: Any] ?? [:]
         func n(_ key: String, _ d: [String: Any]) -> Int64 { (d[key] as? NSNumber)?.int64Value ?? 0 }
-        func mb(_ key: String, _ d: [String: Any]) -> String { String(format: "%.1f МБ", Double(n(key, d)) / 1_048_576) }
+        func size(_ bytes: Int64) -> String { String(format: "%.1f МБ", Double(bytes) / 1_048_576) }
+        func mb(_ key: String, _ d: [String: Any]) -> String { size(n(key, d)) }
+        // Go's soft limit (none set: the largest Int64).
+        let limit = n("limit", go)
+        let limitText: String = limit > 0 && limit < Int64(1) << 40
+            ? "\(size(limit)): лимит туннеля минус \(mb("nonGo", o)) вне Go (не меньше 12 МБ) и 8 МБ запаса; GOGC \(n("gogc", go))"
+            : "не задан"
+        let outside: Int64 = n("footprint", o) - (n("total", go) - n("released", go))
         var rows: [(String, String)] = [
             ("Занято", "\(mb("footprint", o)) из \(mb("limit", o)), пик \(mb("peak", o))"),
             ("Go", "живая куча \(mb("liveHeap", go)), всего \(mb("total", go)), из них отдано системе \(mb("released", go)), стеки \(mb("stacks", go))"),
+            ("Лимит Go", limitText),
+            ("Вне Go", "\(size(outside)): Swift, NetworkExtension, данные библиотеки"),
             ("Горутин", "\(n("goroutines", go))"),
             ("Перезапуски Xray", "по памяти: \(n("memoryRestarts", o)), при смене сети: \(n("networkRestarts", o))"),
+            ("Без перезапуска", "хватило вернуть память Go: \(n("memoryFrees", o)), перезапуск не помог бы: \(n("memorySkips", o))"),
         ]
         if n("kills", o) > 0, let at = (o["lastKill"] as? NSNumber)?.doubleValue {
             rows.append(("Завершён системой или упал", "всего: \(n("kills", o)), последний — \(stamp(Date(timeIntervalSince1970: at))), было \(mb("lastKillFootprint", o))"))
@@ -286,7 +296,7 @@ struct TechModeView: View {
                         .buttonStyle(.bordered)
                 }
                 card("Память туннеля", memRows,
-                     caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 5 МБ до лимита туннель сам перезапускает Xray, не выключая VPN. При смене сети Xray перезапускается не чаще раза в 20 с; та же сеть после паузы короче 15 с с тем же адресом — без перезапуска. Обновляется каждые 2 с.")
+                     caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 5 МБ до лимита Go сначала возвращает свободную память; если не хватило, туннель перезапускает Xray, не выключая VPN, но только если это освободит хотя бы 3 МБ сверх того, что было после прошлого запуска Xray (в журнале — через 5 с после перезапуска). При смене сети Xray перезапускается не чаще раза в 20 с; та же сеть после паузы короче 15 с с тем же адресом — без перезапуска. Обновляется каждые 2 с.")
                 journalCard
             }
             .padding(16)

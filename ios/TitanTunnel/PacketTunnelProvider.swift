@@ -38,6 +38,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     if let plugin { try self.startPlugin(plugin) }
                     try self.startXray(config)
                     self.running = (config, plugin)
+                    self.setGoLimit()
+                    self.measureAfter(restartAt: nil, line: nil)
                     self.watchNetwork()
                     self.watchMemory()
                     completionHandler(nil)
@@ -63,8 +65,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             memoryTimer = nil
             pressure?.cancel()
             pressure = nil
+            pendingAfter?.cancel()
+            pendingAfter = nil
             running = nil
             _ = Self.invoke("stopXray")
+            // Its pooled connections closed now, not when the process goes.
+            _ = TitanInvoke("{\"method\":\"closeTransports\"}")
             stopPlugin()
             // Already done at the start as a rule; a marker left by a killed run is counted first.
             noteLastRun()
@@ -323,12 +329,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             if let change = owed { note(change.text) }
         }
         lastRestart = Self.clock
-        let before = Self.memoryNow().footprint
+        // The last restart's "after" still to read, a freeMemory's result: this one's now.
+        pendingAfter?.cancel()
+        pendingAfter = nil
+        freedAt = nil
+        let before = (footprint: Self.memoryNow().footprint, go: Self.goRetained())
         _ = Self.invoke("stopXray")
+        // Its transports' pooled connections (XHTTP, gRPC, Hysteria): a new Xray never reuses
+        // them, and they lived on (gRPC's 30 min, Hysteria's for good), restart after restart.
+        _ = TitanInvoke("{\"method\":\"closeTransports\"}")
         // Down until it starts again: a restart after a failed one is always needed.
         startedOn = nil
         stopPlugin()
-        // What the old run held goes back to iOS now (Go keeps freed pages a while).
+        // What the old run held goes back to iOS now (libXray frees once a second anyway).
         _ = TitanInvoke("{\"method\":\"freeMemory\"}")
         do {
             if let plugin = run.plugin { try startPlugin(plugin) }
@@ -338,9 +351,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             owed = nil
             startedOn = lastNetwork
             reasserting = false
+            setGoLimit()
             let after = Self.memoryNow().footprint
-            log.info("restarted (\(memory ? "memory" : "network", privacy: .public)): \(before / Self.mib, privacy: .public) -> \(after / Self.mib, privacy: .public) MiB")
-            if memory { note("перезапуск по памяти: \(Self.mb(before)) → \(Self.mb(after))") }
+            log.info("restarted (\(memory ? "memory" : "network", privacy: .public)): \(before.footprint / Self.mib, privacy: .public) -> \(after / Self.mib, privacy: .public) MiB")
+            var line: String?
+            if memory {
+                let text = "перезапуск по памяти: \(Self.mb(before.footprint)) → \(Self.mb(after))"
+                note(text)
+                line = text
+            }
+            measureAfter(restartAt: before, line: line)
         } catch {
             failures += 1
             let n = failures
@@ -359,26 +379,59 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     // MARK: Memory
 
     /// iOS kills a packet tunnel over its memory limit (about 50 MB) without a word. Close to it
-    /// Xray (and the protocol client) start again on the same network, the VPN reasserting a
-    /// moment: the old run's connections, buffers and UDP flows go. The watchdog never ends the
-    /// tunnel (it can't know if Не отключать VPN would bring it back); a kill is left to that.
+    /// Go first gives back what it can at once; if that isn't enough, Xray (and the protocol
+    /// client) start again on the same network, the VPN reasserting a moment: the old run's
+    /// connections, pools, buffers and UDP flows go. A restart cuts every connection, so it
+    /// comes only if it would free enough: 3 MiB or more above what the last start of Xray left
+    /// (read a few seconds after it). The watchdog never ends the tunnel (it can't know if Не
+    /// отключать VPN would bring it back); a kill is left to that.
     private var memoryTimer: DispatchSourceTimer?
     private var pressure: DispatchSourceMemoryPressure?
     private var checkEvery: TimeInterval = 0
     /// Any restart, for the network or memory (Self.clock): a memory one comes at most once in
-    /// 30 s. Nil before the first.
+    /// 30 s (once in 10 s right at the limit). Nil before the first.
     private var lastRestart: TimeInterval?
     private var memoryRestarts = 0
     private var networkRestarts = 0
+    /// Over the threshold, freeMemory alone brought it under.
+    private var memoryFrees = 0
+    /// Over the threshold, a restart left out: it wouldn't have freed enough.
+    private var memorySkips = 0
+    /// What the last start or restart left, and when (Self.clock): right after it, then read
+    /// again `afterDelay` later. A memory restart frees at most what is above it.
+    private var lastLeft: (bytes: Int64, at: TimeInterval)?
+    /// The "after" read still to come (measureAfter).
+    private var pendingAfter: DispatchWorkItem?
+    /// freeMemory done over the threshold (Self.clock): checkMemory decides on its result
+    /// `settle` later. Critical pressure meanwhile counts then.
+    private var freedAt: TimeInterval?
+    private var freeCritical = false
+    /// The journal said restarts wouldn't help, since the last restart.
+    private var skipNoted = false
+    /// Go's soft limit (titan setMemoryLimit), what isn't Go's, and when it was last set (Self.clock).
+    private var goLimit: Int64 = 0
+    private var nonGo: Int64 = 0
+    private var goLimitAt: TimeInterval?
     private var peak: Int64 = 0
     private var lastMarker = Date.distantPast
     private var record = RunRecord()
     /// memory.json read (noteLastRun): nothing writes it before.
     private var recordLoaded = false
 
+    private typealias Memory = (footprint: Int64, limit: Int64, remaining: Int64, available: Int64)
     private static let mib: Int64 = 1 << 20
     /// Above it the checks and the marker come every second.
     private static let busy = 35 * mib
+    /// A restart that would free less than this isn't worth cutting every connection for (the
+    /// ones that did nothing freed 0-3 MB).
+    private static let minGain = 3 * mib
+    /// What a restart left counts this long: the old run's memory may have gone since.
+    private static let leftCountsFor: TimeInterval = 600
+    /// freeMemory's result is read this much later.
+    private static let settle: TimeInterval = 0.3
+    /// A restart's "after" is read this much later, with the new Xray's first connections and
+    /// probes up.
+    private static let afterDelay: TimeInterval = 5
 
     private func watchMemory() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -387,20 +440,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         checkEvery = 0
         checkMemory()
         timer.resume()
-        // System-wide pressure: Go's free pages back at once, and a restart sooner on critical.
+        // System-wide pressure: Go's free pages back at once, its limit for what is left, and a
+        // restart sooner on critical.
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: queue)
         source.setEventHandler { [weak self] in
             guard let self, let event = self.pressure?.data else { return }
             self.log.notice("memory pressure: \(event.contains(.critical) ? "critical" : "warning", privacy: .public)")
             _ = TitanInvoke("{\"method\":\"freeMemory\"}")
+            self.setGoLimit()
             self.checkMemory(critical: event.contains(.critical))
         }
         source.resume()
         pressure = source
     }
 
-    /// Every 10 s, every second above 35 MiB, every 200 ms within 10 MiB of the limit; within
-    /// 5 MiB (or within 10 on critical pressure) Xray starts again.
+    /// Every 10 s, every second above 35 MiB, every 200 ms within 10 MiB of the limit. Within
+    /// 5 MiB (or within 10 on critical pressure): freeMemory, and if it is still over a moment
+    /// later, a restart, if that would free enough.
     private func checkMemory(critical: Bool = false) {
         guard !stopped, running != nil else { return }
         let m = Self.memoryNow()
@@ -412,30 +468,115 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             checkEvery = every
             memoryTimer?.schedule(deadline: .now() + every, repeating: every, leeway: .milliseconds(every < 1 ? 50 : 500))
         }
-        guard m.footprint >= m.limit - 5 * Self.mib || (critical && armed) else { return }
-        // One just now, or no network to start on: not now. A restart waiting (a network one may
-        // wait up to 20 s) is done now instead: it frees as much.
-        guard network != nil, lastRestart.map({ Self.clock - $0 >= 30 }) ?? true else { return }
+        if goLimitAt.map({ Self.clock - $0 >= 10 }) ?? true { setGoLimit(m) }
+        let over = m.footprint >= m.limit - 5 * Self.mib || ((critical || freeCritical) && armed)
+        if let at = freedAt {
+            // freeMemory's result: in a moment, then this decides.
+            guard Self.clock - at >= Self.settle - 0.05 else {
+                freeCritical = freeCritical || critical
+                return
+            }
+            freedAt = nil
+            freeCritical = false
+            guard over else {
+                memoryFrees += 1
+                log.notice("memory: \(m.footprint / Self.mib, privacy: .public) MiB after freeMemory, no restart")
+                return
+            }
+        } else {
+            guard over else { return }
+            // What Go can give back at once first: a restart only if that isn't enough.
+            _ = TitanInvoke("{\"method\":\"freeMemory\"}")
+            freedAt = Self.clock
+            freeCritical = critical
+            queue.asyncAfter(deadline: .now() + Self.settle) { [weak self] in self?.checkMemory() }
+            return
+        }
+        // No network to start on: not now. A restart waiting (a network one may wait up to 20 s)
+        // is done now instead: it frees as much.
+        guard network != nil else { return }
+        // One just now: not again for 30 s, or 10 s right at the limit.
+        let since = lastRestart.map { Self.clock - $0 } ?? .infinity
+        guard since >= 30 || (since >= 10 && m.footprint >= m.limit - 2 * Self.mib) else { return }
+        // It frees at most what is above what the last start of Xray left.
+        let left = lastLeft.flatMap { Self.clock - $0.at < Self.leftCountsFor ? $0.bytes : nil }
+        if let left, m.footprint - left < Self.minGain {
+            if !skipNoted {
+                skipNoted = true
+                memorySkips += 1
+                note("перезапуск по памяти не поможет: \(Self.mb(m.footprint)), после прошлого запуска Xray было \(Self.mb(left))")
+            }
+            log.info("memory: \(m.footprint / Self.mib, privacy: .public) MiB, the last restart left \(left / Self.mib, privacy: .public): no restart")
+            return
+        }
         log.notice("memory: \(m.footprint / Self.mib, privacy: .public) of \(m.limit / Self.mib, privacy: .public) MiB, restarting")
         restart(memory: true)
     }
 
+    /// What the start or restart just done left: now, and `afterDelay` later, when the new
+    /// Xray's first connections are up (what the next memory restart is measured against). A
+    /// memory restart's journal line [line] then gets that value in place of the one right after.
+    private func measureAfter(restartAt before: (footprint: Int64, go: Int64?)?, line: String?) {
+        pendingAfter?.cancel()
+        lastLeft = (Self.memoryNow().footprint, Self.clock)
+        skipNoted = false
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped, self.running != nil else { return }
+            self.pendingAfter = nil
+            let after = Self.memoryNow().footprint
+            self.lastLeft = (after, Self.clock)
+            guard let before, let line else { return }
+            var text = "перезапуск по памяти: \(Self.mb(before.footprint)) → \(Self.mb(after)) через \(Int(Self.afterDelay)) с"
+            if let was = before.go, let now = Self.goRetained() { text += " (Go \(Self.mb(was)) → \(Self.mb(now)))" }
+            self.replaceNote(line, with: text)
+        }
+        pendingAfter = work
+        queue.asyncAfter(deadline: .now() + Self.afterDelay, execute: work)
+    }
+
+    /// Go's soft limit for the extension's limit and what isn't Go's now (titan setMemoryLimit:
+    /// the limit less the rest and 8 MiB, 24 MiB at least). After each start, since libXray's
+    /// first runXray sets its own 30 MiB, then every 10 s and on memory pressure.
+    private func setGoLimit(_ now: Memory? = nil) {
+        let m = now ?? Self.memoryNow()
+        goLimitAt = Self.clock
+        let reply = TitanInvoke("{\"method\":\"setMemoryLimit\",\"limit\":\(m.limit),\"footprint\":\(m.footprint)}")
+        let obj = (try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any]
+        if let limit = (obj?["goLimit"] as? NSNumber)?.int64Value, let rest = (obj?["nonGo"] as? NSNumber)?.int64Value {
+            goLimit = limit
+            nonGo = rest
+        }
+    }
+
     /// The footprint (what jetsam counts) and the limit: the footprint and what iOS says is left,
     /// or 50 MiB if it doesn't say.
-    private static func memoryNow() -> (footprint: Int64, limit: Int64, remaining: Int64, available: Int64) {
+    private static func memoryNow() -> Memory {
         let m = titan_mem_read()
         let left = m.available > 0 ? m.available : m.remaining
         return (m.footprint, left > 0 ? m.footprint + left : 50 * mib, m.remaining, m.available)
     }
 
+    /// The Go runtime's memory (titan memStats).
+    private static func memStats() -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: Data(TitanInvoke("{\"method\":\"memStats\"}").utf8))) as? [String: Any]
+    }
+
+    /// What Go holds now, as its soft limit counts it (all it mapped less what it gave back).
+    private static func goRetained() -> Int64? {
+        guard let go = memStats(), let total = (go["total"] as? NSNumber)?.int64Value,
+              let released = (go["released"] as? NSNumber)?.int64Value else { return nil }
+        return total - released
+    }
+
     /// Технический режим's «Память туннеля».
     private func memoryReport() -> Data? {
         let m = Self.memoryNow()
-        let go = (try? JSONSerialization.jsonObject(with: Data(TitanInvoke("{\"method\":\"memStats\"}").utf8))) as? [String: Any]
         var out: [String: Any] = [
             "footprint": m.footprint, "peak": max(peak, m.footprint), "limit": m.limit,
-            "remaining": m.remaining, "available": m.available, "go": go ?? [:],
+            "remaining": m.remaining, "available": m.available, "go": Self.memStats() ?? [:],
+            "goLimit": goLimit, "nonGo": nonGo,
             "memoryRestarts": memoryRestarts, "networkRestarts": networkRestarts,
+            "memoryFrees": memoryFrees, "memorySkips": memorySkips,
             "kills": record.kills, "log": record.log,
         ]
         if let at = record.lastKill {
@@ -485,6 +626,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func note(_ text: String, at date: Date = Date()) {
         record.log = Array((record.log + ["\(Self.stamp.string(from: date)) \(text)"]).suffix(20))
+        saveRecord()
+    }
+
+    /// The newest journal line with [old] gets [new] in its place, its time kept.
+    private func replaceNote(_ old: String, with new: String) {
+        guard let i = record.log.lastIndex(where: { $0.hasSuffix(" " + old) }) else { return }
+        record.log[i] = String(record.log[i].dropLast(old.count)) + new
+        saveRecord()
+    }
+
+    private func saveRecord() {
         if let data = try? JSONEncoder().encode(record) { try? data.write(to: Self.recordURL, options: .atomic) }
     }
 

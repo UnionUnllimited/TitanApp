@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
+	"runtime/debug"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,5 +131,42 @@ func TestMemStats(t *testing.T) {
 		if n, ok := m[k].(float64); !ok || n <= 0 {
 			t.Fatalf("%s: %v", k, m[k])
 		}
+	}
+}
+
+// The soft limit: the extension's limit less the rest (at least 12 MiB) and 8 MiB, at least
+// 24 MiB; memStats reports it.
+func TestMemoryLimit(t *testing.T) {
+	defer debug.SetMemoryLimit(math.MaxInt64)
+	call(t, map[string]any{"method": "freeMemory"})
+	m := call(t, map[string]any{"method": "memStats"})
+	goRetained := int64(m["total"].(float64) - m["released"].(float64))
+	for _, c := range []struct {
+		limit, rest, want int64
+		exact             bool
+	}{
+		{50 << 20, 10 << 20, 30 << 20, true}, // the rest under 12 MiB counts as 12
+		{50 << 20, 16 << 20, 26 << 20, false},
+		{30 << 20, 10 << 20, 24 << 20, true}, // never under 24 MiB
+	} {
+		r := call(t, map[string]any{"method": "setMemoryLimit", "limit": c.limit, "footprint": goRetained + c.rest})
+		got := int64(r["goLimit"].(float64))
+		if c.exact && got != c.want || !c.exact && math.Abs(float64(got-c.want)) > 1<<20 {
+			t.Fatalf("limit %d, rest %d: %d, want %d", c.limit>>20, c.rest>>20, got, c.want)
+		}
+		if l := int64(call(t, map[string]any{"method": "memStats"})["limit"].(float64)); l != got {
+			t.Fatalf("memStats limit %d, set %d", l, got)
+		}
+	}
+	b, _ := json.Marshal(map[string]any{"method": "setMemoryLimit"})
+	if out := Invoke(string(b)); !strings.Contains(out, "error") {
+		t.Fatalf("no limit: %s", out)
+	}
+}
+
+// Nothing pooled outside a running Xray: nothing to close, and no error.
+func TestCloseTransports(t *testing.T) {
+	if n, ok := call(t, map[string]any{"method": "closeTransports"})["closed"].(float64); !ok || n != 0 {
+		t.Fatalf("closed %v", n)
 	}
 }
