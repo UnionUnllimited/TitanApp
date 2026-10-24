@@ -224,7 +224,9 @@ struct HomeView: View {
             HStack(spacing: 6) {
                 if let s = store.selected {
                     FlagCircle(server: s.name, size: 20)
-                    Text(s.name.splitFlag.1 + (store.pings[s.id].flatMap { $0 >= 0 ? " · \($0) мс" : nil } ?? ""))
+                    // The server's Пинг is a cold delay (a fresh handshake), not latency: not under the
+                    // status while connected, where «Проверить соединение» shows the warm one (as on Android).
+                    Text(s.name.splitFlag.1 + (vpn.isConnected ? "" : store.pings[s.id].flatMap { $0 >= 0 ? " · \($0) мс" : nil } ?? ""))
                         .lineLimit(1)
                 } else {
                     Text("Выберите сервер")
