@@ -162,6 +162,23 @@ object WindowCorners {
     private const val DWMWA_WINDOW_CORNER_PREFERENCE = 33
     private const val DWMWCP_ROUND = 2
 
+    /**
+     * Maximized, a frameless window covers the whole screen, the taskbar too: it is kept to
+     * the work area of the screen it is on (again after each move to another screen).
+     */
+    fun keepTaskbar(frame: java.awt.Frame) {
+        fun fit() {
+            val gc = frame.graphicsConfiguration ?: return
+            val b = gc.bounds
+            val i = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(gc)
+            frame.maximizedBounds = java.awt.Rectangle(b.x + i.left, b.y + i.top, b.width - i.left - i.right, b.height - i.top - i.bottom)
+        }
+        fit()
+        frame.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentMoved(e: java.awt.event.ComponentEvent) = fit()
+        })
+    }
+
     fun round(window: java.awt.Window) {
         if (!isWindows) return
         runCatching {

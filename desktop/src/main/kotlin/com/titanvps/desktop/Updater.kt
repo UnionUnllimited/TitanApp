@@ -196,11 +196,12 @@ object Updater {
                 // The installer should start the new version itself, but doesn't always.
                 (if (exe != null) "if (-not (Get-Process 'Titan VPS')) { Start-Process -FilePath ${q(exe)} }\n" else "") +
                 """
-                # The window stays until the new version shows its own.
+                # The window stays until the new version starts: its own start-up window (the
+                # splash) shows the progress from there, not under this one.
                 ${'$'}until = (Get-Date).AddSeconds(45)
                 while ((Get-Date) -lt ${'$'}until) {
-                    if (Get-Process 'Titan VPS' | Where-Object { ${'$'}_.MainWindowHandle -ne 0 }) { break }
-                    Pump 0.5
+                    if (Get-Process 'Titan VPS') { Pump 0.7; break }
+                    Pump 0.3
                 }
                 ${'$'}form.Close()
                 """.trimIndent() + "\n",

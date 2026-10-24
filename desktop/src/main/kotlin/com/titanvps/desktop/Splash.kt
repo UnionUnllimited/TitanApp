@@ -1,5 +1,6 @@
 package com.titanvps.desktop
 
+import java.awt.AlphaComposite
 import java.awt.Color
 import java.awt.Font
 import java.awt.RenderingHints
@@ -11,7 +12,6 @@ import java.awt.SplashScreen
  * look like nothing happens. It closes by itself when the main window opens.
  */
 object Splash {
-    private val BG = Color(14, 19, 29)
     private val TEXT = Color(140, 150, 168)
     private val TRACK = Color(31, 38, 51)
     private val BRAND = Color(26, 102, 255)
@@ -28,8 +28,11 @@ object Splash {
             val g = splash.createGraphics()
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-            g.color = BG
+            // The previous step off: the overlay is cleared there, so the picture (its light
+            // isn't flat) shows through again.
+            g.composite = AlphaComposite.Clear
             g.fillRect(1, 222, size.width - 2, 56)
+            g.composite = AlphaComposite.SrcOver
             g.font = Font("Segoe UI", Font.PLAIN, 13)
             g.color = TEXT
             val w = g.fontMetrics.stringWidth(text)
