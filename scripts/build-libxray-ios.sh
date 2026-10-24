@@ -45,14 +45,27 @@ PY
 # Real TCP Fast Open on iOS: Xray-core is patched (scripts/ios-patches/xray-tfo) to dial
 # tcpFastOpen hosts through tfo-go, which sends the first data in the SYN via connectx().
 "$ROOT/scripts/ios-patches/xray-tfo/vendor.sh" "$WORK"
-# The TUN's gVisor stack within the tunnel's memory: smaller TCP buffers, UDP flows ended
-# with the stack. iOS only (xray-tfo is Windows' too), on the copy vendor.sh just made.
+# Xray within the tunnel's memory: the TUN's gVisor stack (smaller TCP buffers, UDP flows
+# ended with the stack), the transports (smaller windows, pools closed on a restart) and the
+# observatory (a few probes at once). iOS only (xray-tfo is Windows' too), on the copy
+# vendor.sh just made.
 XRAY="$(dirname "$WORK")/Xray-core"
-python3 "$ROOT/scripts/ios-patches/xray-mem/apply.py" "$XRAY"
+MEM="$ROOT/scripts/ios-patches/xray-mem"
+python3 "$MEM/apply.py" "$XRAY"
 if grep -qs titanCloseAll "$XRAY/proxy/tun/udp_fullcone.go"; then
-  cp "$ROOT/scripts/ios-patches/xray-mem/titan_udp_close_test.go" "$XRAY/proxy/tun/"
+  cp "$MEM/titan_udp_close_test.go" "$XRAY/proxy/tun/"
   (cd "$XRAY" && go test -count=1 -v -run TestTitanUDPClose ./proxy/tun/)
   rm "$XRAY/proxy/tun/titan_udp_close_test.go"
+fi
+if [ -f "$XRAY/transport/internet/titan_mem.go" ]; then
+  # quic-go keeping to Xray's receive windows under Chrome parroting (Hysteria, XHTTP/3).
+  "$MEM/vendor_quic.sh" "$WORK"
+  TESTS="app/observatory/burst/titan_pacing_test.go transport/internet/splithttp/titan_h2_test.go
+    transport/internet/grpc/titan_grpc_test.go transport/internet/hysteria/titan_quic_test.go"
+  for t in $TESTS; do cp "$MEM/$(basename "$t")" "$XRAY/$t"; done
+  (cd "$XRAY" && go test -count=1 -v -run 'TestTitan(Pacing|H2|GRPC|QUICWindows)' \
+    ./app/observatory/burst/ ./transport/internet/splithttp/ ./transport/internet/grpc/ ./transport/internet/hysteria/)
+  for t in $TESTS; do rm "$XRAY/$t"; done
 fi
 # Our protocol clients (sing-box: TUIC / AnyTLS / ShadowTLS / SSH, and mieru) in the same
 # framework: one Go runtime per app. Package titan, bound next to libXray's.

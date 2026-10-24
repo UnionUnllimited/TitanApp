@@ -12,10 +12,14 @@
 //	{"method": "tfoStats"}                                             -> {"dials": n, ...}
 //	{"method": "memStats"}                                             -> {"liveHeap": n, ...}
 //	{"method": "freeMemory"}                                           -> {}
+//	{"method": "setMemoryLimit", "limit": n, "footprint": f}           -> {"goLimit": n, "nonGo": m, "why": w, ...}
+//	{"method": "closeTransports"}                                      -> {"closed": n}
 //
 // tfoStats is what Xray's TCP Fast Open dials in this process did, by the kernel's own
 // record (the xray-tfo patch: internet.TitanTFOStats). memStats is the Go runtime's memory
-// and freeMemory gives what it can back to the OS at once (memory.go).
+// and freeMemory gives what it can back to the OS at once; setMemoryLimit sets Go's soft
+// limit for the extension's limit (bytes) and what Go needs; closeTransports closes the connections Xray's
+// transports keep pooled, once no Xray runs (the xray-mem patch). All in memory.go.
 //
 // Errors come back as {"error": "..."}.
 package titan
@@ -36,6 +40,9 @@ type request struct {
 	Profile string `json:"profile"`
 	Port    int    `json:"port"`
 	Handle  int    `json:"handle"`
+	// setMemoryLimit: the extension's memory limit and footprint now, bytes.
+	Limit     int64 `json:"limit"`
+	Footprint int64 `json:"footprint"`
 }
 
 var (
@@ -80,6 +87,10 @@ func Invoke(requestJSON string) string {
 		return memStats()
 	case "freeMemory":
 		return freeMemory()
+	case "setMemoryLimit":
+		return setMemoryLimit(req.Limit, req.Footprint)
+	case "closeTransports":
+		return closeTransports()
 	}
 	return answer(nil, errors.New("unknown method "+req.Method))
 }
