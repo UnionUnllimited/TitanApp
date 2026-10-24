@@ -7,6 +7,7 @@ import (
 	gonet "net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -244,4 +245,144 @@ func TestTitanH2Retired(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the idle connection is still open")
 	}
+}
+
+// Proxied connections whose apps stopped reading (a paused or full-buffered player, a suspended
+// app) on one XHTTP HTTP/2 connection, at 150 ms RTT: each holds its stream's 1 MiB at most,
+// and another stream on it (the video being watched) keeps its full speed, a stream window per
+// RTT. Go's client gives the connection's credit back only as a body is read: with a 4 MiB
+// connection window 4 stalled streams left the others ~3 Mbit/s and 5 froze them.
+func TestTitanH2Stalled(t *testing.T) {
+	ln, err := gonet.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	// Each response's body as fast as the client's windows let it.
+	var sent [8]atomic.Int64
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go (&http2.Server{}).ServeConn(conn, &http2.ServeConnOpts{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				i := int(r.URL.Path[1] - '0')
+				w.WriteHeader(http.StatusOK)
+				buf := make([]byte, 16<<10)
+				for {
+					n, err := w.Write(buf)
+					sent[i].Add(int64(n))
+					if err != nil {
+						return
+					}
+					w.(http.Flusher).Flush()
+				}
+			})})
+		}
+	}()
+	line := titanDelayLine(t, ln.Addr().String(), 75*time.Millisecond)
+	dial := func(ctx context.Context) (net.Conn, error) { return gonet.Dial("tcp", line) }
+	tr := titanH2Transport(dial, &internet.MemoryStreamConfig{}, time.Minute, 0)
+	defer tr.CloseIdleConnections()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	get := func(i int) *http.Response {
+		req, _ := http.NewRequestWithContext(ctx, "GET", "https://titan.test/"+string(rune('0'+i)), nil)
+		resp, err := tr.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	// The video, read all along.
+	video := get(0)
+	var got atomic.Int64
+	go func() {
+		buf := make([]byte, 32<<10)
+		for {
+			n, err := video.Body.Read(buf)
+			got.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}()
+	stalled := 0
+	for _, n := range []int{4, 5} {
+		// Bodies never read.
+		for ; stalled < n; stalled++ {
+			get(stalled + 1)
+		}
+		time.Sleep(time.Second)
+		before := got.Load()
+		time.Sleep(2 * time.Second)
+		flowed := got.Load() - before
+		var held int64
+		for i := 1; i <= n; i++ {
+			h := sent[i].Load()
+			if h > titanH2StreamWindow+64<<10 {
+				t.Fatalf("%d stalled: stream %d holds %d KiB", n, i, h>>10)
+			}
+			held += h
+		}
+		t.Logf("%d stalled streams hold %d KiB: the video read %d KiB in 2 s", n, held>>10, flowed>>10)
+		// At full speed ~13 MiB (1 MiB per 150 ms).
+		if flowed < 4<<20 {
+			t.Fatalf("%d stalled streams: the video read %d KiB in 2 s", n, flowed>>10)
+		}
+	}
+}
+
+// titanDelayLine forwards TCP connections to addr, each way delay later (no bandwidth limit),
+// and gives its own address.
+func titanDelayLine(t *testing.T, addr string, delay time.Duration) string {
+	ln, err := gonet.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	forward := func(dst, src gonet.Conn) {
+		type chunk struct {
+			b  []byte
+			at time.Time
+		}
+		ch := make(chan chunk, 4096)
+		go func() {
+			defer dst.Close()
+			for c := range ch {
+				time.Sleep(time.Until(c.at))
+				if _, err := dst.Write(c.b); err != nil {
+					return
+				}
+			}
+		}()
+		defer close(ch)
+		for {
+			b := make([]byte, 32<<10)
+			n, err := src.Read(b)
+			if n > 0 {
+				ch <- chunk{b[:n], time.Now().Add(delay)}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			u, err := gonet.Dial("tcp", addr)
+			if err != nil {
+				c.Close()
+				continue
+			}
+			go forward(u, c)
+			go forward(c, u)
+		}
+	}()
+	return ln.Addr().String()
 }

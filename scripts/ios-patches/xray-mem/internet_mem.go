@@ -47,19 +47,26 @@ func TitanCloseTransports() int {
 }
 
 // QUIC receive windows (Hysteria, XHTTP over HTTP/3): at most this much of a stream or a
-// connection waits unread in memory when the reader stalls (a player with a full buffer),
-// once the windows the handshake gave are used up. With Chrome parroting (Xray's default)
-// the handshake gives Chrome's (the fingerprint) and they can't be taken back: a fresh
-// connection may have up to 15 MiB waiting until about 9 MiB of it is read, each new stream
-// 6 MiB until about 5 MiB of it is read (test: 3 streams never read on a fresh connection
-// hold 15 MiB; with DisableChromeParrot 1 MiB each). Every connection is fresh after a
-// restart (TitanCloseTransports). Only quicParams' disableChromeParrot bounds that from the
-// handshake on, and it changes the fingerprint: not done here. 8 MiB for the connection: a
-// new stream that stalls holds 6 of it, the others get 2 (2 MiB left them nothing: the video
-// playing on the connection froze).
+// connection waits unread in memory when readers stall (a paused or full-buffered player, a
+// suspended app), once the windows the handshake gave are used up. With Chrome parroting
+// (Xray's default) the handshake gives Chrome's (the fingerprint) and they can't be taken
+// back: each new stream may hold 6 MiB until about 5 MiB of it is read, a fresh connection
+// 15 MiB (test: 3 streams never read on a fresh connection hold 15 MiB; with
+// DisableChromeParrot 1 MiB each). Only quicParams' disableChromeParrot bounds that from the
+// handshake on, and it changes the fingerprint: not done here.
+//
+// What stalled streams hold of the connection's window, its other streams don't get. 16 MiB:
+// two new streams that stall (12 MiB) leave the others 4, one new and one old (7 MiB) 9. With
+// 8 MiB either froze the whole connection (all TCP through that server) until one of them
+// closed: the two new ones take all of it, and quic-go sent MAX_DATA only once a quarter of
+// the window was read, which stalled streams holding over 6 MiB never let happen. quic_go.py
+// updates the window when the peer runs short too, so only stalled streams filling all of it
+// stop the others; both are needed (16 MiB alone still froze with two new ones: 12 MiB, three
+// quarters). The price: a connection may hold 16 MiB unread, not 8; only stalled streams fill
+// it (each holds what it holds whatever the window), and a fresh one held 15 already.
 const (
 	TitanQUICStreamWindow = 1 << 20
-	TitanQUICConnWindow   = 8 << 20
+	TitanQUICConnWindow   = 16 << 20
 )
 
 // TitanQUICWindows caps c's receive windows (0, quic-go's default, is 6 / 15 MiB: capped too).

@@ -15,13 +15,18 @@ import (
 	"golang.org/x/net/http2"
 )
 
-// What an XHTTP HTTP/2 connection holds unread when its reader stalls (a player with a full
-// buffer): Go's client defaults are 4 MiB per stream and 1 GiB per connection, 1 MiB still
-// carries ~70 Mbit/s at 100 ms. The frames either side sends are 16 KiB at most (see
-// titanH2Conn; ours, or the framer's buffer grows to the server's).
+// What an XHTTP HTTP/2 stream and connection hold unread when readers stall (a paused or
+// full-buffered player, a suspended app): Go's client defaults are 4 MiB per stream and 1 GiB
+// per connection, 1 MiB still carries ~70 Mbit/s at 100 ms. Go's client gives the connection's
+// credit back only as a body is read, so what stalled streams hold of the connection's window,
+// its other streams (every proxied connection XMUX put on it) don't get: with 4 MiB, 4 stalled
+// streams left the others ~3 Mbit/s at 150 ms and 5 froze it. 16 MiB: 12 stalled streams still
+// leave 4. The price: a connection may hold 16 MiB unread, not 4, but only stalled streams fill
+// it, 1 MiB each at most whatever the window. The frames either side sends are 16 KiB at most
+// (see titanH2Conn; ours, or the framer's buffer grows to the server's).
 const (
 	titanH2StreamWindow = 1 << 20
-	titanH2ConnWindow   = 4 << 20
+	titanH2ConnWindow   = 16 << 20
 	titanH2FrameSize    = 16 << 10
 )
 

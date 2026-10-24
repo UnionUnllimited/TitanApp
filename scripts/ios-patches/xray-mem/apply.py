@@ -13,12 +13,15 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
 - XHTTP, gRPC and Hysteria pools closed on request (internet.TitanCloseTransports, titan's
   closeTransports after stopXray): keyed by the instance's own stream settings, a restart
   left the old instance's whole set alive. A retired XMUX client's idle HTTP/2 connection
-  closes at once, not after 300 s idle.
-- Receive windows: XHTTP's HTTP/2 1 MiB per stream / 4 MiB per connection (Go: 4 MiB / 1 GiB),
+  closes at once, not after 300 s idle. Hysteria's cleaner no longer waits for a dialing
+  client under the pool's lock (closeTransports waited with it).
+- Receive windows: XHTTP's HTTP/2 1 MiB per stream / 16 MiB per connection (Go: 4 MiB / 1 GiB),
   16 KiB frames both ways (the server's 1 MiB frame size gave each stream-up upload a 512 KiB
-  buffer); gRPC fixed 1 / 4 MiB (the BDP estimate grows to 16 MiB); QUIC 1 / 8 MiB (with the
-  quic-go patch, quic_go.py; 8 MiB: a new stream still opens with Chrome's 6, a fresh
-  connection with its 15). Which servers are used doesn't change.
+  buffer); gRPC fixed 1 / 4 MiB (the BDP estimate grows to 16 MiB); QUIC 1 / 16 MiB (with the
+  quic-go patch, quic_go.py; a new stream still opens with Chrome's 6, a fresh connection with
+  its 15). The connections' windows leave the other streams room next to a few that stall
+  (16 MiB: 12 stalled HTTP/2 streams, two new QUIC ones). Which servers are used doesn't
+  change.
 - The burst observatory probes at most 4 subjects at once in its rounds (all 60-85 together at
   each start before); the first check at a start 12 at once, starting in its own order: the
   subjects' groups (subjectSelector prefixes) taken in turn, each shuffled, so every group
@@ -156,6 +159,9 @@ changes = {
         ("\tif quicParams.MaxIdleTimeout == 0 {\n\t\tquicConfig.MaxIdleTimeout = 30 * time.Second\n\t}\n",
          "\tif quicParams.MaxIdleTimeout == 0 {\n\t\tquicConfig.MaxIdleTimeout = 30 * time.Second\n\t}\n"
          "\t// Titan patch: smaller receive windows.\n\tinternet.TitanQUICWindows(quicConfig)\n"),
+        ("\t\tm.RLock()\n\t\tfor _, c := range m.m {\n\t\t\tc.clean()\n\t\t}\n\t\tm.RUnlock()\n",
+         "\t\t// Titan patch: cleaned outside the pool's lock (titan_mem.go).\n"
+         "\t\tfor _, c := range m.titanClients() {\n\t\t\tc.clean()\n\t\t}\n"),
     ],
 }
 files = {"internet_mem.go": "transport/internet", "splithttp_mem.go": "transport/internet/splithttp",

@@ -53,6 +53,20 @@ func titanCloseAll() int {
 	return len(clients)
 }
 
+// titanClients is the pool's clients now, for the cleaner to clean after RUnlock (dialer.go):
+// a client is locked while it dials (up to a handshake timeout), and the cleaner waiting for
+// it under RLock held up titanCloseAll's Lock, and with it the tunnel's queue
+// (closeTransports), until a dial of the stopped instance was done.
+func (m *clientManager) titanClients() []*client {
+	m.RLock()
+	defer m.RUnlock()
+	clients := make([]*client, 0, len(m.m))
+	for _, c := range m.m {
+		clients = append(clients, c)
+	}
+	return clients
+}
+
 // titanClose closes the clients' connections (a QUIC close only sends a packet).
 func titanClose(clients []*client) {
 	for _, c := range clients {

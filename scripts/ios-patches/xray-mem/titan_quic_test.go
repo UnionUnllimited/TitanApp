@@ -26,63 +26,9 @@ import (
 func TestTitanQUICWindows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour)},
-		&x509.Certificate{SerialNumber: big.NewInt(1)}, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln, err := quic.ListenAddr("127.0.0.1:0", &gotls.Config{
-		Certificates: []gotls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, NextProtos: []string{"titan"},
-	}, &quic.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	// Each stream: its number first, then the server writes to it as fast as it may.
 	var sent [10]atomic.Int64
-	go func() {
-		for {
-			conn, err := ln.Accept(ctx)
-			if err != nil {
-				return
-			}
-			go func() {
-				for {
-					str, err := conn.AcceptStream(ctx)
-					if err != nil {
-						return
-					}
-					go func() {
-						b := make([]byte, 1)
-						if _, err := io.ReadFull(str, b); err != nil || int(b[0]) >= len(sent) {
-							return
-						}
-						buf := make([]byte, 16<<10)
-						for {
-							n, err := str.Write(buf)
-							sent[b[0]].Add(int64(n))
-							if err != nil {
-								return
-							}
-						}
-					}()
-				}
-			}()
-		}
-	}()
-	dial := func(cfg *quic.Config) (*quic.Conn, *quic.Transport) {
-		udp, err := gonet.ListenUDP("udp", &gonet.UDPAddr{IP: gonet.IPv4(127, 0, 0, 1)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		tr := &quic.Transport{Conn: udp, ConnectionIDGenerator: quic.ZeroLengthConnectionIDGenerator{}}
-		conn, err := tr.Dial(ctx, ln.Addr(), &gotls.Config{InsecureSkipVerify: true, NextProtos: []string{"titan"}}, cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return conn, tr
-	}
+	addr := titanQUICServer(t, ctx, sent[:])
+	dial := func(cfg *quic.Config) (*quic.Conn, *quic.Transport) { return titanQUICDial(t, ctx, addr, cfg) }
 
 	// A fresh connection, 3 streams never read: with Chrome parroting what the handshake gave
 	// (6 MiB a stream, 15 the connection) at most, without it the caps from the start.
@@ -218,4 +164,186 @@ func TestTitanQUICWindows(t *testing.T) {
 	if _, ok := manager.m[dialerConf{MemoryStreamConfig: cur}]; !ok || len(manager.m) != 1 {
 		t.Fatalf("pool after the sweep: %d", len(manager.m))
 	}
+}
+
+// Streams whose readers stall (a paused or full-buffered player, a suspended app) next to one
+// that is read (the video being watched), on a connection past Chrome's opening windows: each
+// stalled one holds its window, the connection at most its cap, and the read one keeps flowing.
+// With an 8 MiB window one old and one new stalled stream (7 MiB) or two new ones froze it, and
+// with it every stream of the connection (all TCP through that server); two old and two new
+// (14 MiB) froze 16 MiB until quic-go updated the window before a quarter of it was read
+// (quic_go.py).
+func TestTitanQUICStalled(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	var sent [8]atomic.Int64
+	addr := titanQUICServer(t, ctx, sent[:])
+	for _, c := range []struct {
+		name     string
+		old, new int
+	}{{"one old and one new", 1, 1}, {"two new", 0, 2}, {"two old and two new", 2, 2}} {
+		// Xray's Hysteria defaults, then the caps.
+		cfg := &quic.Config{ChromeParrot: true, InitialStreamReceiveWindow: 8 << 20, MaxStreamReceiveWindow: 8 << 20,
+			InitialConnectionReceiveWindow: 20 << 20, MaxConnectionReceiveWindow: 20 << 20}
+		internet.TitanQUICWindows(cfg)
+		conn, tr := titanQUICDial(t, ctx, addr, cfg)
+		for i := range sent {
+			sent[i].Store(0)
+		}
+		n := byte(0)
+		open := func() *quic.Stream {
+			str, err := conn.OpenStreamSync(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			str.Write([]byte{n})
+			n++
+			return str
+		}
+		// The video, read all along.
+		video := open()
+		var got atomic.Int64
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			buf := make([]byte, 32<<10)
+			for {
+				k, err := video.Read(buf)
+				got.Add(int64(k))
+				if err != nil {
+					return
+				}
+			}
+		}()
+		// Past Chrome's opening windows (15 MiB for the connection).
+		for got.Load() < 20<<20 && ctx.Err() == nil {
+			time.Sleep(10 * time.Millisecond)
+		}
+		// An old stream: read past its 6 MiB opening, then it stalls; a new one stalls at once.
+		const oldRead = 8 << 20
+		for range c.old {
+			if _, err := io.ReadFull(open(), make([]byte, oldRead)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for range c.new {
+			open()
+		}
+		time.Sleep(time.Second)
+		before := got.Load()
+		time.Sleep(2 * time.Second)
+		flowed := got.Load() - before
+		var held, most int64
+		for i := 1; i <= c.old+c.new; i++ {
+			h := sent[i].Load()
+			if i <= c.old {
+				h -= oldRead
+			}
+			held += h
+			most = max(most, h)
+			limit := int64(6<<20 + 256<<10) // a new one: Chrome's opening
+			if i <= c.old {
+				limit = internet.TitanQUICStreamWindow + 256<<10
+			}
+			if h > limit {
+				t.Fatalf("%s: stalled stream %d holds %d KiB", c.name, i, h>>10)
+			}
+		}
+		video.SetReadDeadline(time.Now())
+		<-done
+		conn.CloseWithError(0, "")
+		tr.Close()
+		t.Logf("%s stalled: they hold %d KiB (%d at most), the video read %d KiB in 2 s", c.name, held>>10, most>>10, flowed>>10)
+		if held > internet.TitanQUICConnWindow+256<<10 {
+			t.Fatalf("%s: stalled streams hold %d KiB", c.name, held>>10)
+		}
+		if flowed < 8<<20 {
+			t.Fatalf("%s stalled: the video read %d KiB in 2 s", c.name, flowed>>10)
+		}
+	}
+}
+
+// closeTransports doesn't wait for a client that dials (locked meanwhile, up to a handshake
+// timeout): the cleaner, which waited for it under the pool's lock, cleans outside it.
+func TestTitanQUICCloseDialing(t *testing.T) {
+	internet.TitanCloseTransports() // the manager, as Dial makes it: its cleaner runs every second
+	dialing := &client{}
+	dialing.Lock()
+	defer dialing.Unlock()
+	manager.Lock()
+	manager.m[dialerConf{MemoryStreamConfig: &internet.MemoryStreamConfig{}}] = dialing
+	manager.Unlock()
+	time.Sleep(idleCleanupInterval + 300*time.Millisecond) // the cleaner waits for it now
+	closed := make(chan int, 1)
+	go func() { closed <- internet.TitanCloseTransports() }()
+	select {
+	case n := <-closed:
+		if n != 1 {
+			t.Fatalf("closed %d", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closeTransports waits for a client that dials")
+	}
+}
+
+// titanQUICServer serves QUIC on localhost: each stream gets its number from the client first,
+// then as much data as the client's windows let through, counted in sent.
+func titanQUICServer(t *testing.T, ctx context.Context, sent []atomic.Int64) gonet.Addr {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour)},
+		&x509.Certificate{SerialNumber: big.NewInt(1)}, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := quic.ListenAddr("127.0.0.1:0", &gotls.Config{
+		Certificates: []gotls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, NextProtos: []string{"titan"},
+	}, &quic.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept(ctx)
+			if err != nil {
+				return
+			}
+			go func() {
+				for {
+					str, err := conn.AcceptStream(ctx)
+					if err != nil {
+						return
+					}
+					go func() {
+						b := make([]byte, 1)
+						if _, err := io.ReadFull(str, b); err != nil || int(b[0]) >= len(sent) {
+							return
+						}
+						buf := make([]byte, 16<<10)
+						for {
+							n, err := str.Write(buf)
+							sent[b[0]].Add(int64(n))
+							if err != nil {
+								return
+							}
+						}
+					}()
+				}
+			}()
+		}
+	}()
+	return ln.Addr()
+}
+
+func titanQUICDial(t *testing.T, ctx context.Context, addr gonet.Addr, cfg *quic.Config) (*quic.Conn, *quic.Transport) {
+	udp, err := gonet.ListenUDP("udp", &gonet.UDPAddr{IP: gonet.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &quic.Transport{Conn: udp, ConnectionIDGenerator: quic.ZeroLengthConnectionIDGenerator{}}
+	conn, err := tr.Dial(ctx, addr, &gotls.Config{InsecureSkipVerify: true, NextProtos: []string{"titan"}}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn, tr
 }

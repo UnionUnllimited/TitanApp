@@ -331,10 +331,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             if let change = owed { note(change.text) }
         }
         lastRestart = Self.clock
-        // The last restart's "after" still to read, a freeMemory's result: this one's now.
+        // The last restart's "after" still to read, a freeMemory's result (and the critical
+        // pressure saved for it): this one's now.
         pendingAfter?.cancel()
         pendingAfter = nil
         freedAt = nil
+        freeCritical = false
         let before = (footprint: Self.memoryNow().footprint, go: Self.goRetained())
         _ = Self.invoke("stopXray")
         // Its transports' pooled connections (XHTTP, gRPC, Hysteria): a new Xray never reuses
