@@ -90,6 +90,15 @@ class ServerGroupsTest {
     }
 
     @Test
+    fun tabsSayWhereTheyWork() {
+        assertEquals("Страны", Group.SERVERS.title)
+        assertEquals("Wi‑Fi / LTE", Group.SERVERS.networks)
+        assertEquals("Страны, 29 серверов, работают на Wi-Fi и LTE", ServerGroups.tabDescription(Group.SERVERS, 29))
+        assertEquals("Обходы, 57 серверов, только LTE", ServerGroups.tabDescription(Group.BYPASS, 57))
+        assertEquals("Обходы, 1 сервер, только LTE", ServerGroups.tabDescription(Group.BYPASS, 1))
+    }
+
+    @Test
     fun emptyGroupsAreHidden() {
         assertEquals(listOf(Group.SERVERS), ServerGroups.split(listOf(s("Финляндия"))).map { it.first })
     }

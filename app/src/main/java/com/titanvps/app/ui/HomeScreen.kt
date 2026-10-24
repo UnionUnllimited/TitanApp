@@ -75,7 +75,7 @@ import com.titanvps.app.vpn.VpnState
 
 /**
  * Главная: header (Поддержка, logo, Обновить подписку), the Выкл | Вкл slider, the status
- * with Проверить соединение, Серверы | Обходы tabs with Пинг, and the server list. The
+ * with Проверить соединение, Страны | Обходы tabs with Пинг, and the server list. The
  * subscription's details are on Подписка; here only that it ran out. Обходы: mobile data only.
  */
 @OptIn(ExperimentalMaterial3Api::class)

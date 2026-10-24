@@ -33,6 +33,15 @@ class FmtTest {
     }
 
     @Test
+    fun serversWord() {
+        assertEquals("сервер", Fmt.serversWord(1))
+        assertEquals("сервера", Fmt.serversWord(3))
+        assertEquals("серверов", Fmt.serversWord(12))
+        assertEquals("сервер", Fmt.serversWord(21))
+        assertEquals("серверов", Fmt.serversWord(29))
+    }
+
+    @Test
     fun ago() {
         val now = 1_800_000_000_000L
         val min = 60_000L

@@ -50,6 +50,6 @@ class NetworkMonitor(context: Context) {
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
 
         const val BYPASS_WIFI_MESSAGE =
-            "Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Серверы»."
+            "Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Страны»."
     }
 }

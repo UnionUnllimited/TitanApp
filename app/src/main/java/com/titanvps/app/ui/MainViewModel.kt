@@ -74,7 +74,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val server = sub.servers.firstOrNull { it.id == selectedId.value } ?: sub.servers.firstOrNull()
             ?: return "Выберите сервер в списке ниже"
         if (ServerGroups.isBypass(server) && !settings.techMode.value && !network.current()) {
-            return "Обходы недоступны на Wi-Fi — выберите сервер во вкладке «Серверы»"
+            return "Обходы недоступны на Wi-Fi — выберите сервер во вкладке «Страны»"
         }
         return null
     }

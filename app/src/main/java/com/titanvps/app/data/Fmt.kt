@@ -55,6 +55,9 @@ object Fmt {
     /** "устройство", "устройства", "устройств" for [n]. */
     fun devicesWord(n: Int): String = plural(n.toLong(), "устройство", "устройства", "устройств")
 
+    /** "сервер", "сервера", "серверов" for [n]. */
+    fun serversWord(n: Int): String = plural(n.toLong(), "сервер", "сервера", "серверов")
+
     /** "Финляндия" from "fi" or "FI"; the code itself when it isn't a country. */
     fun countryName(code: String): String {
         SUBDIVISIONS[code.lowercase()]?.let { return it }

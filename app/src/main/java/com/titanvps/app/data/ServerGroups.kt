@@ -3,7 +3,18 @@ package com.titanvps.app.data
 /** Splits locations into tabs. Bypass ("Обходы") servers are the only metered ones. */
 object ServerGroups {
 
-    enum class Group(val title: String) { SERVERS("Серверы"), BYPASS("Обходы") }
+    /**
+     * A tab of Главная. [networks]: where its servers work, the line under the title;
+     * [spokenNetworks]: the same for screen readers. Saved by name (SERVERS), not by title.
+     */
+    enum class Group(val title: String, val networks: String, val spokenNetworks: String) {
+        SERVERS("Страны", "Wi‑Fi / LTE", "работают на Wi-Fi и LTE"),
+        BYPASS("Обходы", "только LTE", "только LTE"),
+    }
+
+    /** What a screen reader says for a tab: «Страны, 29 серверов, работают на Wi-Fi и LTE». */
+    fun tabDescription(group: Group, count: Int): String =
+        "${group.title}, $count ${Fmt.serversWord(count)}, ${group.spokenNetworks}"
 
     /**
      * The panel's «👇БЕЗЛИМИТНЫЕ👇» row is a working config (a balancer over every regular
