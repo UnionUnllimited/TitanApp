@@ -226,7 +226,10 @@ object XrayConfigs {
             // «sniffing-enable: 0»: the core sees only the IP an app dialed, so the panel's
             // domain rules (domain:, geosite:) no longer match TUN traffic: IPIfNonMatch resolves
             // names to IPs, never IPs back to names. Its ip/geoip rules still do, and its DNS
-            // servers still pick by domain when a name is resolved.
+            // servers still pick by domain when a name is resolved. Titan's own YouTube QUIC
+            // block below (UDP 443 by domain) stops matching too, so YouTube's QUIC goes the
+            // panel's way again. The GitHub rule still covers app updates: the Updater uses the
+            // HTTP inbound, where the target stays a name.
             JSONObject().put("enabled", false)
         } else {
             panelSniffing?.put("enabled", true)
