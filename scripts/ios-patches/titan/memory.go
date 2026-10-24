@@ -84,12 +84,20 @@ const (
 	// What isn't Go's at the least: the Go binary's rebased data (~6 MiB), Swift,
 	// NetworkExtension and its frameworks, malloc (11-15 MiB in all).
 	minNonGo = 12 << 20
-	// Overshoot past a soft limit and a restart's start: Go at its limit leaves the footprint
-	// 3 MiB below the tunnel's watchdog (5 MiB under the extension's limit).
+	// Overshoot past a soft limit and a restart's start: Go at this limit leaves the
+	// footprint 3 MiB below the tunnel's watchdog (5 MiB under the extension's limit).
 	limitMargin = 8 << 20
-	// The watchdog's threshold under the extension's limit (PacketTunnelProvider): the
-	// highest the limit goes, Go at it puts the footprint there and the watchdog decides.
+	// The watchdog's threshold under the extension's limit (PacketTunnelProvider).
 	watchdogMargin = 5 << 20
+	// The highest the limit goes is this far over the watchdog's threshold. Go keeps what it
+	// holds under its soft limit by the pacer's headroom (1 MiB or 3% of it: about 1 MiB
+	// here), so a limit right at the threshold kept the footprint just under it: Go needing
+	// more had the GC run nonstop while the watchdog saw nothing. Bench (the rest 12 of 50,
+	// 25.5 MiB live, GOGC 10, FreeOSMemory every second): limit 33 (the threshold) 0.92 cores
+	// of GC, the footprint 44.7 for good; 34 0.06, 35 0.03 with it at 45.5-46.5. At 35 the GC
+	// is busy from ~27.5 MiB live, with the footprint at 47, over the threshold: the watchdog
+	// decides, and the kill is still 3 MiB away.
+	aboveLine = 2 << 20
 	// The lowest limit in any case (a 30 MB extension, much outside Go).
 	minGoLimit = 24 << 20
 	// Room to allocate between GCs over the live heap: GOGC's share of it, this at least.
@@ -159,14 +167,14 @@ func goNeed(m map[string]uint64) int64 {
 
 // goLimitFor: Go's soft limit for the extension's limit and footprint now and Go's metrics.
 // limit − max(footprint − Go's, 12 MiB) − 8 MiB ("fit"), raised to what Go needs ("need"),
-// at most to the watchdog's threshold (limit − what isn't Go's − 5 MiB), and to that when
-// the GC has been busy ("gc"); 24 MiB at least ("min").
+// at most to 2 MiB over the watchdog's threshold (limit − what isn't Go's − 3 MiB), and to
+// that when the GC has been busy ("gc"); 24 MiB at least ("min").
 func goLimitFor(limit, footprint int64, m map[string]uint64, busy bool) (goLimit, nonGo, need int64, why string) {
 	goRetained := int64(m["total"] - m["released"]) // what the soft limit counts
 	nonGo = max(footprint-goRetained, minNonGo)
 	need = goNeed(m)
 	fit := limit - nonGo - limitMargin
-	top := limit - nonGo - watchdogMargin
+	top := limit - nonGo - watchdogMargin + aboveLine
 	goLimit, why = fit, "fit"
 	if busy {
 		goLimit, why = top, "gc"
@@ -181,7 +189,8 @@ func goLimitFor(limit, footprint int64, m map[string]uint64, busy bool) (goLimit
 
 // setMemoryLimit sets the soft limit for the extension's limit and footprint now (bytes),
 // goLimitFor's. On a 50 MB extension: 30 MiB (libXray's) while the rest is 12 MiB or less and
-// Go needs no more, more as Go needs it (up to the watchdog's line), less as the rest grows.
+// Go needs no more, more as Go needs it (up to 2 MiB over the watchdog's line), less as the
+// rest grows.
 // After runXray: the first one sets libXray's.
 func setMemoryLimit(limit, footprint int64) string {
 	if limit <= 0 || footprint <= 0 {

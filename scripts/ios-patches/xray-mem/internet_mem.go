@@ -47,11 +47,16 @@ func TitanCloseTransports() int {
 }
 
 // QUIC receive windows (Hysteria, XHTTP over HTTP/3): at most this much of a stream or a
-// connection waits unread in memory when the reader stalls (a player with a full buffer).
-// With Chrome parroting every new stream still opens with Chrome's 6 MiB (the handshake's
-// fingerprint, granted at once): a new stream that stalls may hold that much, and only what
-// the connection has left goes to its other streams. 8 MiB leaves them 2 MiB with one such
-// stream (2 MiB left them nothing: the video playing on the connection froze).
+// connection waits unread in memory when the reader stalls (a player with a full buffer),
+// once the windows the handshake gave are used up. With Chrome parroting (Xray's default)
+// the handshake gives Chrome's (the fingerprint) and they can't be taken back: a fresh
+// connection may have up to 15 MiB waiting until about 9 MiB of it is read, each new stream
+// 6 MiB until about 5 MiB of it is read (test: 3 streams never read on a fresh connection
+// hold 15 MiB; with DisableChromeParrot 1 MiB each). Every connection is fresh after a
+// restart (TitanCloseTransports). Only quicParams' disableChromeParrot bounds that from the
+// handshake on, and it changes the fingerprint: not done here. 8 MiB for the connection: a
+// new stream that stalls holds 6 of it, the others get 2 (2 MiB left them nothing: the video
+// playing on the connection froze).
 const (
 	TitanQUICStreamWindow = 1 << 20
 	TitanQUICConnWindow   = 8 << 20
@@ -59,7 +64,7 @@ const (
 
 // TitanQUICWindows caps c's receive windows (0, quic-go's default, is 6 / 15 MiB: capped too).
 // With Chrome parroting quic-go still opens with Chrome's 6 / 15 MiB (the handshake's
-// fingerprint); the patched quic-go keeps to the caps from then on.
+// fingerprint); the patched quic-go keeps to the caps once those are used up.
 func TitanQUICWindows(c *quic.Config) {
 	if c.MaxStreamReceiveWindow == 0 || c.MaxStreamReceiveWindow > TitanQUICStreamWindow {
 		c.MaxStreamReceiveWindow = TitanQUICStreamWindow

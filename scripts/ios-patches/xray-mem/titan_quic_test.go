@@ -21,7 +21,8 @@ import (
 // With Chrome parroting (as Hysteria dials) a stalled stream holds at most about the capped
 // window unread once Chrome's opening windows are used up, not 6 MiB (xray-mem patch, with
 // quic-go patched by quic_go.py). A new stream that stalls still holds Chrome's 6 MiB: the
-// connection's other streams go on with what is left of its window.
+// connection's other streams go on with what is left of its window. A fresh connection (all
+// of them after a restart) holds up to Chrome's 15 MiB: what the handshake gave.
 func TestTitanQUICWindows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -39,33 +40,85 @@ func TestTitanQUICWindows(t *testing.T) {
 	}
 	defer ln.Close()
 	// Each stream: its number first, then the server writes to it as fast as it may.
-	var sent [4]atomic.Int64
+	var sent [10]atomic.Int64
 	go func() {
-		conn, err := ln.Accept(ctx)
-		if err != nil {
-			return
-		}
 		for {
-			str, err := conn.AcceptStream(ctx)
+			conn, err := ln.Accept(ctx)
 			if err != nil {
 				return
 			}
 			go func() {
-				b := make([]byte, 1)
-				if _, err := io.ReadFull(str, b); err != nil || int(b[0]) >= len(sent) {
-					return
-				}
-				buf := make([]byte, 16<<10)
 				for {
-					n, err := str.Write(buf)
-					sent[b[0]].Add(int64(n))
+					str, err := conn.AcceptStream(ctx)
 					if err != nil {
 						return
 					}
+					go func() {
+						b := make([]byte, 1)
+						if _, err := io.ReadFull(str, b); err != nil || int(b[0]) >= len(sent) {
+							return
+						}
+						buf := make([]byte, 16<<10)
+						for {
+							n, err := str.Write(buf)
+							sent[b[0]].Add(int64(n))
+							if err != nil {
+								return
+							}
+						}
+					}()
 				}
 			}()
 		}
 	}()
+	dial := func(cfg *quic.Config) (*quic.Conn, *quic.Transport) {
+		udp, err := gonet.ListenUDP("udp", &gonet.UDPAddr{IP: gonet.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr := &quic.Transport{Conn: udp, ConnectionIDGenerator: quic.ZeroLengthConnectionIDGenerator{}}
+		conn, err := tr.Dial(ctx, ln.Addr(), &gotls.Config{InsecureSkipVerify: true, NextProtos: []string{"titan"}}, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn, tr
+	}
+
+	// A fresh connection, 3 streams never read: with Chrome parroting what the handshake gave
+	// (6 MiB a stream, 15 the connection) at most, without it the caps from the start.
+	for i, parrot := range []bool{true, false} {
+		cfg := &quic.Config{ChromeParrot: parrot, InitialStreamReceiveWindow: 8 << 20, MaxStreamReceiveWindow: 8 << 20,
+			InitialConnectionReceiveWindow: 20 << 20, MaxConnectionReceiveWindow: 20 << 20}
+		internet.TitanQUICWindows(cfg)
+		conn, tr := dial(cfg)
+		first := 4 + 3*i
+		for n := first; n < first+3; n++ {
+			str, err := conn.OpenStreamSync(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			str.Write([]byte{byte(n)})
+		}
+		time.Sleep(time.Second)
+		stream, conns := int64(internet.TitanQUICStreamWindow), int64(3*internet.TitanQUICStreamWindow)
+		if parrot {
+			stream, conns = 6<<20, 15<<20
+		}
+		var total int64
+		for n := first; n < first+3; n++ {
+			if got := sent[n].Load(); got > stream+256<<10 {
+				t.Fatalf("fresh connection (parrot %v): a stream holds %d KiB", parrot, got>>10)
+			}
+			total += sent[n].Load()
+		}
+		t.Logf("fresh connection (parrot %v): 3 streams never read hold %d / %d / %d KiB, %d KiB in all",
+			parrot, sent[first].Load()>>10, sent[first+1].Load()>>10, sent[first+2].Load()>>10, total>>10)
+		if total > conns+3*256<<10 {
+			t.Fatalf("fresh connection (parrot %v): %d KiB unread", parrot, total>>10)
+		}
+		conn.CloseWithError(0, "")
+		tr.Close()
+	}
 
 	// Xray's Hysteria defaults (8 / 20 MiB), then the caps.
 	cfg := &quic.Config{ChromeParrot: true, InitialStreamReceiveWindow: 8 << 20, MaxStreamReceiveWindow: 8 << 20,
@@ -74,16 +127,8 @@ func TestTitanQUICWindows(t *testing.T) {
 	if cfg.MaxStreamReceiveWindow != internet.TitanQUICStreamWindow || cfg.MaxConnectionReceiveWindow != internet.TitanQUICConnWindow {
 		t.Fatalf("windows %d / %d", cfg.MaxStreamReceiveWindow, cfg.MaxConnectionReceiveWindow)
 	}
-	udp, err := gonet.ListenUDP("udp", &gonet.UDPAddr{IP: gonet.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tr := &quic.Transport{Conn: udp, ConnectionIDGenerator: quic.ZeroLengthConnectionIDGenerator{}}
+	conn, tr := dial(cfg)
 	defer tr.Close()
-	conn, err := tr.Dial(ctx, ln.Addr(), &gotls.Config{InsecureSkipVerify: true, NextProtos: []string{"titan"}}, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer conn.CloseWithError(0, "")
 	open := func(n byte) *quic.Stream {
 		str, err := conn.OpenStreamSync(ctx)
@@ -150,7 +195,7 @@ func TestTitanQUICWindows(t *testing.T) {
 	internet.TitanCloseTransports() // the manager, as Dial makes it
 	old, cur := &internet.MemoryStreamConfig{}, &internet.MemoryStreamConfig{}
 	manager.Lock()
-	manager.m[dialerConf{MemoryStreamConfig: old}] = &client{conn: conn, tr: tr, pktConn: udp}
+	manager.m[dialerConf{MemoryStreamConfig: old}] = &client{conn: conn, tr: tr, pktConn: tr.Conn}
 	manager.Unlock()
 	if n := internet.TitanCloseTransports(); n != 1 {
 		t.Fatalf("closed %d", n)

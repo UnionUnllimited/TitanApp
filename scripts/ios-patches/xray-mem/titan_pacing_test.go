@@ -7,6 +7,7 @@ import (
 	gonet "net"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,8 +19,8 @@ import (
 )
 
 // The observatory's probes run a few at a time (xray-mem patch), and every subject still gets
-// its result: the first check 12 at a time in random order, the rounds 4 at a time; a stop
-// ends the ones still waiting.
+// its result: the first check 12 at a time, every group of subjects in its first 12, the
+// rounds 4 at a time; a stop ends the ones still waiting.
 func TestTitanPacing(t *testing.T) {
 	var waiting, peak, dials, checking atomic.Int32
 	var mu sync.Mutex
@@ -60,13 +61,49 @@ func TestTitanPacing(t *testing.T) {
 		defer h.access.Unlock()
 		return len(h.Results)
 	}
-	tags := make([]string, 40)
+	// A small group that sorts last, as outbound.Manager.Select gives them.
+	tags := make([]string, 44)
 	for i := range tags {
-		tags[i] = fmt.Sprintf("bal-%02d", i) // sorted, as outbound.Manager.Select gives them
+		tags[i] = fmt.Sprintf("bal-%02d", i)
+		if i >= 40 {
+			tags[i] = fmt.Sprintf("yt-ru-%d", i-40)
+		}
+	}
+	selectors := []string{"bal", "yt-ru"}
+
+	// The order: each tag once, every group (the longest selector a tag starts with, or
+	// none) in its first turn, each group's tags in random order.
+	in := append(slices.Clone(tags), "bal-03", "other-1", "yt-ru-x", "yt-ru-y")
+	orders := map[string]bool{}
+	for i := 0; i < 20; i++ {
+		o := titanOrder(in, []string{"bal", "yt-ru", "yt-ru-x"})
+		if len(o) != len(in)-1 {
+			t.Fatalf("order: %d tags of %d", len(o), len(in)-1)
+		}
+		groups := map[string]int{}
+		for _, tag := range o[:4] {
+			switch {
+			case tag == "yt-ru-x":
+				groups["yt-ru-x"]++
+			case strings.HasPrefix(tag, "yt-ru"):
+				groups["yt-ru"]++
+			default:
+				groups[tag[:3]]++
+			}
+		}
+		if len(groups) != 4 {
+			t.Fatalf("order: the first turn %v, not one of each group", o[:4])
+		}
+		orders[strings.Join(o, ",")] = true
+	}
+	if len(orders) < 2 {
+		t.Fatal("order: not shuffled")
 	}
 
-	// The first check: 12 at once, not in tag order, every subject, counted while it runs.
+	// The first check: 12 at once, the small group in its first 12, every subject, counted
+	// while it runs.
 	h := newHP()
+	h.titanSelectors = selectors
 	h.Check(tags)
 	if p := peak.Load(); p != titanFirstAtOnce {
 		t.Fatalf("first check: %d probes at once, want %d", p, titanFirstAtOnce)
@@ -79,11 +116,27 @@ func TestTitanPacing(t *testing.T) {
 	if slices.Equal(first, tags[:titanFirstAtOnce]) {
 		t.Fatalf("first check probed in tag order: %v", order[:titanFirstAtOnce])
 	}
+	if !slices.Equal(first[len(first)-4:], tags[40:]) {
+		t.Fatalf("first check: the small group not in the first %d: %v", titanFirstAtOnce, order[:titanFirstAtOnce])
+	}
 	if !slices.IsSorted(tags) {
 		t.Fatal("the caller's tags were reordered")
 	}
 	if n := checking.Load(); n != int32(len(tags)) || TitanChecking() != 0 {
 		t.Fatalf("first check counted in %d of %d probes, %d still counted after it", n, len(tags), TitanChecking())
+	}
+
+	// A tag twice: probed once, and the check ends.
+	h = newHP()
+	ended := make(chan struct{})
+	go func() { h.Check(append([]string{tags[0]}, tags...)); close(ended) }()
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first check with a tag twice: not ended")
+	}
+	if got := results(h); got != len(tags) {
+		t.Fatalf("first check with a tag twice: %d results for %d subjects", got, len(tags))
 	}
 
 	// A round (spread out over its duration): 4 at once, every subject, not counted.
