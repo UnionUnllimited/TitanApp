@@ -352,7 +352,7 @@ enum SubscriptionAPI {
 
     /// Xray JSON (array of configs or one config): name from `remarks`, endpoint of the
     /// first proxy outbound for the TCP ping. The unlimited servers' row (UnlimitedServer) gets
-    /// its name and id here, for every screen alike, and comes first.
+    /// its name and id here, for every screen alike, and comes right after АВТО.
     static func parseServers(_ body: String) throws -> [Server] {
         let text = body.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
         guard let data = text.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) else {
@@ -403,8 +403,14 @@ enum SubscriptionAPI {
             return Server(id: id, name: shown, host: host, port: port,
                           proto: (proxy["protocol"] as? String) ?? "", xrayJson: json, proxyTag: proxyTag)
         }
-        // First in «Страны»; favourites still go before it (ServerGroup.ordered).
-        return servers.filter(ServerGroup.isUnlimited) + servers.filter { !ServerGroup.isUnlimited($0) }
+        // Right after АВТО in «Страны» (favourites still go first, ServerGroup.ordered): АВТО stays the
+        // default pick for a new key until the tunnel's memory is confirmed with this ~85-outbound
+        // config (the owner's decision); then it can come first, as on Android.
+        var rest = servers.filter { !ServerGroup.isUnlimited($0) }
+        guard let row = servers.first(where: ServerGroup.isUnlimited) else { return rest }
+        let auto = rest.firstIndex { $0.name.lowercased().contains("авто") && !TunnelSwitch.isBypass($0.name) }
+        rest.insert(row, at: auto.map { $0 + 1 } ?? 0)
+        return rest
     }
 
     private static func endpoint(_ ob: [String: Any]) -> (String?, Int?) {
