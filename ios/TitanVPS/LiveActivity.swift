@@ -50,7 +50,8 @@ import UIKit
 /// drops the speed and keeps the latency and the traffic under that time, so a frozen speed never
 /// reads as live. The latency is a warm one (ConnectionCheck: a few requests on one connection
 /// through the tunnel, the first not timed), the newest of Проверить соединение's result and a
-/// probe of our own (at most once a minute while the app is open, a few hundred bytes); none
+/// probe of our own (at most once a minute while the app is open: a new connection through the
+/// tunnel, a few KB with the proxy's handshake, then three requests of a few hundred bytes); none
 /// older than 2 min goes out, and only under 300 ms (Latency). Not a server's Пинг: that times a
 /// fresh connection, the proxy's handshake included, often over a second while the VPN is fine.
 @MainActor
@@ -550,7 +551,8 @@ enum LiveActivityController {
     }
 
     /// No latency of the server for a minute: ConnectionCheck.probe through the tunnel, not
-    /// alongside Проверить соединение or a Пинг. None measured leaves none.
+    /// alongside Проверить соединение or a Пинг. None measured leaves none. A check run while it
+    /// was under way is the newer one: its result (or failure) stays, the probe's is dropped.
     private static func probeIfDue(_ name: String) {
         let now = Date()
         guard !probing, now.timeIntervalSince(lastProbe) >= 60,
@@ -558,11 +560,14 @@ enum LiveActivityController {
               let store = AppStore.current, store.check != .checking, !store.pingBusy else { return }
         probing = true
         lastProbe = now
+        let check = store.check
         Task { @MainActor in
             let ms = await ConnectionCheck.probe()
             probing = false
-            // Still up on that server: else it measured a switch.
-            guard runningName == name, VPNController.current?.isConnected == true else { return }
+            // Still up on that server: else it measured a switch. Nothing newer since it began.
+            guard runningName == name, VPNController.current?.isConnected == true,
+                  AppStore.current?.check == check,
+                  lastLatency.map({ $0.at < now }) ?? true else { return }
             if let ms { lastLatency = (name, ms, Date()) } else { lastLatency = nil }
         }
     }
