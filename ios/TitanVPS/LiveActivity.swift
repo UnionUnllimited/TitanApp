@@ -527,17 +527,24 @@ enum LiveActivityController {
     }
 
     /// A new Проверить соединение result on the running server since the last look: the same
-    /// warm latency; one without a number (Cloudflare answered, Google didn't) leaves none. A
-    /// server's Пинг isn't one (a fresh connection's time). Only when that look was a moment
-    /// ago: what changed while the app was away (or before the first look) may be any age.
+    /// warm latency; one without a number (Cloudflare answered, Google didn't) or a failure
+    /// leaves none. A server's Пинг isn't one (a fresh connection's time). Only when that look
+    /// was a moment ago: what changed while the app was away (or before the first look) may be
+    /// any age.
     private static func noteCheck(for name: String) {
         guard let store = AppStore.current else { return }
         let now = Date()
         let recent = now.timeIntervalSince(seenAt) <= 10
         seenAt = now
         let check = store.check
-        if recent, check != seenCheck, case .ok(let r) = check {
-            if let ms = r.ms { lastLatency = (name, ms, now) } else { lastLatency = nil }
+        if recent, check != seenCheck {
+            switch check {
+            case .ok(let r):
+                if let ms = r.ms { lastLatency = (name, ms, now) } else { lastLatency = nil }
+            // Nothing answered through the VPN: not the last quick number next to «Подключено».
+            case .failed: lastLatency = nil
+            default: break
+            }
         }
         seenCheck = check
     }
