@@ -5,7 +5,8 @@ import java.util.Base64
 /**
  * Parses the de-facto subscription headers (Remnawave / Marzban / Happ style):
  * `profile-title`, `subscription-userinfo`, `support-url`, `profile-web-page-url`,
- * `announce`, `profile-update-interval`. Text values may be prefixed with `base64:`.
+ * `announce`, `profile-update-interval`, `sniffing-enable`. Text values may be prefixed with
+ * `base64:`. [header] looks names up regardless of case (OkHttp does).
  */
 object SubscriptionHeaders {
 
@@ -22,7 +23,15 @@ object SubscriptionHeaders {
             announce = decodeText(header("announce")),
             updateIntervalHours = header("profile-update-interval")?.trim()?.toIntOrNull()
                 ?.coerceIn(1, 24 * 7) ?: SubscriptionInfo.DEFAULT_UPDATE_HOURS,
+            sniffing = parseSwitch(header("sniffing-enable")),
         )
+    }
+
+    /** `1` / `true` / `on` and `0` / `false` / `off` (any case); anything else or none: null. */
+    fun parseSwitch(value: String?): Boolean? = when (value?.trim()?.lowercase()) {
+        "1", "true", "on" -> true
+        "0", "false", "off" -> false
+        else -> null
     }
 
     /** `upload=1; download=2; total=3; expire=4` */

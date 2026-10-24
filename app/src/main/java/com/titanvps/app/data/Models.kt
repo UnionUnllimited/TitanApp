@@ -13,6 +13,8 @@ data class SubscriptionInfo(
     val webPageUrl: String? = null,
     val announce: String? = null,
     val updateIntervalHours: Int = DEFAULT_UPDATE_HOURS,
+    /** `sniffing-enable`: true / false as the panel says; null: no word, sniffing on as always. */
+    val sniffing: Boolean? = null,
 ) {
     val usedBytes: Long get() = uploadBytes + downloadBytes
 

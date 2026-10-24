@@ -211,6 +211,45 @@ class XrayConfigsTest {
         assertFalse(run2.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing").getBoolean("routeOnly"))
     }
 
+    private val panelSniffingJson = """{"inbounds":[{"tag":"socks","protocol":"socks","sniffing":{"enabled":false,
+        "destOverride":["http","tls"],"routeOnly":true,"domainsExcluded":["courier.push.apple.com"]}}],
+        "outbounds":[{"tag":"proxy","protocol":"vless"},{"tag":"direct","protocol":"freedom"}],
+        "routing":{"domainStrategy":"IPIfNonMatch","rules":[{"type":"field","domain":["geosite:category-ru"],"outboundTag":"direct"}]}}"""
+
+    @Test
+    fun noSniffingHeaderKeepsTheConfig() {
+        for (body in listOf(panelSniffingJson, """{"outbounds":[{"tag":"proxy","protocol":"vless"}]}""")) {
+            val server = XrayConfigs.serversFromXrayJson(body)[0]
+            val before = XrayConfigs.buildRunConfig(server.xrayJson, 3, "/a", 1500, "/logs", server.proxyTag)
+            assertEquals(before, XrayConfigs.buildRunConfig(server.xrayJson, 3, "/a", 1500, "/logs", server.proxyTag, sniffingEnable = null))
+            // «sniffing-enable: 1» is what Titan always did.
+            assertEquals(before, XrayConfigs.buildRunConfig(server.xrayJson, 3, "/a", 1500, "/logs", server.proxyTag, sniffingEnable = true))
+        }
+        // The panel's settings, turned on.
+        val server = XrayConfigs.serversFromXrayJson(panelSniffingJson)[0]
+        val sniff = JSONObject(XrayConfigs.buildRunConfig(server.xrayJson, 3, "/a", 1500))
+            .getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing")
+        assertTrue(sniff.getBoolean("enabled"))
+        assertTrue(sniff.getBoolean("routeOnly"))
+        assertEquals("courier.push.apple.com", sniff.getJSONArray("domainsExcluded").getString(0))
+    }
+
+    @Test
+    fun sniffingHeaderOffTurnsTunSniffingOff() {
+        for (body in listOf(panelSniffingJson, """{"outbounds":[{"tag":"proxy","protocol":"vless"}]}""")) {
+            val server = XrayConfigs.serversFromXrayJson(body)[0]
+            val on = JSONObject(XrayConfigs.buildRunConfig(server.xrayJson, 3, "/a", 1500, "/logs", server.proxyTag))
+            val off = JSONObject(XrayConfigs.buildRunConfig(server.xrayJson, 3, "/a", 1500, "/logs", server.proxyTag, sniffingEnable = false))
+            val tun = off.getJSONArray("inbounds").getJSONObject(0)
+            assertEquals(XrayConfigs.TUN_TAG, tun.getString("tag"))
+            assertEquals("""{"enabled":false}""", tun.getJSONObject("sniffing").toString())
+            assertFalse(off.has("_titanSniffing"))
+            // Everything else as with sniffing on.
+            on.getJSONArray("inbounds").getJSONObject(0).put("sniffing", JSONObject().put("enabled", false))
+            assertEquals(on.toString(), off.toString())
+        }
+    }
+
     @Test
     fun sameNodeUnderDifferentTagsHasSameKey() {
         val country = """{"outbounds":[{"tag":"bal-3","protocol":"vless","settings":{"address":"de1.example.com","port":443}}]}"""

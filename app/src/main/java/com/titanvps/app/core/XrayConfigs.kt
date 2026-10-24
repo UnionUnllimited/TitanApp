@@ -194,6 +194,8 @@ object XrayConfigs {
     /**
      * Final config: our TUN inbound (fd from VpnService), DNS hijack, asset dir.
      * Everything else (outbounds, routing, dns) comes from the server.
+     * [sniffingEnable]: the subscription's `sniffing-enable`; false turns the TUN's sniffing
+     * off, null or true leave it as always (on).
      */
     fun buildRunConfig(
         serverJson: String,
@@ -203,6 +205,7 @@ object XrayConfigs {
         logDir: String? = null,
         proxyTag: String? = null,
         localProxy: com.titanvps.app.vpn.LocalProxy? = null,
+        sniffingEnable: Boolean? = null,
     ): String {
         val cfg = JSONObject(serverJson)
 
@@ -218,11 +221,23 @@ object XrayConfigs {
         // The panel's sniffing if it had one. Default routeOnly=false: the destination
         // becomes the sniffed domain, so "direct" re-resolves it and falls back to IPv4
         // instead of dialing an unreachable IPv6 address (ERR_CONNECTION_CLOSED).
-        val sniffing = (cfg.remove(SNIFFING_KEY) as? JSONObject)?.put("enabled", true)
-            ?: JSONObject()
-                .put("enabled", true)
-                .put("destOverride", JSONArray().put("http").put("tls").put("quic"))
-                .put("routeOnly", false)
+        val panelSniffing = cfg.remove(SNIFFING_KEY) as? JSONObject
+        val sniffing = if (sniffingEnable == false) {
+            // «sniffing-enable: 0»: the core sees only the IP an app dialed, so the panel's
+            // domain rules (domain:, geosite:) no longer match TUN traffic: IPIfNonMatch resolves
+            // names to IPs, never IPs back to names. Its ip/geoip rules still do, and its DNS
+            // servers still pick by domain when a name is resolved. Titan's own YouTube QUIC
+            // block below (UDP 443 by domain) stops matching too, so YouTube's QUIC goes the
+            // panel's way again. The GitHub rule still covers app updates: the Updater uses the
+            // HTTP inbound, where the target stays a name.
+            JSONObject().put("enabled", false)
+        } else {
+            panelSniffing?.put("enabled", true)
+                ?: JSONObject()
+                    .put("enabled", true)
+                    .put("destOverride", JSONArray().put("http").put("tls").put("quic"))
+                    .put("routeOnly", false)
+        }
 
         cfg.put("env", (cfg.optJSONObject("env") ?: JSONObject())
             .put("xray.tun.fd", tunFd.toString())

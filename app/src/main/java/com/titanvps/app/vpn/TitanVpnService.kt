@@ -78,6 +78,8 @@ class TitanVpnService : VpnService() {
     private var localProxy: LocalProxy? = null
     /** The server the core runs; null while the core is stopped. */
     @Volatile private var running: Server? = null
+    /** The subscription's `sniffing-enable` the running core was built with. */
+    private var runningSniffing: Boolean? = null
     /** Connected at (the notification's timer); network and plugin restarts keep it. */
     private var since = 0L
     /** When the core was last started (elapsed realtime): a restart asked for before that is moot. */
@@ -292,7 +294,9 @@ class TitanVpnService : VpnService() {
             } else {
                 // Nothing changed (Always-on and Автоподключение both at boot, a reconnect
                 // with the same settings): the core goes on.
-                if (target == running && present == tunApps && VpnStatus.state.value is VpnState.Connected) {
+                if (target == running && sub.info.sniffing == runningSniffing && present == tunApps &&
+                    VpnStatus.state.value is VpnState.Connected
+                ) {
                     showStatus(Status.CONNECTED, target.name, since)
                     return
                 }
@@ -410,6 +414,8 @@ class TitanVpnService : VpnService() {
         // Resolver for "direct" traffic: the carrier's/router's own DNS (like Happ), since
         // foreign resolvers such as 1.1.1.1 are often blocked on Russian mobile networks.
         val dns = underlyingDnsServer(network)
+        // The panel's word on sniffing as of now: a new header value counts from the next core start.
+        val sniffing = TitanApp.get(this).repository.subscription.value?.info?.sniffing
         try {
             // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound points
             // at it; MASQUE: Xray's own client.
@@ -421,6 +427,7 @@ class TitanVpnService : VpnService() {
             coreFd = pfd.dup().detachFd()
             val config = XrayConfigs.buildRunConfig(
                 serverJson, coreFd, TitanApp.get(this).assetDir, MTU, cacheDir.absolutePath, server.proxyTag, localProxy,
+                sniffingEnable = sniffing,
             )
             coreFdGiven = true
             XrayCore.start(config, dns) { fd -> protect(fd) }
@@ -430,6 +437,7 @@ class TitanVpnService : VpnService() {
         }
         VpnStatus.localProxy = localProxy
         running = server
+        runningSniffing = sniffing
         // The way back belongs to the bypass we moved to: any other server (our way back, the
         // user's pick, Wi-Fi's regular one) drops it.
         val saved = BypassReturn.load(this)
