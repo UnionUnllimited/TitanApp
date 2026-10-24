@@ -142,6 +142,25 @@
   Android `app/.../ui/TechModeScreen.kt`, Windows `desktop/.../TechMode.kt`.
   Открывается семью нажатиями на версию и вводом кода. Код в репозитории не хранится, только его SHA-256.
 
+## Заголовки подписки
+
+Заголовки ответа подписки (Remnawave → Настройки подписки → Дополнительные заголовки ответа) Titan
+сохраняет вместе с подпиской: они действуют и после перезапуска, и без сети. Разбор: Android
+`app/.../data/SubscriptionHeaders.kt`, iOS `SubscriptionAPI.parseInfo` в `ios/TitanVPS/Subscription.swift`,
+Windows `desktop/.../Model.kt`.
+
+- `subscription-userinfo` — трафик и срок подписки; `support-url` — поддержка (иначе бот);
+  `profile-web-page-url` — вход в личный кабинет; `announce` — объявление (можно `base64:`).
+- Только Android: `profile-title` (можно `base64:`) и `profile-update-interval` — как часто обновлять
+  подписку, в часах (по умолчанию 12).
+- `sniffing-enable` (Android): `1` / `true` / `on` или `0` / `false` / `off`, остальное не учитывается.
+  Без заголовка и при `1` всё как раньше: сниффинг TUN включён с настройками инбаунда шаблона панели
+  (`destOverride`, `routeOnly`, `domainsExcluded`…), по умолчанию `http`, `tls`, `quic` и `routeOnly: false`.
+  При `0` у TUN `"sniffing": {"enabled": false}`: ядро видит только IP, доменные правила панели на трафик
+  TUN не срабатывают (`IPIfNonMatch` не превращает IP обратно в домен), правила по IP и geoip работают.
+  Новое значение — со следующего запуска ядра (подключение, смена сервера или сети). Provider ID, как в
+  Happ, не нужен. Значение из подписки — в техническом режиме, строка «Сниффинг».
+
 ## TCP Fast Open на iOS
 
 - Транспорт туннеля — Xray-core (Go, BSD-сокеты). Опции Network.framework

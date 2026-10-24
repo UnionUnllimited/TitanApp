@@ -32,11 +32,21 @@ class SubscriptionHeadersTest {
         assertNull(info.title)
         assertEquals(0, info.totalBytes)
         assertEquals(12, info.updateIntervalHours)
+        assertNull(info.sniffing)
     }
 
     @Test
     fun rejectsNonHttpSupportUrl() {
         val info = SubscriptionHeaders.parse { if (it == "support-url") "javascript:alert(1)" else null }
         assertNull(info.supportUrl)
+    }
+
+    @Test
+    fun readsSniffingEnable() {
+        fun sniffing(value: String?) = SubscriptionHeaders.parse { if (it == "sniffing-enable") value else null }.sniffing
+        for (on in listOf("1", "true", "on", "TRUE", " On ")) assertEquals(on, true, sniffing(on))
+        for (off in listOf("0", "false", "off", "FALSE", " Off ")) assertEquals(off, false, sniffing(off))
+        // Anything else is no word from the panel.
+        for (other in listOf(null, "", " ", "2", "yes", "no", "enabled", "1;")) assertNull(other, sniffing(other))
     }
 }

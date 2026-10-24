@@ -293,6 +293,12 @@ private fun deviceRows(
         "Протокол / адрес" to endpoint,
         "Подписка до" to formatExpiry(info.expireAt),
         "Трафик" to (formatBytes(info.usedBytes) + " из " + (if (info.totalBytes > 0) formatBytes(info.totalBytes) else "∞")),
+        // As of the next connect: the running core keeps what it was started with.
+        "Сниффинг" to when (info.sniffing) {
+            true -> "включён (заголовок подписки)"
+            false -> "выключен (заголовок подписки)"
+            null -> "включён (по умолчанию)"
+        },
         account?.let { "Аккаунт" to "${it.status}, устройств ${it.devices.size}/${it.deviceLimit}" },
         "Время" to SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date()),
     )
