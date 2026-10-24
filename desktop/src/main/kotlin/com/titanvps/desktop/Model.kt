@@ -4,7 +4,7 @@ import java.net.URI
 import java.net.URLDecoder
 import java.util.Base64
 
-/** Same rules as the Android app (hosts, headers, Серверы / Обходы). */
+/** Same rules as the Android app (hosts, headers, Страны / Обходы). */
 object Config {
     val HOSTS = setOf("api1.titanvps.su", "api2.titanvps.online")
     const val TELEGRAM_URL = "https://t.me/TitanVPS_bot"
@@ -102,7 +102,14 @@ object Links {
 }
 
 object ServerGroups {
-    enum class Group(val title: String) { SERVERS("Серверы"), BYPASS("Обходы") }
+    /**
+     * A tab of Главная. [networks]: where its servers work, shown with the title; [spokenNetworks]:
+     * the same for screen readers. Never saved (Главная opens on the selected server's tab).
+     */
+    enum class Group(val title: String, val networks: String, val spokenNetworks: String) {
+        SERVERS("Страны", "Wi‑Fi / LTE", "работают на Wi-Fi и LTE"),
+        BYPASS("Обходы", "только LTE", "только LTE"),
+    }
 
     /** Panel notices sent as hosts with a real address ("СЕРВЕР ДЛЯ / ОБНОВЛЕНИЯ ПОДПИСКИ"). */
     private val NOTICES = listOf("сервер для", "обновления подписки")
