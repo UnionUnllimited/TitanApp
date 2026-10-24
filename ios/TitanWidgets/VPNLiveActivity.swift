@@ -6,9 +6,10 @@ import WidgetKit
 /// The VPN on or off, on the Lock Screen and in the Dynamic Island (the app starts, updates and
 /// ends it: LiveActivity.swift): the server with its flag, ‹ › for the previous and the next one
 /// (SwitchServerIntent, run in the app) and ⏻. On: «Подключено» with the timer, the speed, the
-/// ping and the session's traffic as Главная shows them, until they go stale (the app isn't open
-/// to send new ones). The island shows it only while the app isn't open: its speed is the one
-/// sent on leaving the app, for 15 s (a live one in the background would need server pushes).
+/// latency (only under 300 ms: Latency) and the session's traffic as Главная shows them, until
+/// they go stale (the app isn't open to send new ones). The island shows it only while the app
+/// isn't open: its speed is the one sent on leaving the app, for 15 s (a live one in the
+/// background would need server pushes).
 /// Off: «Выключено» with the server ⏻ starts; ‹ › only move the pick. No widgetURL: a tap
 /// elsewhere just opens the app (titanvps:// links are for keys).
 struct VPNLiveActivity: Widget {
@@ -182,9 +183,9 @@ private struct StatusLine: View {
     }
 }
 
-/// The numbers while connected, as Главная shows them: ↓ ↑ speed (its speed line), the ping in
-/// its colours, what this session used. Stale (no update for 15 s: the app isn't open to send
-/// one): no speed, the ping and the traffic under the time they were read.
+/// The numbers while connected, as Главная shows them: ↓ ↑ speed (its speed line), the latency
+/// (only under 300 ms, LatencyLabel), what this session used. Stale (no update for 15 s: the app
+/// isn't open to send one): no speed, the latency and the traffic under the time they were read.
 private struct Numbers {
     let state: VPNActivityAttributes.ContentState
     let stale: Bool
@@ -192,7 +193,9 @@ private struct Numbers {
     private var on: Bool { state.shown == .on }
     var down: Double? { on && !stale ? state.down : nil }
     var up: Double? { on && !stale ? state.up : nil }
-    var ping: Int? { on ? state.ping : nil }
+    /// A state an older build sent may hold a server's Пинг (a fresh connection's, often over a
+    /// second): shown only under 300 ms all the same.
+    var latency: Int? { on ? Latency.shown(state.ping) : nil }
     var traffic: Int64? { on ? state.traffic.flatMap { $0 > 0 ? $0 : nil } : nil }
 
     var speedText: String? {
@@ -208,13 +211,13 @@ private struct Numbers {
         return "Обновлено в " + Clock.time(at)
     }
 
-    var isEmpty: Bool { speedText == nil && ping == nil && traffic == nil }
+    var isEmpty: Bool { speedText == nil && latency == nil && traffic == nil }
 
-    /// «Загрузка 3.2 МБ/с, отдача 140 КБ/с, пинг 45 мс, потрачено 120 МБ».
+    /// «Загрузка 3.2 МБ/с, отдача 140 КБ/с, задержка 45 мс, потрачено 120 МБ».
     var accessibility: String {
         var parts: [String] = []
         if let down, let up { parts.append("загрузка \(TrafficText.speed(down)), отдача \(TrafficText.speed(up))") }
-        if let ping { parts.append("пинг \(ping) мс") }
+        if let latency { parts.append("задержка \(latency) мс") }
         if let traffic { parts.append("потрачено " + TrafficText.bytes(traffic)) }
         if let asOf { parts.append(asOf.lowercased()) }
         let text = parts.joined(separator: ", ")
@@ -234,8 +237,8 @@ private enum Clock {
     static func time(_ date: Date) -> String { format.string(from: date) }
 }
 
-/// The Lock Screen's two lines: the speed (or when a stale one was read), then the ping and the
-/// traffic. Fixed sizes as the rest of the view, one line each, a little smaller if need be:
+/// The Lock Screen's two lines: the speed (or when a stale one was read), then the latency and
+/// the traffic. Fixed sizes as the rest of the view, one line each, a little smaller if need be:
 /// the system's text size doesn't push them out of the activity's height.
 private struct NumbersLines: View {
     let numbers: Numbers
@@ -251,9 +254,9 @@ private struct NumbersLines: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.white.opacity(0.5))
             }
-            if numbers.ping != nil || numbers.trafficText != nil {
+            if numbers.latency != nil || numbers.trafficText != nil {
                 HStack(spacing: 8) {
-                    if let ping = numbers.ping { PingLabel(ms: ping) }
+                    if let latency = numbers.latency { LatencyLabel(ms: latency) }
                     if let traffic = numbers.trafficText {
                         Text(traffic)
                             .font(.system(size: 12, weight: .medium).monospacedDigit())
@@ -298,7 +301,7 @@ private struct NumbersRow: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.white.opacity(0.5))
             }
-            if let ping = numbers.ping { PingLabel(ms: ping) }
+            if let latency = numbers.latency { LatencyLabel(ms: latency) }
             if let traffic = numbers.traffic {
                 HStack(spacing: 3) {
                     if spent {
@@ -315,9 +318,9 @@ private struct NumbersRow: View {
     }
 }
 
-/// The ping in Главная's colours (ServerRow.color): green under 500 ms, orange under 1.5 s,
-/// else red.
-private struct PingLabel: View {
+/// The latency (under 300 ms: Numbers.latency), as Главная's Проверить соединение: green under
+/// 120 ms, else as the other numbers. Never red or orange, nor a server's Пинг colours.
+private struct LatencyLabel: View {
     let ms: Int
 
     var body: some View {
@@ -331,15 +334,12 @@ private struct PingLabel: View {
     }
 
     static func color(_ ms: Int) -> Color {
-        if ms < 0 { return Brand.red }
-        if ms < 500 { return Brand.green }
-        if ms < 1500 { return .orange }
-        return Brand.red
+        ms < Latency.good ? Brand.green : Color.white.opacity(0.75)
     }
 }
 
-/// The compact island's right: ↓ the download speed while there is traffic, else the ping, else
-/// the state's dot. Stale: the dot (no room to say since when).
+/// The compact island's right: ↓ the download speed while there is traffic, else the latency
+/// (only under 300 ms), else the state's dot. Stale: the dot (no room to say since when).
 private struct CompactTrailing: View {
     let numbers: Numbers
 
@@ -351,13 +351,13 @@ private struct CompactTrailing: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .accessibilityLabel("Загрузка " + TrafficText.speed(down))
-        } else if let ping = numbers.ping, !numbers.stale {
-            Text("\(ping) мс")
+        } else if let latency = numbers.latency, !numbers.stale {
+            Text("\(latency) мс")
                 .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                .foregroundStyle(PingLabel.color(ping))
+                .foregroundStyle(LatencyLabel.color(latency))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .accessibilityLabel("Пинг \(ping) мс")
+                .accessibilityLabel("Задержка \(latency) мс")
         } else {
             StatusDot(status: StatusLook(numbers.state, stale: numbers.stale))
         }

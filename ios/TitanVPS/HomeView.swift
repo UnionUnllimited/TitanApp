@@ -248,7 +248,9 @@ struct HomeView: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: vpn.isConnected)
     }
 
-    /// Проверить соединение (as in Happ): the result of a request through the VPN, tap to repeat.
+    /// Проверить соединение (as in Happ): the result of requests through the VPN, tap to repeat.
+    /// The latency (ConnectionCheck: a warm connection's, not a server's Пинг) as a number only
+    /// under 300 ms, green under 120; at or over 300 «медленно», never a red number.
     private var connectionCheck: some View {
         VStack(spacing: 6) {
             Button { store.checkConnection() } label: {
@@ -261,8 +263,15 @@ struct HomeView: View {
                         ProgressView().scaleEffect(0.8).frame(width: 18, height: 18)
                         Text("Проверяем соединение…")
                     case .ok(let r):
-                        Circle().fill(ServerRow.color(r.ms)).frame(width: 9, height: 9)
-                        Text("\(r.ms) мс").monospacedDigit().foregroundStyle(ServerRow.color(r.ms))
+                        if let ms = Latency.shown(r.ms) {
+                            let good = ms < Latency.good
+                            Circle().fill(good ? Palette.green : Color.secondary).frame(width: 9, height: 9)
+                            Text("\(ms) мс").monospacedDigit().foregroundStyle(good ? Palette.green : Color.primary)
+                        } else {
+                            // Slow, or Google not measured (Cloudflare answered): it works, no number.
+                            Circle().fill(Color.secondary).frame(width: 9, height: 9)
+                            Text(r.ms == nil ? "Работает" : "Работает · медленно").lineLimit(1)
+                        }
                         if let code = r.country {
                             Text("·").foregroundStyle(.secondary)
                             if let flag = Fmt.flag(code) {
@@ -307,7 +316,9 @@ struct HomeView: View {
         switch store.check {
         case .idle: return "Проверить соединение"
         case .checking: return "Проверяем соединение"
-        case .ok(let r): return "Соединение работает, \(r.ms) миллисекунд. Проверить ещё раз"
+        case .ok(let r):
+            if let ms = Latency.shown(r.ms) { return "Соединение работает, \(ms) миллисекунд. Проверить ещё раз" }
+            return r.ms == nil ? "Соединение работает. Проверить ещё раз" : "Соединение работает, медленно. Проверить ещё раз"
         case .failed: return "Нет ответа через VPN. Проверить ещё раз"
         }
     }

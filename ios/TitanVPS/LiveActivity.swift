@@ -4,7 +4,7 @@ import NetworkExtension
 import UIKit
 
 /// The Live Activity (TitanWidgets draws it, iOS 18+), with the VPN on and off. On: the server,
-/// «Подключено» with the timer, the speed, the ping and what the session used; "Переключаемся…"
+/// «Подключено» with the timer, the speed, the latency and what the session used; "Переключаемся…"
 /// while it connects again (another server, a ping's pause, iOS reconnecting), "Подключаемся…"
 /// while it comes on. Off: «Выключено» with the server ⏻ would connect to (a pick in the app
 /// shows there too); ‹ › then only move the pick. At once when turned off in the app (Выкл,
@@ -39,18 +39,20 @@ import UIKit
 /// (HIG, Live Activities), and once the app is left iOS suspends it: nothing updates the
 /// activity then. So the island's speed is what was sent on leaving the app (leaving: the
 /// numbers of that moment), live for 15 s; after that the compact island shows the state's dot,
-/// the expanded one and the Lock Screen the ping and the traffic under «Обновлено в …». A live
+/// the expanded one and the Lock Screen the latency and the traffic under «Обновлено в …». A live
 /// speed with the app in the background needs ActivityKit push updates from a server
 /// (pushType: .token, NSSupportsLiveActivitiesFrequentUpdates), which this app doesn't have.
 /// While the app is open the activity is seen only under Центр уведомлений pulled down over it
 /// (the app inactive): a look every 2 s, sent there when what it shows changes; in the app
-/// itself (active), where nothing shows it, only a new ping and one every 10 s, so iOS has no
+/// itself (active), where nothing shows it, only a new latency and one every 10 s, so iOS has no
 /// unseen renders to throttle. And on every VPN change and intent.
 /// Each update carries its time and a stale date 15 s on: once iOS marks it stale the widget
-/// drops the speed and keeps the ping and the traffic under that time, so a frozen speed never
-/// reads as live. The ping: the newest of Проверить соединение's result, the running server's
-/// Пинг and a probe of our own (one HEAD through the tunnel, at most once a minute while the app
-/// is open); none older than 2 min goes out.
+/// drops the speed and keeps the latency and the traffic under that time, so a frozen speed never
+/// reads as live. The latency is a warm one (ConnectionCheck: a few requests on one connection
+/// through the tunnel, the first not timed), the newest of Проверить соединение's result and a
+/// probe of our own (at most once a minute while the app is open, a few hundred bytes); none
+/// older than 2 min goes out, and only under 300 ms (Latency). Not a server's Пинг: that times a
+/// fresh connection, the proxy's handshake included, often over a second while the VPN is fine.
 @MainActor
 enum LiveActivityController {
     /// Настройки → Dynamic Island (on unless turned off there).
@@ -276,7 +278,7 @@ enum LiveActivityController {
     @available(iOS 18.0, *)
     private static func showOn(_ name: String, since: Date) async {
         runningName = name
-        notePings(for: name)
+        noteCheck(for: name)
         let state = onState(name, since: since)
         let all = Activity<VPNActivityAttributes>.activities
         let live = all.filter { $0.isLive }
@@ -394,11 +396,10 @@ enum LiveActivityController {
     /// What the connection that came up at [since] has used.
     private static var session: (since: Date, down: UInt64, up: UInt64)?
     private static var speed: (down: Double, up: Double, at: Date)?
-    /// The newest ping of a server (by name, with its flag) and when it was measured.
-    private static var lastPing: (server: String, ms: Int, at: Date)?
-    /// The store's check and pings at the last look, and when: a change is a new measurement.
+    /// The newest latency on a server (by name, with its flag) and when it was measured.
+    private static var lastLatency: (server: String, ms: Int, at: Date)?
+    /// The store's check at the last look, and when: a change is a new measurement.
     private static var seenCheck = ConnectionCheck.Status.idle
-    private static var seenPings: [String: Int] = [:]
     private static var seenAt = Date.distantPast
     private static var lastProbe = Date.distantPast
     private static var probing = false
@@ -438,7 +439,7 @@ enum LiveActivityController {
     private static func tick(force: Bool = false) async -> Bool {
         guard let activity = live(), activity.content.state.shown == .on, let name = runningName,
               case .connected(let since)? = VPNController.current?.state else { return false }
-        notePings(for: name)
+        noteCheck(for: name)
         if !force { probeIfDue(name) }
         let state = onState(name, since: since)
         if !force, !due(state) { return true }
@@ -448,7 +449,7 @@ enum LiveActivityController {
 
     /// At least every 10 s. Under Центр уведомлений (the app inactive) the activity can be seen:
     /// also when what it shows changes. In the app (active) nothing shows it, the island
-    /// included: also on a new ping, not on each change of the speed.
+    /// included: also on a new latency, not on each change of the speed.
     @available(iOS 18.0, *)
     private static func due(_ state: VPNActivityAttributes.ContentState) -> Bool {
         if Date().timeIntervalSince(sentAt) >= 10 { return true }
@@ -495,7 +496,8 @@ enum LiveActivityController {
             state.down = sp.down
             state.up = sp.up
         }
-        if let p = lastPing, p.server == name, now.timeIntervalSince(p.at) < 120 { state.ping = p.ms }
+        // Only under 300 ms: a slow one shows nothing, not the last quick one.
+        if let p = lastLatency, p.server == name, now.timeIntervalSince(p.at) < 120 { state.ping = Latency.shown(p.ms) }
         state.statsAt = now
         return state
     }
@@ -524,31 +526,28 @@ enum LiveActivityController {
         await activity.update(content(state))
     }
 
-    /// New measurements of the running server since the last look: Проверить соединение's
-    /// result (through the tunnel, so its delay) or its Пинг. Only when that look was a moment
+    /// A new Проверить соединение result on the running server since the last look: the same
+    /// warm latency; one without a number (Cloudflare answered, Google didn't) leaves none. A
+    /// server's Пинг isn't one (a fresh connection's time). Only when that look was a moment
     /// ago: what changed while the app was away (or before the first look) may be any age.
-    private static func notePings(for name: String) {
+    private static func noteCheck(for name: String) {
         guard let store = AppStore.current else { return }
         let now = Date()
         let recent = now.timeIntervalSince(seenAt) <= 10
         seenAt = now
         let check = store.check
-        if recent, check != seenCheck, case .ok(let r) = check { lastPing = (name, r.ms, now) }
-        seenCheck = check
-        let pings = store.pings
-        if recent, let id = store.subscription?.servers.first(where: { $0.name == name })?.id,
-           let ms = pings[id], ms >= 0, seenPings[id] != ms {
-            lastPing = (name, ms, now)
+        if recent, check != seenCheck, case .ok(let r) = check {
+            if let ms = r.ms { lastLatency = (name, ms, now) } else { lastLatency = nil }
         }
-        seenPings = pings
+        seenCheck = check
     }
 
-    /// No ping of the server for a minute: one HEAD through the tunnel (ConnectionCheck.probe),
-    /// not alongside Проверить соединение or a Пинг.
+    /// No latency of the server for a minute: ConnectionCheck.probe through the tunnel, not
+    /// alongside Проверить соединение or a Пинг. None measured leaves none.
     private static func probeIfDue(_ name: String) {
         let now = Date()
         guard !probing, now.timeIntervalSince(lastProbe) >= 60,
-              lastPing.map({ $0.server != name || now.timeIntervalSince($0.at) >= 60 }) ?? true,
+              lastLatency.map({ $0.server != name || now.timeIntervalSince($0.at) >= 60 }) ?? true,
               let store = AppStore.current, store.check != .checking, !store.pingBusy else { return }
         probing = true
         lastProbe = now
@@ -556,8 +555,8 @@ enum LiveActivityController {
             let ms = await ConnectionCheck.probe()
             probing = false
             // Still up on that server: else it measured a switch.
-            guard let ms, runningName == name, VPNController.current?.isConnected == true else { return }
-            lastPing = (name, ms, Date())
+            guard runningName == name, VPNController.current?.isConnected == true else { return }
+            if let ms { lastLatency = (name, ms, Date()) } else { lastLatency = nil }
         }
     }
 }
