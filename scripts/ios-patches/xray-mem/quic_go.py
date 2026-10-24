@@ -1,63 +1,107 @@
 """Titan patch for quic-go (apernet's: Xray's Hysteria and XHTTP over HTTP/3), iOS only: the
-receive windows keep to the ceilings the caller sets, Chrome parroting or not, and a few
-streams nobody reads don't freeze the connection.
+receive windows keep to the ceilings the caller sets, Chrome parroting or not, and streams
+nobody reads don't freeze the connection. The new code is quic_mem.go (copied in as
+titan_mem.go); the edits below hook it in.
 
 Chrome parroting opens every connection with Chrome's windows (6 MiB per stream, 15 MiB per
 connection: transport parameters in the handshake, part of its fingerprint) and raised the
 auto-tuning ceilings to them, so Xray's ceilings (and the panel's quicParams) did nothing: a
 stalled stream (a player with a full buffer) had 6 MiB waiting in memory, a connection 15.
 The handshake stays Chrome's; what is granted after it (MAX_STREAM_DATA / MAX_DATA) keeps
-to the ceilings: the flow controllers start at the smaller of the two, the ceilings stay.
+to the ceilings: the flow controllers start at the smaller of the two. The connection's goes
+to its ceiling at the first update once the handshake gave half of it or more (titanGrow):
+from Chrome's 15 MiB auto-tuning hardly ever reached a 16 MiB ceiling.
 
-MAX_DATA came only once a quarter of the connection's window had been read. What waits on a
-stream nobody reads (a paused player, a suspended app) is never read: once such streams held
-more than three quarters of the window, no MAX_DATA came again and every stream of the
-connection (all TCP through that server) stood until one of them closed. The connection's
-window also goes up once an update would at least double what the peer has left of it (Go's
-HTTP/2 rule), 64 KiB at the least: the others go on with what the stalled ones leave of the
-window. The window is the same, so is what may wait unread in it.
+What waits on a stream nobody reads (a paused player, a suspended app) is never read, so the
+connection's other streams get only what the stalled ones leave of its window:
+- MAX_DATA came only once a quarter of the window had been read: once such streams held more
+  than three quarters of it, no MAX_DATA came again. The connection's window also goes up once
+  an update would at least double what the peer has left of it (Go's HTTP/2 rule), 64 KiB at
+  the least (titanShort).
+- New streams open with Chrome's 6 MiB, so three that stall fill 16 MiB anyway: once streams
+  nothing was read from for 2 s hold more than three quarters of the connection's window, the
+  one holding the most is cancelled (STOP_SENDING, its data dropped), until they hold three
+  quarters at most (titanCheck).
 Every anchor must be found.
 """
-import pathlib, sys
+import pathlib, shutil, sys
 
 src = pathlib.Path(sys.argv[1])
+here = pathlib.Path(__file__).parent
 MARK = "// Titan patch: iOS memory."
 edits = {
     "config.go": [(
         "\t\t// The auto-tuning ceilings must not sit below the starting windows.\n"
         "\t\tmaxStreamReceiveWindow = max(maxStreamReceiveWindow, initialStreamReceiveWindow)\n"
         "\t\tmaxConnectionReceiveWindow = max(maxConnectionReceiveWindow, initialConnectionReceiveWindow)\n",
-        "\t\t" + MARK + " The caller's ceilings stay (the flow controllers start at the smaller).\n",
+        "\t\t" + MARK + " The caller's ceilings stay (the flow controllers keep to them).\n",
     )],
     "flow_controller_base.go": [(
         "\tallowWindowIncrease func(size protocol.ByteCount) bool\n",
         "\tallowWindowIncrease func(size protocol.ByteCount) bool\n\n"
-        "\t" + MARK + " The connection's: updated when the peer runs short too (titanShort).\n"
-        "\ttitanConnection bool\n",
+        "\t" + MARK + " The connection's: updated when the peer runs short too (titanShort),\n"
+        "\t// at the ceiling from the first update (titanGrow).\n"
+        "\ttitanConnection, titanGrown bool\n",
     ), (
         "\treturn bytesRemaining <= protocol.ByteCount(float64(c.receiveWindowSize)*(1-protocol.WindowUpdateThreshold))\n}\n",
         "\treturn bytesRemaining <= protocol.ByteCount(float64(c.receiveWindowSize)*(1-protocol.WindowUpdateThreshold)) ||\n"
-        "\t\tc.titanShort()\n}\n\n"
-        "// titanShort (Titan patch: iOS memory): the connection's window goes up once an update would\n"
-        "// at least double what the peer has left of it, by titanMinUpdate at the least. What waits\n"
-        "// on streams nobody reads is never read: with a quarter of the window read alone, once they\n"
-        "// held three quarters of it no update came again, and every stream stood.\n"
-        "func (c *receiveFlowController) titanShort() bool {\n"
-        "\tif !c.titanConnection {\n\t\treturn false\n\t}\n"
-        "\tupdate := c.bytesRead + c.receiveWindowSize - c.receiveWindow\n"
-        "\treturn update >= titanMinUpdate && update >= c.receiveWindow-c.highestReceived\n}\n\n"
-        "const titanMinUpdate protocol.ByteCount = 64 << 10\n",
+        "\t\tc.titanShort() " + MARK + "\n}\n",
+    ), (
+        "\tc.maybeAdjustWindowSize(now)\n\tc.receiveWindow = c.bytesRead + c.receiveWindowSize\n",
+        "\tc.titanGrow() " + MARK + "\n"
+        "\tc.maybeAdjustWindowSize(now)\n\tc.receiveWindow = c.bytesRead + c.receiveWindowSize\n",
     )],
     "flow_controller_connection.go": [(
+        "\tlastBlockedAt protocol.ByteCount\n}\n",
+        "\tlastBlockedAt protocol.ByteCount\n\n"
+        "\t" + MARK + " Its receive streams, for stalled ones (titanCheck).\n"
+        "\ttitan titanStalls\n}\n",
+    ), (
         "\t\t\treceiveWindowSize:    receiveWindow,\n",
         "\t\t\treceiveWindowSize:    min(receiveWindow, maxReceiveWindow), " + MARK + "\n"
         "\t\t\ttitanConnection:      true,\n",
+    ), (
+        "\tc.highestReceived += increment\n\n",
+        "\tc.highestReceived += increment\n"
+        "\tc.titanArm(titanStallAfter) " + MARK + " Stalled streams holding too much?\n\n",
     )],
     "flow_controller_stream.go": [(
+        "\treceivedFinalOffset bool\n}\n",
+        "\treceivedFinalOffset bool\n\n"
+        "\t" + MARK + " When its data last began to wait, or was last read (titanCheck).\n"
+        "\ttitanSince monotime.Time\n}\n",
+    ), (
         "\t\t\treceiveWindowSize:    receiveWindow,\n",
         "\t\t\treceiveWindowSize:    min(receiveWindow, maxReceiveWindow), " + MARK + "\n",
+    ), (
+        "\tincrement := offset - c.highestReceived\n\tc.highestReceived = offset\n",
+        "\tif c.highestReceived == c.bytesRead { " + MARK + " Its data begins to wait.\n"
+        "\t\tc.titanSince = now\n\t}\n"
+        "\tincrement := offset - c.highestReceived\n\tc.highestReceived = offset\n",
+    ), (
+        "\tc.addBytesRead(n)\n\thasStreamWindowUpdate = c.shouldQueueWindowUpdate()\n",
+        "\tc.addBytesRead(n)\n\tc.titanSince = monotime.Now() " + MARK + "\n"
+        "\thasStreamWindowUpdate = c.shouldQueueWindowUpdate()\n",
+    )],
+    "receive_stream.go": [(
+        "\treturn &ReceiveStream{\n\t\tstreamID:       streamID,\n",
+        "\ts := &ReceiveStream{\n\t\tstreamID:       streamID,\n",
+    ), (
+        "\t\tfinalOffset:    protocol.MaxByteCount,\n\t}\n}\n",
+        "\t\tfinalOffset:    protocol.MaxByteCount,\n\t}\n"
+        "\ts.titanAdd() " + MARK + " Listed with the connection's streams.\n"
+        "\treturn s\n}\n",
+    ), (
+        "\tif s.finalOffset == protocol.MaxByteCount {\n\t\treturn false\n\t}\n"
+        "\t// We're done with the stream if it was cancelled locally...\n",
+        "\tif s.finalOffset == protocol.MaxByteCount {\n\t\treturn false\n\t}\n"
+        "\tif s.cancelledLocally || s.errorRead { " + MARK + " Done: off the connection's list.\n"
+        "\t\ts.titanDone()\n\t}\n"
+        "\t// We're done with the stream if it was cancelled locally...\n",
     )],
 }
+if (src / "titan_mem.go").exists():
+    sys.exit("quic-go: titan_mem.go exists already")
 out = {}
 for name, changes in edits.items():
     code = (src / name).read_text()
@@ -68,4 +112,5 @@ for name, changes in edits.items():
     out[name] = code
 for name, code in out.items():
     (src / name).write_text(code)
+shutil.copy(here / "quic_mem.go", src / "titan_mem.go")
 print("quic-go memory patch applied")

@@ -20,8 +20,9 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
   buffer); gRPC fixed 1 / 4 MiB (the BDP estimate grows to 16 MiB); QUIC 1 / 16 MiB (with the
   quic-go patch, quic_go.py; a new stream still opens with Chrome's 6, a fresh connection with
   its 15). The connections' windows leave the other streams room next to a few that stall
-  (16 MiB: 12 stalled HTTP/2 streams, two new QUIC ones). Which servers are used doesn't
-  change.
+  (16 MiB: 12 stalled HTTP/2 streams of 1 MiB, two new QUIC ones of 6); past three quarters
+  the patched quic-go cancels the stalled QUIC stream holding the most. Which servers are used
+  doesn't change.
 - The burst observatory probes at most 4 subjects at once in its rounds (all 60-85 together at
   each start before); the first check at a start 12 at once, starting in its own order: the
   subjects' groups (subjectSelector prefixes) taken in turn, each shuffled, so every group

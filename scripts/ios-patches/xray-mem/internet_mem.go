@@ -55,15 +55,27 @@ func TitanCloseTransports() int {
 // DisableChromeParrot 1 MiB each). Only quicParams' disableChromeParrot bounds that from the
 // handshake on, and it changes the fingerprint: not done here.
 //
-// What stalled streams hold of the connection's window, its other streams don't get. 16 MiB:
-// two new streams that stall (12 MiB) leave the others 4, one new and one old (7 MiB) 9. With
-// 8 MiB either froze the whole connection (all TCP through that server) until one of them
-// closed: the two new ones take all of it, and quic-go sent MAX_DATA only once a quarter of
-// the window was read, which stalled streams holding over 6 MiB never let happen. quic_go.py
-// updates the window when the peer runs short too, so only stalled streams filling all of it
-// stop the others; both are needed (16 MiB alone still froze with two new ones: 12 MiB, three
-// quarters). The price: a connection may hold 16 MiB unread, not 8; only stalled streams fill
-// it (each holds what it holds whatever the window), and a fresh one held 15 already.
+// What stalled streams hold of the connection's window, its other streams don't get, and a new
+// one holds Chrome's 6 MiB whatever the window. With 8 MiB one new and one old (7 MiB) or two
+// new ones froze the whole connection (all TCP through that server) until one of them closed
+// (connIdle: 300 s); with 16 MiB three new ones, two new and four old, or one new and ten old
+// still did. No window is big enough for that and small enough for the tunnel. The patched
+// quic-go (quic_go.py): the window is also updated when the peer runs short, not only once a
+// quarter of it was read; the connection's is at this cap from its first update (it kept
+// Chrome's 15 MiB: auto-tuning hardly ever ran); and once streams nothing was read from for 2 s
+// hold more than three quarters of it (12 MiB), the one holding the most is cancelled (its app
+// finds that connection reset when it reads again), so the others get 4 MiB at least within a
+// few seconds. Two new stalled streams (12 MiB), or one new and one old (7), are left alone.
+//
+// The price is memory. At 8 MiB the connection's window capped new stalled streams too (two
+// held 8 MiB, and froze it); at 16 two hold 12 MiB for as long as they stall, and any mix fills
+// up to 16 MiB for the ~2 s before a cancel, 12 at most after it. Stored frames take 1.05-1.3x
+// their size in heap (each in a 1452-byte buffer: two new stalled streams, 12 MiB, took 15.5 MiB;
+// three, 16 MiB, 20.9, and 15.5 once one was cancelled). Next to the 11-17 MiB Go has over what
+// is live after the first check (docs/HANDOFF.md), 12 MiB on one connection is at the edge and
+// 16 past it: then the watchdog's memory restart (connections cut for seconds) catches it.
+// Chosen over a smaller window that freezes; a fresh connection held 15 MiB before anyway. For
+// HTTP/2 (splithttp) it differs: a stream holds 1 MiB at most whatever the connection's window.
 const (
 	TitanQUICStreamWindow = 1 << 20
 	TitanQUICConnWindow   = 16 << 20

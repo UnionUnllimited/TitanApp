@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	gotls "crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"math/big"
 	gonet "net"
@@ -22,16 +23,18 @@ import (
 // window unread once Chrome's opening windows are used up, not 6 MiB (xray-mem patch, with
 // quic-go patched by quic_go.py). A new stream that stalls still holds Chrome's 6 MiB: the
 // connection's other streams go on with what is left of its window. A fresh connection (all
-// of them after a restart) holds up to Chrome's 15 MiB: what the handshake gave.
+// of them after a restart) holds up to its 16 MiB window: Chrome's 15 from the handshake, then
+// the window (until stalled streams holding over 12 MiB are cancelled, TestTitanQUICStalled).
 func TestTitanQUICWindows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var sent [10]atomic.Int64
-	addr := titanQUICServer(t, ctx, sent[:])
+	var sent [12]atomic.Int64
+	addr := titanQUICServer(t, ctx, sent[:], nil)
 	dial := func(cfg *quic.Config) (*quic.Conn, *quic.Transport) { return titanQUICDial(t, ctx, addr, cfg) }
 
-	// A fresh connection, 3 streams never read: with Chrome parroting what the handshake gave
-	// (6 MiB a stream, 15 the connection) at most, without it the caps from the start.
+	// A fresh connection, 3 streams never read: with Chrome parroting what the handshake gave a
+	// stream (6 MiB) and the connection's window (16 MiB) at most, without it the caps from the
+	// start. Looked at within the 2 s after which the largest would be cancelled.
 	for i, parrot := range []bool{true, false} {
 		cfg := &quic.Config{ChromeParrot: parrot, InitialStreamReceiveWindow: 8 << 20, MaxStreamReceiveWindow: 8 << 20,
 			InitialConnectionReceiveWindow: 20 << 20, MaxConnectionReceiveWindow: 20 << 20}
@@ -48,7 +51,7 @@ func TestTitanQUICWindows(t *testing.T) {
 		time.Sleep(time.Second)
 		stream, conns := int64(internet.TitanQUICStreamWindow), int64(3*internet.TitanQUICStreamWindow)
 		if parrot {
-			stream, conns = 6<<20, 15<<20
+			stream, conns = 6<<20, internet.TitanQUICConnWindow
 		}
 		var total int64
 		for n := first; n < first+3; n++ {
@@ -133,6 +136,17 @@ func TestTitanQUICWindows(t *testing.T) {
 	if sent[2].Load() > 6<<20+256<<10 || unread > internet.TitanQUICConnWindow+256<<10 {
 		t.Fatalf("unread: %d KiB on the new stream, %d KiB on the connection", sent[2].Load()>>10, unread>>10)
 	}
+	// Two more new ones that stall fill the connection's window: past Chrome's opening it is the
+	// 16 MiB cap (it kept Chrome's 15: auto-tuning hardly ever ran). Looked at within the 2 s
+	// after which the largest stalled stream would be cancelled.
+	open(10)
+	open(11)
+	time.Sleep(time.Second)
+	unread += sent[10].Load() + sent[11].Load()
+	t.Logf("with two more new streams stalled the connection holds %d KiB unread", unread>>10)
+	if unread < internet.TitanQUICConnWindow-256<<10 || unread > internet.TitanQUICConnWindow+256<<10 {
+		t.Fatalf("with two more new streams stalled the connection holds %d KiB unread", unread>>10)
+	}
 
 	// Pooled, it is closed by titanCloseAll; the sweep later closes what the old stream
 	// settings pooled meanwhile, and only that.
@@ -167,28 +181,53 @@ func TestTitanQUICWindows(t *testing.T) {
 }
 
 // Streams whose readers stall (a paused or full-buffered player, a suspended app) next to one
-// that is read (the video being watched), on a connection past Chrome's opening windows: each
-// stalled one holds its window, the connection at most its cap, and the read one keeps flowing.
-// With an 8 MiB window one old and one new stalled stream (7 MiB) or two new ones froze it, and
-// with it every stream of the connection (all TCP through that server); two old and two new
-// (14 MiB) froze 16 MiB until quic-go updated the window before a quarter of it was read
-// (quic_go.py).
+// that is read (the video being watched), on a connection past Chrome's opening windows: an old
+// one (read past its opening) holds its 1 MiB window at most, a new one Chrome's 6 MiB. With an
+// 8 MiB connection window one old and one new (7 MiB) or two new ones froze the connection, and
+// with it every stream of it (all TCP through that server); at 16 MiB two old and two new (14)
+// froze it until quic-go updated the window before a quarter of it was read, and three new ones,
+// or two new and four old, still filled all of it (quic_go.py). Now once the stalled streams hold
+// more than three quarters of the window for 2 s, the one holding the most is cancelled (its
+// server sees STOP_SENDING), so the others keep a quarter of it: the video reads at full speed
+// next to every mix, and two new stalled streams (12 MiB) or one new and one old are left alone.
 func TestTitanQUICStalled(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	var sent [8]atomic.Int64
-	addr := titanQUICServer(t, ctx, sent[:])
+	var sent [16]atomic.Int64
+	var stopped [16]atomic.Bool
+	srv := titanQUICServer(t, ctx, sent[:], stopped[:])
+	const oldRead = 8 << 20
+	share := int64(internet.TitanQUICConnWindow - internet.TitanQUICConnWindow/4)
 	for _, c := range []struct {
-		name     string
-		old, new int
-	}{{"one old and one new", 1, 1}, {"two new", 0, 2}, {"two old and two new", 2, 2}} {
+		name      string
+		rtt       time.Duration
+		old, new  int
+		newRead   int // what each new one reads before it stalls
+		cancelled int
+	}{
+		{"one old and one new", 0, 1, 1, 0, 0},
+		{"two new", 0, 0, 2, 0, 0},
+		{"two old and two new", 0, 2, 2, 0, 1},
+		{"three new", 0, 0, 3, 0, 1},
+		{"three new that read 1 MiB", 0, 0, 3, 1 << 20, 1},
+		{"four old and two new", 0, 4, 2, 0, 1},
+		{"ten old and one new", 0, 10, 1, 0, 1},
+		{"two new at 150 ms", 150 * time.Millisecond, 0, 2, 0, 0},
+		{"three old and two new at 150 ms", 150 * time.Millisecond, 3, 2, 0, 1},
+		{"three new that read 1 MiB at 150 ms", 150 * time.Millisecond, 0, 3, 1 << 20, 1},
+	} {
 		// Xray's Hysteria defaults, then the caps.
 		cfg := &quic.Config{ChromeParrot: true, InitialStreamReceiveWindow: 8 << 20, MaxStreamReceiveWindow: 8 << 20,
 			InitialConnectionReceiveWindow: 20 << 20, MaxConnectionReceiveWindow: 20 << 20}
 		internet.TitanQUICWindows(cfg)
+		addr := srv
+		if c.rtt > 0 {
+			addr = titanUDPDelay(t, srv, c.rtt/2)
+		}
 		conn, tr := titanQUICDial(t, ctx, addr, cfg)
 		for i := range sent {
 			sent[i].Store(0)
+			stopped[i].Store(false)
 		}
 		n := byte(0)
 		open := func() *quic.Stream {
@@ -219,25 +258,35 @@ func TestTitanQUICStalled(t *testing.T) {
 		for got.Load() < 20<<20 && ctx.Err() == nil {
 			time.Sleep(10 * time.Millisecond)
 		}
-		// An old stream: read past its 6 MiB opening, then it stalls; a new one stalls at once.
-		const oldRead = 8 << 20
+		// An old stream: read past its 6 MiB opening, then it stalls; a new one stalls at once,
+		// or after newRead.
 		for range c.old {
 			if _, err := io.ReadFull(open(), make([]byte, oldRead)); err != nil {
 				t.Fatal(err)
 			}
 		}
 		for range c.new {
-			open()
+			if _, err := io.ReadFull(open(), make([]byte, c.newRead)); err != nil {
+				t.Fatal(err)
+			}
 		}
-		time.Sleep(time.Second)
+		// They fill what they may, 2 s later the ones holding the most are cancelled.
+		time.Sleep(3500 * time.Millisecond)
 		before := got.Load()
 		time.Sleep(2 * time.Second)
 		flowed := got.Load() - before
 		var held, most int64
+		cancelled := 0
 		for i := 1; i <= c.old+c.new; i++ {
+			if stopped[i].Load() {
+				cancelled++
+				continue
+			}
 			h := sent[i].Load()
 			if i <= c.old {
 				h -= oldRead
+			} else {
+				h -= int64(c.newRead)
 			}
 			held += h
 			most = max(most, h)
@@ -253,11 +302,20 @@ func TestTitanQUICStalled(t *testing.T) {
 		<-done
 		conn.CloseWithError(0, "")
 		tr.Close()
-		t.Logf("%s stalled: they hold %d KiB (%d at most), the video read %d KiB in 2 s", c.name, held>>10, most>>10, flowed>>10)
-		if held > internet.TitanQUICConnWindow+256<<10 {
+		t.Logf("%s stalled: %d cancelled, the others hold %d KiB (%d at most), the video read %d KiB in 2 s",
+			c.name, cancelled, held>>10, most>>10, flowed>>10)
+		if cancelled != c.cancelled {
+			t.Fatalf("%s: %d stalled streams cancelled, want %d", c.name, cancelled, c.cancelled)
+		}
+		if held > share+256<<10 {
 			t.Fatalf("%s: stalled streams hold %d KiB", c.name, held>>10)
 		}
-		if flowed < 8<<20 {
+		// At full speed: hundreds of MiB without delay, a stream window per RTT at 150 ms (13 MiB).
+		want := int64(8 << 20)
+		if c.rtt > 0 {
+			want = 4 << 20
+		}
+		if flowed < want {
 			t.Fatalf("%s stalled: the video read %d KiB in 2 s", c.name, flowed>>10)
 		}
 	}
@@ -287,8 +345,9 @@ func TestTitanQUICCloseDialing(t *testing.T) {
 }
 
 // titanQUICServer serves QUIC on localhost: each stream gets its number from the client first,
-// then as much data as the client's windows let through, counted in sent.
-func titanQUICServer(t *testing.T, ctx context.Context, sent []atomic.Int64) gonet.Addr {
+// then as much data as the client's windows let through, counted in sent; stopped (if given)
+// says the client cancelled reading it (STOP_SENDING).
+func titanQUICServer(t *testing.T, ctx context.Context, sent []atomic.Int64, stopped []atomic.Bool) *gonet.UDPAddr {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour)},
 		&x509.Certificate{SerialNumber: big.NewInt(1)}, &key.PublicKey, key)
@@ -323,6 +382,10 @@ func titanQUICServer(t *testing.T, ctx context.Context, sent []atomic.Int64) gon
 						for {
 							n, err := str.Write(buf)
 							sent[b[0]].Add(int64(n))
+							var se *quic.StreamError
+							if errors.As(err, &se) && se.Remote && stopped != nil {
+								stopped[b[0]].Store(true)
+							}
 							if err != nil {
 								return
 							}
@@ -332,7 +395,7 @@ func titanQUICServer(t *testing.T, ctx context.Context, sent []atomic.Int64) gon
 			}()
 		}
 	}()
-	return ln.Addr()
+	return ln.Addr().(*gonet.UDPAddr)
 }
 
 func titanQUICDial(t *testing.T, ctx context.Context, addr gonet.Addr, cfg *quic.Config) (*quic.Conn, *quic.Transport) {
@@ -340,10 +403,63 @@ func titanQUICDial(t *testing.T, ctx context.Context, addr gonet.Addr, cfg *quic
 	if err != nil {
 		t.Fatal(err)
 	}
+	udp.SetReadBuffer(16 << 20)
 	tr := &quic.Transport{Conn: udp, ConnectionIDGenerator: quic.ZeroLengthConnectionIDGenerator{}}
 	conn, err := tr.Dial(ctx, addr, &gotls.Config{InsecureSkipVerify: true, NextProtos: []string{"titan"}}, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return conn, tr
+}
+
+// titanUDPDelay forwards one client's UDP datagrams to server and back, each way delay later (no
+// bandwidth limit), and gives its own address.
+func titanUDPDelay(t *testing.T, server *gonet.UDPAddr, delay time.Duration) *gonet.UDPAddr {
+	lo := &gonet.UDPAddr{IP: gonet.IPv4(127, 0, 0, 1)}
+	front, err := gonet.ListenUDP("udp", lo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := gonet.ListenUDP("udp", lo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { front.Close(); back.Close() })
+	for _, c := range []*gonet.UDPConn{front, back} {
+		c.SetReadBuffer(16 << 20)
+		c.SetWriteBuffer(16 << 20)
+	}
+	type datagram struct {
+		b  []byte
+		at time.Time
+	}
+	var client atomic.Pointer[gonet.UDPAddr]
+	forward := func(from *gonet.UDPConn, write func([]byte)) {
+		ch := make(chan datagram, 1<<16)
+		go func() {
+			for d := range ch {
+				time.Sleep(time.Until(d.at))
+				write(d.b)
+			}
+		}()
+		defer close(ch)
+		for {
+			b := make([]byte, 2048)
+			n, addr, err := from.ReadFromUDP(b)
+			if err != nil {
+				return
+			}
+			if from == front {
+				client.Store(addr)
+			}
+			ch <- datagram{b[:n], time.Now().Add(delay)}
+		}
+	}
+	go forward(front, func(b []byte) { back.WriteToUDP(b, server) })
+	go forward(back, func(b []byte) {
+		if c := client.Load(); c != nil {
+			front.WriteToUDP(b, c)
+		}
+	})
+	return front.LocalAddr().(*gonet.UDPAddr)
 }
