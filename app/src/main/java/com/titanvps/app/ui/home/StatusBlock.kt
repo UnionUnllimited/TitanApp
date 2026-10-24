@@ -71,7 +71,6 @@ import com.titanvps.app.ui.kit.rememberHaptics
 import com.titanvps.app.ui.theme.Titan
 import com.titanvps.app.ui.theme.fixedSp
 import com.titanvps.app.ui.theme.iosSpring
-import com.titanvps.app.ui.theme.pingColor
 import com.titanvps.app.vpn.VpnState
 import kotlin.math.max
 import kotlinx.coroutines.delay
@@ -302,8 +301,9 @@ private fun SpeedBackdrop(history: SpeedHistory, modifier: Modifier) {
 }
 
 /**
- * Проверить соединение (as in Happ): the result of a request through the VPN, tap to repeat.
- * The answer to a check by hand is felt too.
+ * Проверить соединение (as in Happ): the result of requests through the VPN, tap to repeat.
+ * The latency is a warm one (ConnectionCheck), shown as a number only under 300 ms. The
+ * answer to a check by hand is felt too.
  */
 @Composable
 private fun ConnectionPill(check: ConnectionCheck.State, techMode: Boolean, onCheck: () -> Unit, modifier: Modifier) {
@@ -322,7 +322,11 @@ private fun ConnectionPill(check: ConnectionCheck.State, techMode: Boolean, onCh
     val description = when (check) {
         ConnectionCheck.State.Idle -> "Проверить соединение"
         ConnectionCheck.State.Checking -> "Проверяем соединение"
-        is ConnectionCheck.State.Ok -> "Соединение работает, ${check.ms} миллисекунд. Проверить ещё раз"
+        is ConnectionCheck.State.Ok -> when {
+            check.ms == null -> "Соединение работает. Проверить ещё раз"
+            ConnectionCheck.latencyOf(check.ms) == ConnectionCheck.Latency.SLOW -> "Соединение работает, медленно. Проверить ещё раз"
+            else -> "Соединение работает, ${check.ms} миллисекунд. Проверить ещё раз"
+        }
         is ConnectionCheck.State.Failed -> "Нет ответа через VPN. Проверить ещё раз"
     }
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -383,9 +387,16 @@ private fun PillContent(check: ConnectionCheck.State) {
                 PillText("Проверяем соединение…", text)
             }
             is ConnectionCheck.State.Ok -> {
-                val color = pingColor(check.ms)
+                val latency = check.ms?.let(ConnectionCheck::latencyOf)
+                // Never red or orange: green when fast (or not measured), plain up to 300 ms,
+                // slower a word instead of the number.
+                val color = if (latency == null || latency == ConnectionCheck.Latency.FAST) palette.green else palette.textSecondary
                 Box(Modifier.size(9.dp).clip(CircleShape).background(color))
-                PillText("${check.ms} мс", color, tabular = true)
+                when (latency) {
+                    null -> PillText("Работает", text)
+                    ConnectionCheck.Latency.SLOW -> PillText("Медленно", color)
+                    else -> PillText("${check.ms} мс", color, tabular = true)
+                }
                 check.country?.let { code ->
                     PillText("·", palette.textSecondary)
                     CountryFlagCircle(code, 18.dp)

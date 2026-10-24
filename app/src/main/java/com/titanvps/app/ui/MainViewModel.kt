@@ -1,6 +1,7 @@
 package com.titanvps.app.ui
 
 import android.app.Application
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.titanvps.app.BuildConfig
@@ -129,6 +130,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _connectionCheck = MutableStateFlow<ConnectionCheck.State>(ConnectionCheck.State.Idle)
     val connectionCheck: StateFlow<ConnectionCheck.State> = _connectionCheck.asStateFlow()
     private var checkJob: Job? = null
+    /** The server and time (elapsedRealtime) of the last latency measured after a connect. */
+    private var autoWarm: Pair<String, Long>? = null
 
     /** Account status and devices from the bot (null until loaded or if unavailable). */
     private val _account = MutableStateFlow<com.titanvps.app.data.AccountApi.Info?>(null)
@@ -143,6 +146,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             var last: VpnState.Connected? = null
             vpnState.collect { state ->
+                // Off: the next connect measures the latency again.
+                if (state == VpnState.Disconnected) autoWarm = null
                 val now = state as? VpnState.Connected
                 if (now == last) return@collect
                 last = now
@@ -154,12 +159,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * A request through the VPN: does it work, how fast, which address the sites see. After a
+     * A request through the VPN: does it work, its latency, which address the sites see. After a
      * connect ([auto]) it waits a moment and tries up to three times; by hand up to twice.
      */
     fun checkConnection(auto: Boolean = false) {
         if (_connectionCheck.value == ConnectionCheck.State.Checking) return
-        if (vpnState.value !is VpnState.Connected) return
+        val server = (vpnState.value as? VpnState.Connected)?.serverName ?: return
+        // Reconnects while on (another network, a core restart) also come in the background:
+        // the latency of the same server at most once a minute then. By hand: always.
+        val now = SystemClock.elapsedRealtime()
+        val warm = !auto || autoWarm.let { it == null || it.first != server || now - it.second >= AUTO_WARM_EVERY_MS }
+        if (auto && warm) autoWarm = server to now
         _connectionCheck.value = ConnectionCheck.State.Checking
         checkJob = viewModelScope.launch {
             // Right after connecting the tunnel may not carry traffic yet.
@@ -168,7 +178,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var result: ConnectionCheck.State = ConnectionCheck.State.Failed(null)
             for (attempt in 0 until tries) {
                 if (attempt > 0) delay(1500)
-                result = ConnectionCheck.once()
+                result = ConnectionCheck.once(warm)
                 if (result is ConnectionCheck.State.Ok) break
             }
             _connectionCheck.value = result
@@ -405,5 +415,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _busy.value = false
             }
         }
+    }
+
+    private companion object {
+        const val AUTO_WARM_EVERY_MS = 60_000L
     }
 }

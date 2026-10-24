@@ -54,6 +54,16 @@
   (`applyTfo` включает TFO по имени сервера или полю `titan`; `fitXhttpInSyn` правит XHTTP для TFO-серверов).
 - То же на Android: `app/src/main/java/com/titanvps/app/core/XrayConfigs.kt`; на Windows: `desktop/src/main/kotlin/com/titanvps/desktop/XrayConfigs.kt`.
 - Пинг: iOS `ios/TitanVPS/XrayPing.swift`; Android `app/.../core/PingService.kt`; Windows `desktop/.../Repository.kt` (`PingEngine`).
+  Пинг серверов в списке — время ответа сервера на новое соединение (рукопожатие прокси, TLS), а не задержка.
+  - «Проверить соединение» на Главной Android (`app/.../core/ConnectionCheck.kt`, вид — `ui/home/StatusBlock.kt`):
+    запросы через локальный прокси ядра. Первый HEAD `www.gstatic.com/generate_204` открывает соединение и говорит
+    только, работает ли VPN; его время не показывается. Задержка — медиана следующих трёх HEAD на том же соединении
+    (keep-alive / HTTP/2), телефон → сервер → Google, по несколько сотен байт. Запрос, которому понадобилось новое
+    соединение, не считается; меньше двух ответов за 4 с — без числа («Работает»). Google выбран потому, что панель
+    ведёт его через сервер (российские сайты идут напрямую). Число — до 300 мс (зелёное до 120 мс, дальше серое),
+    с 300 мс вместо числа «Медленно»; красного и оранжевого у задержки нет. Проверка идёт после каждого подключения
+    и по нажатию; после переподключения к тому же серверу (смена сети, перезапуск ядра, бывает и в фоне) задержка
+    меряется не чаще раза в минуту. В уведомлении VPN и Live Update задержки нет.
 - VPN: iOS `ios/TitanVPS/VPNController.swift` и `ios/TitanTunnel/PacketTunnelProvider.swift`;
   Android `app/.../vpn/TitanVpnService.kt`; Windows `desktop/.../AppState.kt`, `Tun.kt`.
   - На iOS профиль VPN хранит конфиг сервера, с которым туннель стартует из Настроек iOS и по «Не отключать VPN».

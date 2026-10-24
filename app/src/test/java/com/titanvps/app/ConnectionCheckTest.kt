@@ -33,4 +33,24 @@ class ConnectionCheckTest {
     fun valueKeepsItsEqualsSigns() {
         assertEquals("a=b" to "NL", ConnectionCheck.parseTrace("ip=a=b\nloc=nl"))
     }
+
+    @Test
+    fun medianOfTheSamples() {
+        // One slow answer among warm ones doesn't move it.
+        assertEquals(64L, ConnectionCheck.median(listOf(1575, 64, 61)))
+        assertEquals(70L, ConnectionCheck.median(listOf(80, 60)))
+        assertEquals(42L, ConnectionCheck.median(listOf(42)))
+        assertNull(ConnectionCheck.median(emptyList()))
+    }
+
+    @Test
+    fun latencyShownCalmly() {
+        assertEquals(ConnectionCheck.Latency.FAST, ConnectionCheck.latencyOf(1))
+        assertEquals(ConnectionCheck.Latency.FAST, ConnectionCheck.latencyOf(119))
+        assertEquals(ConnectionCheck.Latency.NORMAL, ConnectionCheck.latencyOf(120))
+        assertEquals(ConnectionCheck.Latency.NORMAL, ConnectionCheck.latencyOf(299))
+        // From 300 ms a word instead of the number.
+        assertEquals(ConnectionCheck.Latency.SLOW, ConnectionCheck.latencyOf(300))
+        assertEquals(ConnectionCheck.Latency.SLOW, ConnectionCheck.latencyOf(1575))
+    }
 }
