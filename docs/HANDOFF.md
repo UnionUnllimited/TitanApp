@@ -34,6 +34,10 @@
 ## Сборки
 
 Каждый пуш в `claude/**` или `main` с изменениями в нужной папке запускает CI.
+Релизы для обновлялок Android и Windows выкладываются только из ветки по умолчанию и `main`: пуш в
+любую другую ветку (`claude/ios-int` и т. п.) только собирает, иначе он выкатил бы пользователям
+старую версию другой платформы (так вышли `android-283/284` и `windows-86`). Тестовые APK — пуш в
+`android-dev/**` (pre-release `android-test-N`, обновлялка его не предлагает).
 Результат выкладывается в GitHub Releases:
 
 - Android: тег `android-N`, файлы `titan-vps-arm64.apk`, `titan-vps-armv7.apk`, `titan-vps-universal.apk`

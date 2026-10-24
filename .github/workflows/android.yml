@@ -79,8 +79,10 @@ jobs:
           cp *-armeabi-v7a-release.apk ../../../../../out/release/titan-vps-armv7.apk
 
       # The app's "Обновление приложения" reads releases/latest (tag android-<versionCode>).
+      # Releases (what the in-app updater offers) only from the default branch or main: a push to any
+      # other branch (claude/ios-int and the like) just builds, so it can't ship an older app.
       - name: Publish release for in-app updates
-        if: github.event_name == 'push' && !startsWith(github.ref_name, 'android-dev/')
+        if: github.event_name == 'push' && (github.ref_name == github.event.repository.default_branch || github.ref_name == 'main')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-${{ github.run_number }}

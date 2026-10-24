@@ -125,8 +125,10 @@ jobs:
 
       # The app's "Обновление приложения" looks for the newest windows-<build> release.
       # Not "latest": Android reads releases/latest.
+      # Releases (what the in-app updater offers) only from the default branch or main: a push to any
+      # other branch just builds (the artifact below), so it can't ship an older Windows app.
       - name: Publish release for in-app updates
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && (github.ref_name == github.event.repository.default_branch || github.ref_name == 'main')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: windows-${{ github.run_number }}
