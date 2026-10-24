@@ -166,7 +166,7 @@ Windows `desktop/.../Model.kt`.
   `profile-web-page-url` — вход в личный кабинет; `announce` — объявление (можно `base64:`).
 - Только Android: `profile-title` (можно `base64:`) и `profile-update-interval` — как часто обновлять
   подписку, в часах (по умолчанию 12).
-- `sniffing-enable` (Android): `1` / `true` / `on` или `0` / `false` / `off`, остальное не учитывается.
+- `sniffing-enable` (Android и iOS): `1` / `true` / `on` или `0` / `false` / `off`, остальное не учитывается.
   Без заголовка и при `1` всё как раньше: сниффинг TUN включён с настройками инбаунда шаблона панели
   (`destOverride`, `routeOnly`, `domainsExcluded`…), по умолчанию `http`, `tls`, `quic` и `routeOnly: false`.
   При `0` у TUN `"sniffing": {"enabled": false}`: ядро видит только IP, доменные правила панели на трафик
