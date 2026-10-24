@@ -124,7 +124,9 @@ internal fun StatusBlock(
                 ConnectionTimer(state.since)
                 if (history.sampled) SpeedLine(history)
             }
-            ServerLine(serverName, ping)
+            // While on, the pill below answers how fast it is: the server's Пинг (a fresh
+            // connection's time) isn't repeated here.
+            ServerLine(serverName, ping.takeIf { !connected })
             if (state is VpnState.Error) {
                 Text(state.message, color = palette.red, fontSize = 13.sp, textAlign = TextAlign.Center)
             }
@@ -394,7 +396,7 @@ private fun PillContent(check: ConnectionCheck.State) {
                 Box(Modifier.size(9.dp).clip(CircleShape).background(color))
                 when (latency) {
                     null -> PillText("Работает", text)
-                    ConnectionCheck.Latency.SLOW -> PillText("Медленно", color)
+                    ConnectionCheck.Latency.SLOW -> PillText("Работает · медленно", text)
                     else -> PillText("${check.ms} мс", color, tabular = true)
                 }
                 check.country?.let { code ->
