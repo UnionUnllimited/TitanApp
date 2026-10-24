@@ -318,16 +318,19 @@ struct HomeView: View {
             let groups = ServerGroup.split(sub.servers)
             // The tabs and the lines under them kept close: more rows on screen.
             VStack(spacing: 6) {
-                HStack(spacing: 8) {
-                    if wide {
-                        ViewThatFits(in: .horizontal) {
-                            tabs(groups, oneLine: true)
-                            tabs(groups, oneLine: false)
-                        }
-                    } else {
-                        tabs(groups, oneLine: false)
+                // The first that fits at full size; the last one otherwise. Пинг gives up its room
+                // before the tabs' titles shrink (a 375 pt iPhone with large text, a narrow window).
+                if wide {
+                    ViewThatFits(in: .horizontal) {
+                        tabRow(groups, oneLine: true, compactPing: false)
+                        tabRow(groups, oneLine: false, compactPing: false)
+                        tabRow(groups, oneLine: false, compactPing: true)
                     }
-                    pingButton(groups)
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        tabRow(groups, oneLine: false, compactPing: false)
+                        tabRow(groups, oneLine: false, compactPing: true)
+                    }
                 }
                 Group {
                     if page == .servers {
@@ -371,25 +374,46 @@ struct HomeView: View {
         }
     }
 
+    /// The tabs and Пинг beside them.
+    private func tabRow(_ groups: [ServerGroup: [Server]], oneLine: Bool, compactPing: Bool) -> some View {
+        HStack(spacing: 8) {
+            tabs(groups, oneLine: oneLine)
+            pingButton(groups, compact: compactPing)
+        }
+    }
+
     /// Пинг for every server (the tab on screen first); Стоп with a progress ring while it runs.
-    private func pingButton(_ groups: [ServerGroup: [Server]]) -> some View {
-        Button {
+    /// Compact: the icon over a smaller word (as in the mock), about half as wide.
+    private func pingButton(_ groups: [ServerGroup: [Server]], compact: Bool) -> some View {
+        // Стоп takes Пинг's room: the row (list) doesn't switch layouts when a ping starts or ends.
+        let icon = Image(systemName: "speedometer").opacity(store.pinging ? 0 : 1).overlay {
+            if store.pinging { ProgressRing(progress: store.pingProgress).frame(width: 17, height: 17) }
+        }
+        let word = Text("Пинг").opacity(store.pinging ? 0 : 1).overlay {
+            if store.pinging { Text("Стоп") }
+        }
+        return Button {
             Haptics.tap()
             // In the order shown (favourites first): results fill the list from the top.
             store.pingAll(first: ServerGroup.ordered(groups[page] ?? [], favorites: store.favorites).map(\.id))
         } label: {
-            HStack(spacing: 7) {
-                if store.pinging {
-                    ProgressRing(progress: store.pingProgress).frame(width: 17, height: 17)
+            Group {
+                if compact {
+                    VStack(spacing: 3) {
+                        icon
+                        word.font(.scaled(12, weight: .semibold))
+                    }
                 } else {
-                    Image(systemName: "speedometer")
+                    HStack(spacing: 7) {
+                        icon
+                        word.font(.scaled(14, weight: .semibold))
+                    }
                 }
-                Text(store.pinging ? "Стоп" : "Пинг").fontWeight(.semibold)
             }
             .font(.scaled(14))
             .foregroundStyle(store.pinging ? Color.white : Color.primary)
             // As tall as the tabs (50 and their 4 pt padding).
-            .padding(.horizontal, 14).frame(height: 58)
+            .padding(.horizontal, compact ? 10 : 14).frame(height: 58)
             .background(store.pinging ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Palette.surface),
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .animation(.easeInOut(duration: 0.2), value: store.pinging)
@@ -420,15 +444,17 @@ struct HomeView: View {
     /// The name and count, the networks its servers work on under them (beside them on one line).
     private func tabChip(_ g: ServerGroup, _ count: Int, oneLine: Bool) -> some View {
         let selected = g == page
+        // At the largest text on a 375 pt iPhone «Обходы 57» gets its room from a compact Пинг
+        // (list); the title shrinks only past that (Bold Text, a zoomed 320 pt screen).
         let title = HStack(spacing: 6) {
             Image(systemName: g.icon)
-            Text(g.rawValue).lineLimit(1).minimumScaleFactor(0.65)
+            Text(g.rawValue).lineLimit(1).minimumScaleFactor(0.6)
             Text("\(count)").font(.scaled(12, weight: .semibold))
                 .foregroundStyle(selected ? .white : .secondary)
                 .padding(.horizontal, 7).padding(.vertical, 2)
                 .background(selected ? Palette.primary : Palette.outline, in: RoundedRectangle(cornerRadius: 10))
         }
-        // Smaller when it doesn't fit (a 375 pt iPhone, large text), never cut off.
+        // Smaller when it doesn't fit (a 375 pt iPhone, large text).
         let networks = HStack(spacing: 4) {
             Image(systemName: g.networksIcon)
             Text(g.networks).lineLimit(1).minimumScaleFactor(0.7)
