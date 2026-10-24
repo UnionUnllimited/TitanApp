@@ -252,7 +252,7 @@
 - `support-url` — поддержка (без него — бот); `profile-web-page-url` — сайт.
 - `announce` (можно `base64:…`) — причина, когда в ответе нет серверов.
 - `profile-title` и `profile-update-interval` (часы, 1–168) — только Android.
-- `sniffing-enable` (iOS: `SubscriptionAPI.parseInfo` → `SubscriptionInfo.sniffing`, сохраняется с подпиской и
+- `sniffing-enable` (iOS и Android; на iOS `SubscriptionAPI.parseInfo` → `SubscriptionInfo.sniffing`, сохраняется с подпиской и
   действует после перезапуска и без сети). `1` / `true` / `on` (в любом регистре), другое значение или нет
   заголовка — как всегда: сниффинг TUN-инбаунда из шаблона панели с `enabled: true` (без него `http`, `tls`,
   `quic`, `routeOnly: false`), без заголовка конфиг тот же. `0` / `false` / `off` — `sniffing: {"enabled": false}`, остальное не меняется.
