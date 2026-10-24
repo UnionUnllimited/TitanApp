@@ -361,6 +361,8 @@ final class VPNController: ObservableObject {
         if on, !servers.isEmpty { rebuilds += 1 }
         let rebuild = rebuilds
         let held = holds
+        // An off from Пункт управления, Siri or the activity's ⏻ bumps only this, not holds.
+        let offs = offsByHand
         Task {
             try? await m.loadFromPreferences()
             var provider: [String: Any]?
@@ -378,7 +380,7 @@ final class VPNController: ObservableObject {
             // Turned off, switched off in the settings, held for a switch or a ping's pause, or a
             // connect begun meanwhile (it sets its own): stays as it is.
             guard m.isOnDemandEnabled != on || provider != nil,
-                  !on || (isOn && connectsInFlight == 0 && Self.keepAlive && holds == held) else { return }
+                  !on || (isOn && connectsInFlight == 0 && Self.keepAlive && holds == held && offsByHand == offs) else { return }
             m.isOnDemandEnabled = on
             if on, let proto = m.protocolConfiguration as? NETunnelProviderProtocol {
                 // A profile saved before this switch existed: the rules for its server too.

@@ -374,7 +374,11 @@ struct ProfileView: View {
                         }
                         .toggleStyle(TitanToggleStyle())
                         .padding(.horizontal, 16).padding(.vertical, 12)
-                        .onChange(of: keepAlive) { vpn.setKeepAlive($0) }
+                        // With the servers this build parsed: turned on while connected, the profile
+                        // gets the current config too (no TFO on regular servers), not the old one.
+                        .onChange(of: keepAlive) { on in
+                            vpn.setKeepAlive(on, rebuilding: store.subscription.flatMap { $0.parsedNow ? $0.servers : nil } ?? [])
+                        }
                         RowDivider()
                         Toggle(isOn: $reminders) {
                             HStack(spacing: 14) {
