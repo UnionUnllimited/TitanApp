@@ -625,11 +625,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     /// Go's soft limit for the extension's limit and what isn't Go's now (titan setMemoryLimit:
-    /// the limit less the rest and 8 MiB, raised to what Go needs up to 2 MiB over the
-    /// watchdog's threshold (Go at it puts the footprint over: the watchdog decides, not a GC
-    /// running nonstop under it), to that while the GC is busy, 24 MiB at least). After each
-    /// start, since libXray's first runXray sets its own 30 MiB, then every 10 s and on memory
-    /// pressure.
+    /// the limit less the rest (at least 4 MiB) and 9 MiB, raised to what Go needs up to 2 MiB
+    /// over the watchdog's line (44 of 50) for the rest as measured (at least 1 MiB): Go at it
+    /// puts the footprint over the line, the watchdog decides, not a GC running nonstop under
+    /// it; to that while the GC is busy, 24 MiB at least). After each start, since libXray's
+    /// first runXray sets its own 30 MiB, then every 10 s and on memory pressure.
     private func setGoLimit(_ now: Memory? = nil) {
         let m = now ?? Self.memoryNow()
         goLimitAt = Self.clock

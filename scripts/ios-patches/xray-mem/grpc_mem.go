@@ -3,6 +3,8 @@ package grpc
 // Titan patch, iOS memory (scripts/ios-patches/xray-mem): copied into transport/internet/grpc.
 
 import (
+	"context"
+	"sync"
 	"time"
 
 	"github.com/xtls/xray-core/transport/internet"
@@ -24,13 +26,40 @@ const (
 // multiMode's per proxied connection, a probe's) for internet.TitanIdleAfter the channel goes
 // IDLE and drops its transport; the next RPC connects again. grpc-go's own idleness: an RPC
 // open keeps it from going idle, and one that comes as it goes brings it back
-// (internal/idle). The pool keeps the ClientConn (an idle one isn't Shutdown).
+// (internal/idle). The pool keeps the ClientConn (an idle one isn't Shutdown). The probes'
+// RPCs aren't on the pool's ClientConns (titanDone): their idle time is from the tunnel's flows.
 func titanDialOptions(opts []grpc.DialOption, configured int32) []grpc.DialOption {
 	opts = append(opts, grpc.WithIdleTimeout(internet.TitanIdleAfter))
 	if configured > 0 && configured <= titanStreamWindow {
 		return opts
 	}
 	return append(opts, grpc.WithStaticStreamWindowSize(titanStreamWindow), grpc.WithStaticConnWindowSize(titanConnWindow))
+}
+
+// The observatory's probes' ClientConns now (each its own: getGrpcClient), under
+// globalDialerAccess.
+var titanProbeConns = map[*grpc.ClientConn]struct{}{}
+
+// titanDone is what the flow's close calls (the HunkConn's cancel; at once if its RPC didn't
+// open), once. The observatory's probes (internet.TitanProbe) don't use the pool: each gets a
+// ClientConn of its own (getGrpcClient), with its own TCP (+ TLS / REALITY) connection, and
+// closes it here. So every probe is cold, as TCP REALITY's always were (it pools nothing), on a
+// subject that carries the tunnel's flows too, and the pool's ClientConns carry only those flows'
+// RPCs. With the probes in the pool a subject's were a random mix of warm ones and cold ones
+// (internet.TitanIdleAfter), and leastLoad ranks by their deviation.
+func titanDone(ctx context.Context, conn *grpc.ClientConn) func() {
+	if !internet.TitanProbe(ctx) {
+		return func() {}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			globalDialerAccess.Lock()
+			delete(titanProbeConns, conn)
+			globalDialerAccess.Unlock()
+			go conn.Close()
+		})
+	}
 }
 
 func init() {
@@ -48,6 +77,12 @@ func titanCloseAll() int {
 		stale[key.MemoryStreamConfig] = true
 	}
 	n := titanClose(func(*internet.MemoryStreamConfig) bool { return true })
+	// The probes' too (their flows close them as they end).
+	for conn := range titanProbeConns {
+		go conn.Close()
+		n++
+	}
+	clear(titanProbeConns)
 	globalDialerAccess.Unlock()
 	if len(stale) > 0 {
 		time.AfterFunc(internet.TitanSweepAfter, func() {

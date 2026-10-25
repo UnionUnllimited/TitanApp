@@ -727,16 +727,27 @@ func titanHysteria(t *testing.T, n int) (net.Destination, []*internet.MemoryStre
 	return net.UDPDestination(net.LocalHostIP, port), subjects
 }
 
-// titanHyFlow opens a proxied TCP connection through ss and checks it echoes; open, it is left
-// open for the caller.
+// titanHyFlow opens a user's proxied TCP connection through ss and checks it echoes; open, it is
+// left open for the caller.
 func titanHyFlow(dest net.Destination, ss *internet.MemoryStreamConfig, open bool) (gonet.Conn, error) {
+	return titanHyFlowCtx(context.Background(), dest, ss, open)
+}
+
+// titanHyProbe is an observatory probe's flow through ss (its context marked as the probes' are),
+// closed once it has echoed.
+func titanHyProbe(dest net.Destination, ss *internet.MemoryStreamConfig) error {
+	_, err := titanHyFlowCtx(internet.TitanProbeContext(context.Background()), dest, ss, false)
+	return err
+}
+
+func titanHyFlowCtx(ctx context.Context, dest net.Destination, ss *internet.MemoryStreamConfig, open bool) (gonet.Conn, error) {
 	type result struct {
 		conn gonet.Conn
 		err  error
 	}
 	done := make(chan result, 1)
 	go func() {
-		conn, err := Dial(context.Background(), dest, ss)
+		conn, err := Dial(ctx, dest, ss)
 		if err == nil {
 			err = titanHyEcho(conn)
 		}
@@ -792,48 +803,53 @@ func titanHyHeap() int64 {
 	return int64(s[0].Value.Uint64())
 }
 
-// Probe rounds on subjects that carry no traffic: with internet.TitanIdleAfter each client closes
-// its QUIC connection that long (and up to the cleaner's second) after its probe, the keep-alive
-// notwithstanding, so between rounds none is up and the live heap comes back to the same level;
-// the next probe dials again. Before, every connection stayed up for good (an hour here).
+// Probe rounds on subjects that carry no traffic: each probe gets a client of its own, not the
+// pool's, and closes its QUIC connection as its stream closes, however long
+// internet.TitanIdleAfter is (an hour here: the pool's rule, which the probes don't meet), so
+// between rounds nothing is pooled or up and the live heap comes back to the same level; the
+// next probe dials again. Before, every connection stayed up in the pool for good (the panel's
+// keep-alive; then for a minute: the same flows as a user's here, with an hour).
 func TestTitanQUICIdleProbes(t *testing.T) {
 	defer func(d time.Duration) { internet.TitanIdleAfter = d }(internet.TitanIdleAfter)
 	internet.TitanCloseTransports()
+	internet.TitanIdleAfter = time.Hour
 	const n, rounds = 10, 8
 	dest, subjects := titanHysteria(t, 2*n)
-	probe := func(subjects []*internet.MemoryStreamConfig) {
-		for _, ss := range subjects {
-			if _, err := titanHyFlow(dest, ss, false); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
 	time.Sleep(time.Second)
 	base := titanHyHeap()
-	internet.TitanIdleAfter = time.Hour
-	probe(subjects[n:])
+	for _, ss := range subjects[n:] {
+		if _, err := titanHyFlow(dest, ss, false); err != nil {
+			t.Fatal(err)
+		}
+	}
 	time.Sleep(2500 * time.Millisecond) // keep-alives go on
 	keptLive, keptHeap := titanHyLive(nil), titanHyHeap()-base
-	t.Logf("idle kept: %d QUIC connections, %d KiB of live heap (%d KiB a subject, both ends)", keptLive, keptHeap>>10, keptHeap>>10/n)
+	t.Logf("kept as a user's: %d QUIC connections, %d KiB of live heap (%d KiB a subject, both ends)", keptLive, keptHeap>>10, keptHeap>>10/n)
 	if keptLive != n {
-		t.Fatalf("idle kept: %d connections up", keptLive)
+		t.Fatalf("kept as a user's: %d connections up", keptLive)
 	}
 	internet.TitanCloseTransports()
 	time.Sleep(time.Second)
 	base = titanHyHeap()
 
-	internet.TitanIdleAfter = 500 * time.Millisecond
 	var quiet []int64
 	for r := range rounds {
-		probe(subjects[:n])
-		busy := titanHyLive(nil)
-		time.Sleep(internet.TitanIdleAfter + idleCleanupInterval + 700*time.Millisecond)
-		if live := titanHyLive(nil); live != 0 {
-			t.Fatalf("round %d: %d connections up %v after the probes", r, live, internet.TitanIdleAfter+idleCleanupInterval+700*time.Millisecond)
+		for _, ss := range subjects[:n] {
+			if err := titanHyProbe(dest, ss); err != nil {
+				t.Fatal(err)
+			}
 		}
+		pooled := len(manager.titanClients())
+		titanProbes.Lock()
+		open := len(titanProbes.m)
+		titanProbes.Unlock()
+		if pooled != 0 || open != 0 {
+			t.Fatalf("round %d: %d clients pooled, %d of the probes' open after them", r, pooled, open)
+		}
+		time.Sleep(time.Second) // the server's ends
 		h := titanHyHeap() - base
 		quiet = append(quiet, h)
-		t.Logf("round %d: %2d connections up right after the probes, none after; live heap %+5d KiB", r, busy, h>>10)
+		t.Logf("round %d: none pooled or up after the probes; live heap %+5d KiB", r, h>>10)
 	}
 	first, last := max(quiet[1], quiet[2]), max(quiet[rounds-2], quiet[rounds-1])
 	step := titanSteadyStep(quiet, 1)
@@ -862,13 +878,16 @@ func titanSteadyStep(quiet []int64, from int) int64 {
 
 // A proxied TCP connection, and a UDP session, that send nothing for many idle periods keep their
 // QUIC connection (the cleaner counts them under the client's lock), while probes come and go on
-// it and on other subjects; the TCP one still carries data after. Streams that open as the cleaner
-// closes an idle connection all get through (the client's lock: a stream opens on a connection
-// it keeps, or on a new one).
+// their subjects and others (each on a client of its own, closed as it ends: the pool holds the
+// user's two only); the TCP one still carries data after. Once the user's flow (and the session)
+// ends, its connection stays up internet.TitanIdleAfter (the probes meanwhile don't touch it),
+// then closes. Streams that open as an idle connection closes (user flows and probes on one
+// subject) all get through (the client's lock: a stream opens on a connection it keeps, or on a
+// new one).
 func TestTitanQUICIdleUser(t *testing.T) {
 	defer func(d time.Duration) { internet.TitanIdleAfter = d }(internet.TitanIdleAfter)
 	internet.TitanCloseTransports()
-	internet.TitanIdleAfter = 400 * time.Millisecond
+	internet.TitanIdleAfter = 1500 * time.Millisecond
 	dest, subjects := titanHysteria(t, 4)
 	user, err := titanHyFlow(dest, subjects[0], true)
 	if err != nil {
@@ -889,30 +908,51 @@ func TestTitanQUICIdleUser(t *testing.T) {
 		return manager.m[dialerConf{dest, ss}]
 	}
 	connOf := func(c *client) *quic.Conn {
+		if c == nil {
+			return nil
+		}
 		c.Lock()
 		defer c.Unlock()
 		return c.conn
 	}
 	tcpConn, udpConn := connOf(clientOf(subjects[0])), connOf(clientOf(subjects[1]))
-	for i := range 12 {
+	probes := func(i int) {
 		for _, ss := range subjects[:3] {
-			if _, err := titanHyFlow(dest, ss, false); err != nil {
+			if err := titanHyProbe(dest, ss); err != nil {
 				t.Fatal(err)
 			}
 		}
-		time.Sleep(internet.TitanIdleAfter / 2)
-		if i%4 == 3 {
-			time.Sleep(internet.TitanIdleAfter + idleCleanupInterval + 500*time.Millisecond)
-			if titanHyLive(subjects[2]) != 0 {
-				t.Fatal("a probe-only connection is up after its probe")
-			}
+		titanProbes.Lock()
+		open := len(titanProbes.m)
+		titanProbes.Unlock()
+		if pooled := len(manager.titanClients()); pooled != 2 || open != 0 || titanHyLive(subjects[2]) != 0 {
+			t.Fatalf("round %d: %d clients pooled (the user's 2 only), %d of the probes' open after them", i, pooled, open)
 		}
+	}
+	for i := range 12 {
+		probes(i)
 		if connOf(clientOf(subjects[0])) != tcpConn || connOf(clientOf(subjects[1])) != udpConn {
 			t.Fatalf("round %d: a connection with a stream or a session open was closed", i)
 		}
+		time.Sleep(internet.TitanIdleAfter / 4)
 	}
 	if err := titanHyEcho(user); err != nil {
 		t.Fatalf("the user's stream after idle: %v", err)
+	}
+
+	// The user's flow ends: its connection stays for TitanIdleAfter, the probes don't touch it.
+	user.Close()
+	ended := time.Now()
+	for k, at := range []time.Duration{internet.TitanIdleAfter / 4, internet.TitanIdleAfter * 3 / 4} {
+		time.Sleep(time.Until(ended.Add(at)))
+		probes(12 + k)
+		if connOf(clientOf(subjects[0])) != tcpConn {
+			t.Fatalf("the user's connection closed %v after its flow", at)
+		}
+	}
+	time.Sleep(time.Until(ended.Add(internet.TitanIdleAfter + idleCleanupInterval + 500*time.Millisecond)))
+	if connOf(clientOf(subjects[0])) != nil {
+		t.Fatalf("the user's connection is up %v after its last flow", time.Since(ended))
 	}
 	session.Close()
 	time.Sleep(internet.TitanIdleAfter + idleCleanupInterval + 500*time.Millisecond)
@@ -923,13 +963,19 @@ func TestTitanQUICIdleUser(t *testing.T) {
 	internet.TitanIdleAfter = 50 * time.Millisecond
 	var wg sync.WaitGroup
 	var failed atomic.Int32
-	for range 4 {
+	for g := range 4 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for range 30 {
+			for k := range 30 {
 				time.Sleep(time.Duration(40+mrand.IntN(1200)) * time.Millisecond)
-				if _, err := titanHyFlow(dest, subjects[3], false); err != nil {
+				var err error
+				if (g+k)%2 == 0 {
+					err = titanHyProbe(dest, subjects[3])
+				} else {
+					_, err = titanHyFlow(dest, subjects[3], false)
+				}
+				if err != nil {
 					failed.Add(1)
 					t.Error(err)
 				}

@@ -18,7 +18,11 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
 - Pooled connections with no stream close after internet.TitanIdleAfter (60 s): XHTTP's
   HTTP/2 (300 s before), gRPC's ClientConn goes IDLE (grpc-go's 30 min), Hysteria's QUIC with
   no stream and no UDP session (never before: the panel's keep-alive). Only the balancers'
-  picks carry traffic; the other subjects' connections were kept for the next probe. gRPC
+  picks carry traffic; the other subjects' connections were kept for the next probe. The
+  observatory's probes (their context marked, internet.TitanProbe) don't use the pools: each
+  gets a connection of its own (an XHTTP client, a gRPC ClientConn, a Hysteria client), closed
+  as it ends, so every probe is cold, as TCP REALITY's always were, and leastLoad's deviations
+  aren't a mix of warm and cold probes. gRPC
   dials on grpc-go's context, not on that of the proxied connection that made the ClientConn
   (once that one ended, every later dial failed at once). A closed XHTTP connection lets go of
   its REALITY connection (Go's HTTP/2 client keeps itself until its keep-alive timer fires),
@@ -38,7 +42,7 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
 - The burst observatory probes at most 4 subjects at once in its rounds (all 60-85 together at
   each start before); the first check at a start 12 at once, starting in its own order: the
   subjects' groups (subjectSelector prefixes) taken in turn, each shuffled, so every group
-  is in the first 12.
+  is in the first 12. Its probes' context is marked as theirs (above).
 Every anchor must be found: a different Xray-core stops the build.
 """
 import pathlib, re, shutil, sys
@@ -132,6 +136,10 @@ changes = {
          "\t\t\t\terrors.LogDebug(h.ctx, \"checking \", handler)\n"
          "\t\t\t\tdelay, err := client.MeasureDelay(h.Settings.HttpMethod)\n"
          "\t\t\t\th.titanFree(slots)\n"),
+        ("\t\tclient := newPingClient(\n\t\t\th.ctx,\n",
+         "\t\tclient := newPingClient(\n"
+         "\t\t\t// Titan patch: the probes' flows marked as theirs (titan_mem.go).\n"
+         "\t\t\ttitanProbeContext(h.ctx),\n"),
     ],
     # uTLS keeps the ClientHello's key share private keys in the UConn's handshake state after the
     # handshake (u_handshake_client.go toPublic13): the ML-KEM-768 decapsulation key, ~8 KiB, on
@@ -164,6 +172,19 @@ changes = {
         ("\t\t\tquicConfig.MaxIncomingStreams = -1\n\t\t}\n",
          "\t\t\tquicConfig.MaxIncomingStreams = -1\n\t\t}\n"
          "\t\t// Titan patch: smaller receive windows.\n\t\tinternet.TitanQUICWindows(quicConfig)\n"),
+        # The observatory's probes don't use the pool: a client of their own each, closed as the
+        # probe ends (titan_mem.go).
+        ("\tglobalDialerAccess.Lock()\n\tdefer globalDialerAccess.Unlock()\n\n\tif globalDialerMap == nil {\n",
+         "\t// Titan patch: a probe's flow gets a client of its own, closed as it ends (titan_mem.go).\n"
+         "\tif internet.TitanProbe(ctx) {\n\t\treturn createHTTPClient(dest, streamSettings), nil\n\t}\n\n"
+         "\tglobalDialerAccess.Lock()\n\tdefer globalDialerAccess.Unlock()\n\n\tif globalDialerMap == nil {\n"),
+        ("\tvar closed atomic.Int32\n\n\treader, writer := io.Pipe()\n",
+         "\t// Titan patch: a probe's clients close with it (titan_mem.go).\n"
+         "\ttitanEnd := titanProbeEnd(ctx, httpClient, httpClient2)\n"
+         "\tvar closed atomic.Int32\n\n\treader, writer := io.Pipe()\n"),
+        ("\t\t\tif xmuxClient2 != nil && xmuxClient2 != xmuxClient {\n\t\t\t\txmuxClient2.DoneRunning()\n\t\t\t}\n\t\t},\n\t}\n",
+         "\t\t\tif xmuxClient2 != nil && xmuxClient2 != xmuxClient {\n\t\t\t\txmuxClient2.DoneRunning()\n\t\t\t}\n"
+         "\t\t\ttitanEnd() // Titan patch\n\t\t},\n\t}\n"),
     ],
     "transport/internet/splithttp/client.go": [
         ("\tif h3Transport, ok := transport.(*http3.Transport); ok {\n\t\th3Transport.Close()\n\t}\n\treturn nil\n}\n",
@@ -187,6 +208,27 @@ changes = {
         ("\t\t\t\tc, err = internet.DialSystem(ctx, dest, streamSettings.SocketSettings)\n",
          "\t\t\t\t// Titan patch: on grpc-go's dial context, not the first proxied connection's.\n"
          "\t\t\t\tc, err = internet.DialSystem(gctx, dest, streamSettings.SocketSettings)\n"),
+        # The observatory's probes don't use the pool: a ClientConn of their own each, closed as the
+        # probe ends (titan_mem.go).
+        ("\tif client, found := globalDialerMap[dialerConf{dest, streamSettings}]; found && client.GetState() != connectivity.Shutdown {\n",
+         "\t// Titan patch: a probe's flow gets a ClientConn of its own, closed as it ends (titan_mem.go).\n"
+         "\tprobe := internet.TitanProbe(ctx)\n"
+         "\tif client, found := globalDialerMap[dialerConf{dest, streamSettings}]; found && !probe && client.GetState() != connectivity.Shutdown {\n"),
+        ("\tglobalDialerMap[dialerConf{dest, streamSettings}] = conn\n\treturn conn, err\n}\n",
+         "\tif probe { // Titan patch\n\t\tif err == nil {\n\t\t\ttitanProbeConns[conn] = struct{}{}\n\t\t}\n\t\treturn conn, err\n\t}\n"
+         "\tglobalDialerMap[dialerConf{dest, streamSettings}] = conn\n\treturn conn, err\n}\n"),
+        ("\tclient := encoding.NewGRPCServiceClient(conn)\n",
+         "\t// Titan patch: what the flow's close calls, a probe's ClientConn closed (titan_mem.go).\n"
+         "\ttitanEnd := titanDone(ctx, conn)\n"
+         "\tclient := encoding.NewGRPCServiceClient(conn)\n"),
+        ("\t\tif err != nil {\n\t\t\treturn nil, errors.New(\"Cannot dial gRPC\").Base(err)\n\t\t}\n"
+         "\t\treturn encoding.NewMultiHunkConn(grpcService, nil, nil), nil\n",
+         "\t\tif err != nil {\n\t\t\ttitanEnd() // Titan patch\n\t\t\treturn nil, errors.New(\"Cannot dial gRPC\").Base(err)\n\t\t}\n"
+         "\t\treturn encoding.NewMultiHunkConn(grpcService, titanEnd, nil), nil // Titan patch: titanEnd\n"),
+        ("\tif err != nil {\n\t\treturn nil, errors.New(\"Cannot dial gRPC\").Base(err)\n\t}\n\n"
+         "\treturn encoding.NewHunkConn(grpcService, nil, nil), nil\n",
+         "\tif err != nil {\n\t\ttitanEnd() // Titan patch\n\t\treturn nil, errors.New(\"Cannot dial gRPC\").Base(err)\n\t}\n\n"
+         "\treturn encoding.NewHunkConn(grpcService, titanEnd, nil), nil // Titan patch: titanEnd\n"),
     ],
     "transport/internet/hysteria/dialer.go": [
         ("\tif quicParams.MaxIdleTimeout == 0 {\n\t\tquicConfig.MaxIdleTimeout = 30 * time.Second\n\t}\n",
@@ -214,6 +256,12 @@ changes = {
          "\tc.Lock()\n\tdefer c.Unlock()\n\t// Titan patch: in use (titan_mem.go).\n\tc.titanUsed()\n\n"
          "\terr := c.dial(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
          "\treturn c.udpSM.udp()\n"),
+        # The observatory's probes don't use the pool: a client (a QUIC connection) of their own
+        # each, closed as the probe ends (titan_mem.go).
+        ("\tmanager.RLock()\n\tc := manager.m[dialerConf{dest, streamSettings}]\n\tmanager.RUnlock()\n",
+         "\t// Titan patch: a probe's flow gets a client of its own, closed as it ends (titan_mem.go).\n"
+         "\tif !datagram && internet.TitanProbe(ctx) {\n\t\treturn titanProbeDial(ctx, dest, streamSettings, tlsConfig)\n\t}\n\n"
+         "\tmanager.RLock()\n\tc := manager.m[dialerConf{dest, streamSettings}]\n\tmanager.RUnlock()\n"),
         ("\tc.Lock()\n\tif c.status() == StatusInactive {\n\t\tc.close()\n\t}\n\tc.Unlock()\n",
          "\tc.Lock()\n\tif c.status() == StatusInactive {\n\t\tc.close()\n"
          "\t} else if c.titanIdle() { // Titan patch: idle a minute (titan_mem.go).\n\t\tc.close()\n\t}\n\tc.Unlock()\n"),

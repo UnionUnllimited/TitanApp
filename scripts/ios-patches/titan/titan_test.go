@@ -169,7 +169,8 @@ func TestMemoryLimit(t *testing.T) {
 
 // What Go needs raises the limit up to 2 MiB over the watchdog's threshold (limit − the
 // rest − 4 MiB: Go at it puts the footprint over the threshold), a busy GC to it; never
-// under 24 MiB. The rest as the phone's journal has it (2.2-3.1 MiB) counts as 4.
+// under 24 MiB. The rest as the phone's journal has it (2.2-3.1 MiB) counts as 4 for "fit",
+// as it is for the ceiling (1 MiB at least).
 func TestGoLimitFor(t *testing.T) {
 	const mib = 1 << 20
 	// Go with this live heap and 7 MiB besides objects and free pages, GOGC 10.
@@ -188,7 +189,10 @@ func TestGoLimitFor(t *testing.T) {
 		{50, 30, 3, false, 40, 40, "need"}, // over 37: raised to it
 		{50, 29, 6, false, 39, 39, "need"}, // over the watchdog's line (50 − 6 − 6)
 		{50, 30, 8, false, 38, 40, "need"}, // up to 50 − 8 − 4 at most
-		{50, 18, 3, true, 42, 28, "gc"},    // the GC busy: to that
+		{50, 40, 2, false, 44, 51, "need"}, // up to 50 − 2 − 4: the rest as it is, not 4
+		{50, 18, 3, true, 43, 28, "gc"},    // the GC busy: to that
+		{50, 18, 2, true, 44, 28, "gc"},
+		{50, 18, 0, true, 45, 28, "gc"},    // a rest read as none counts as 1 MiB
 		{50, 18, 10, false, 31, 28, "fit"}, // less as the rest grows
 		{50, 26, 12, true, 34, 36, "gc"},
 		{30, 18, 10, false, 24, 28, "min"},

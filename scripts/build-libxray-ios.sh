@@ -61,11 +61,15 @@ if [ -f "$XRAY/transport/internet/titan_mem.go" ]; then
   # quic-go keeping to Xray's receive windows under Chrome parroting, and a connection that
   # goes on next to its stalled streams (Hysteria, XHTTP/3).
   "$MEM/vendor_quic.sh" "$WORK"
+  # titan_probes_test.go: what the observatory's probes measure on the pools (XHTTP, gRPC,
+  # Hysteria together: package internet_test).
   TESTS="app/observatory/burst/titan_pacing_test.go transport/internet/splithttp/titan_h2_test.go
-    transport/internet/grpc/titan_grpc_test.go transport/internet/hysteria/titan_quic_test.go"
+    transport/internet/grpc/titan_grpc_test.go transport/internet/hysteria/titan_quic_test.go
+    transport/internet/titan_probes_test.go"
   for t in $TESTS; do cp "$MEM/$(basename "$t")" "$XRAY/$t"; done
-  (cd "$XRAY" && go test -count=1 -v -run 'TestTitan(Pacing|H2|GRPC|QUIC)' \
-    ./app/observatory/burst/ ./transport/internet/splithttp/ ./transport/internet/grpc/ ./transport/internet/hysteria/)
+  (cd "$XRAY" && go test -count=1 -v -run 'TestTitan(Pacing|H2|GRPC|QUIC|Probe)' \
+    ./app/observatory/burst/ ./transport/internet/splithttp/ ./transport/internet/grpc/ ./transport/internet/hysteria/ \
+    ./transport/internet/)
   for t in $TESTS; do rm "$XRAY/$t"; done
 fi
 # Our protocol clients (sing-box: TUIC / AnyTLS / ShadowTLS / SSH, and mieru) in the same

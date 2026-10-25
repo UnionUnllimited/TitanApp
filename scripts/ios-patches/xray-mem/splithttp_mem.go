@@ -8,6 +8,7 @@ import (
 	gotls "crypto/tls"
 	gonet "net"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -262,6 +263,32 @@ func (c *DefaultDialerClient) titanRetire() {
 
 // When titanRetire looks again: the bodies' ends reach the server and its answers come back.
 var titanRetireAgain = 2 * time.Second
+
+// titanProbeEnd: what a flow's close calls (Dial). The observatory's probes (internet.TitanProbe)
+// don't use the pool: each gets a client of its own (getHTTPClient: XMUX's pool is for the
+// tunnel's flows), with its own TCP + TLS / REALITY connection, and closes it as it ends
+// (DefaultDialerClient.Close: its HTTP/2 connection once its streams have ended, titanRetire).
+// So every probe is cold, as TCP REALITY's always were (it pools nothing), on a subject that
+// carries the tunnel's flows too, and the pools hold only connections those use. With the
+// probes in the pool a subject's were a random mix of warm ones and cold ones (internet.
+// TitanIdleAfter), and leastLoad ranks by their deviation.
+func titanProbeEnd(ctx context.Context, clients ...DialerClient) func() {
+	if !internet.TitanProbe(ctx) {
+		return func() {}
+	}
+	var cs []*DefaultDialerClient
+	for _, c := range clients {
+		if c, ok := c.(*DefaultDialerClient); ok && !slices.Contains(cs, c) {
+			cs = append(cs, c)
+		}
+	}
+	return func() {
+		for _, c := range cs {
+			c.closed.Store(true)
+			c.Close()
+		}
+	}
+}
 
 func init() {
 	internet.TitanRegisterCloser(titanCloseAll)

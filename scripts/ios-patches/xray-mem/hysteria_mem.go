@@ -4,10 +4,15 @@ package hysteria
 // transport/internet/hysteria.
 
 import (
+	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
+	"github.com/xtls/xray-core/transport/internet/tls"
 )
 
 func init() {
@@ -36,6 +41,13 @@ func titanCloseAll() int {
 		stale[key.MemoryStreamConfig] = true
 		clients = append(clients, c)
 	}
+	// The probes' too (their flows close them as they end).
+	titanProbes.Lock()
+	for c := range titanProbes.m {
+		clients = append(clients, c)
+	}
+	clear(titanProbes.m)
+	titanProbes.Unlock()
 	// In a goroutine: a client is locked while it dials.
 	go titanClose(clients)
 	if len(stale) > 0 {
@@ -147,4 +159,60 @@ func (c *client) titanSessions() bool {
 	m.RLock()
 	defer m.RUnlock()
 	return len(m.m) > 0
+}
+
+// The observatory's probes' clients now (each its own: titanProbeDial), for titanCloseAll.
+var titanProbes = struct {
+	sync.Mutex
+	m map[*client]struct{}
+}{m: map[*client]struct{}{}}
+
+// titanProbeDial is Dial for a TCP flow of the observatory's probes (internet.TitanProbe): they
+// don't use the pool. Each gets a client of its own, with its own QUIC connection (handshake and
+// auth), out of the pool (no keep-alive, no cleaner), and closes it as the flow ends. So every
+// probe is cold, as TCP REALITY's always were (it pools nothing), on a subject that carries the
+// tunnel's flows too, and the pool's connections carry only those flows. With the probes in the
+// pool a subject's were a random mix of warm ones and cold ones (internet.TitanIdleAfter), and
+// leastLoad ranks by their deviation.
+func titanProbeDial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig, tlsConfig *tls.Config) (stat.Connection, error) {
+	c := &client{
+		dest:         dest,
+		config:       streamSettings.ProtocolSettings.(*Config),
+		tlsConfig:    tlsConfig.GetTLSConfig(tls.WithDestination(dest)),
+		socketConfig: streamSettings.SocketSettings,
+		finalMask:    streamSettings.FinalMask,
+		quicParams:   streamSettings.QuicParams,
+	}
+	titanProbes.Lock()
+	titanProbes.m[c] = struct{}{}
+	titanProbes.Unlock()
+	conn, err := c.tcp(ctx)
+	if err != nil {
+		c.titanProbeClose()
+		return nil, err
+	}
+	return &titanProbeConn{titanStreamConn: conn.(*titanStreamConn)}, nil
+}
+
+// titanProbeConn is a probe's stream, which closes its client's connection with it.
+type titanProbeConn struct {
+	*titanStreamConn
+	once sync.Once
+}
+
+func (p *titanProbeConn) Close() error {
+	err := p.titanStreamConn.Close()
+	p.once.Do(p.c.titanProbeClose)
+	return err
+}
+
+func (c *client) titanProbeClose() {
+	titanProbes.Lock()
+	delete(titanProbes.m, c)
+	titanProbes.Unlock()
+	c.Lock()
+	defer c.Unlock()
+	if c.conn != nil {
+		c.close()
+	}
 }

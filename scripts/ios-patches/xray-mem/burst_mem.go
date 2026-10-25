@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xtls/xray-core/transport/internet"
 )
 
 // At most this many health probes at once in the scheduled rounds. The observatory probed
@@ -30,6 +32,13 @@ const titanProbesAtOnce = 4
 // as with every probe at once, and the rest come in random order. 12 at a time it is all in
 // after 85 / 12 ≈ 7 probe times (7-10 s on LTE).
 const titanFirstAtOnce = 12
+
+// titanProbeContext is the probes' context, marked as theirs (internet.TitanProbeContext): the
+// pooled transports give each probe a connection of its own, closed as it ends, so every probe is
+// cold, not a mix of warm and cold ones whose deviation leastLoad would rank by.
+func titanProbeContext(ctx context.Context) context.Context {
+	return internet.TitanProbeContext(ctx)
+}
 
 // First checks still running (a restart's new instance starts one).
 var titanChecking atomic.Int32

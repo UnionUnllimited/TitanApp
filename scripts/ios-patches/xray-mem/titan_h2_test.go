@@ -503,16 +503,27 @@ func TestTitanH2Server(t *testing.T) {
 	io.Copy(io.Discard, os.Stdin)
 }
 
-// titanFlow dials a proxied connection through ss and checks it echoes; open, it is left open
-// (with its close) for the caller.
+// titanFlow dials a user's proxied connection through ss and checks it echoes; open, it is left
+// open (with its close) for the caller.
 func titanFlow(dest net.Destination, ss *internet.MemoryStreamConfig, open bool) (stat.Connection, error) {
+	return titanFlowCtx(context.Background(), dest, ss, open)
+}
+
+// titanProbe is an observatory probe's flow through ss (its context marked as the probes' are),
+// closed once it has echoed.
+func titanProbe(dest net.Destination, ss *internet.MemoryStreamConfig) error {
+	_, err := titanFlowCtx(internet.TitanProbeContext(context.Background()), dest, ss, false)
+	return err
+}
+
+func titanFlowCtx(ctx context.Context, dest net.Destination, ss *internet.MemoryStreamConfig, open bool) (stat.Connection, error) {
 	type result struct {
 		conn stat.Connection
 		err  error
 	}
 	done := make(chan result, 1)
 	go func() {
-		conn, err := Dial(context.Background(), dest, ss)
+		conn, err := Dial(ctx, dest, ss)
 		if err == nil {
 			err = titanEcho(conn)
 		}
@@ -570,15 +581,20 @@ func titanLiveHeap() int64 {
 }
 
 // Probe rounds, as the observatory runs them on subjects that carry no traffic (a proxied
-// connection that echoes, then closes): with internet.TitanIdleAfter each subject's HTTP/2
-// connection closes that long after its probe, so between rounds none is open and the live heap
-// comes back to the same level round after round. Before (300 s idle) every subject kept its
-// connections between probes, and XMUX opened a new one for each of the next probes up to its 3.
+// connection that echoes, then closes): each probe gets a client of its own, not the pool's (one
+// dial: cold), and its HTTP/2 connection closes once its streams have ended (titanRetire),
+// however long internet.TitanIdleAfter is (an hour here: the pool's rule, which the probes don't
+// meet), so between rounds none is open, nothing is pooled and the live heap comes back to the
+// same level round after round. Before, the probes kept their connections in the pool as the
+// tunnel's flows do (300 s, then a minute: the same flows as a user's here, with an hour), and
+// XMUX opened a new one for each of the next probes up to its 3.
 func TestTitanH2IdleProbes(t *testing.T) {
-	defer func(d time.Duration) { internet.TitanIdleAfter = d }(internet.TitanIdleAfter)
+	defer func(d, r time.Duration) { internet.TitanIdleAfter, titanRetireAgain = d, r }(internet.TitanIdleAfter, titanRetireAgain)
+	internet.TitanIdleAfter = time.Hour
+	titanRetireAgain = 300 * time.Millisecond
 	const n, rounds = 20, 12
 	dest, subjects := titanXHTTP(t, 2*n)
-	probe := func(subjects []*internet.MemoryStreamConfig) {
+	run := func(subjects []*internet.MemoryStreamConfig, probe bool) {
 		var wg sync.WaitGroup
 		slots := make(chan struct{}, 4) // the observatory's probes at once
 		for _, ss := range subjects {
@@ -587,7 +603,13 @@ func TestTitanH2IdleProbes(t *testing.T) {
 				defer wg.Done()
 				slots <- struct{}{}
 				defer func() { <-slots }()
-				if _, err := titanFlow(dest, ss, false); err != nil {
+				var err error
+				if probe {
+					err = titanProbe(dest, ss)
+				} else {
+					_, err = titanFlow(dest, ss, false)
+				}
+				if err != nil {
 					t.Error(err)
 				}
 			}()
@@ -599,39 +621,40 @@ func TestTitanH2IdleProbes(t *testing.T) {
 	base := titanLiveHeap()
 
 	// What the pools held before: idle connections kept (an hour here, 300 s before), the next
-	// probes opening more, up to XMUX's 3 a subject.
-	internet.TitanIdleAfter = time.Hour
+	// flows opening more, up to XMUX's 3 a subject.
 	kept := subjects[n:]
 	for range 4 {
-		probe(kept)
+		run(kept, false)
 	}
 	time.Sleep(1500 * time.Millisecond)
 	keptOpen, keptHeap := titanH2Open(nil), titanLiveHeap()-base
-	t.Logf("idle kept: %d HTTP/2 connections for %d subjects, %d KiB of live heap (%d KiB a subject)",
+	t.Logf("kept as a user's: %d HTTP/2 connections for %d subjects, %d KiB of live heap (%d KiB a subject)",
 		keptOpen, n, keptHeap>>10, keptHeap>>10/n)
 	if keptOpen < 2*n {
-		t.Fatalf("idle kept: only %d connections for %d subjects", keptOpen, n)
+		t.Fatalf("kept as a user's: only %d connections for %d subjects", keptOpen, n)
 	}
 	titanCloseAll()
 	time.Sleep(1500 * time.Millisecond)
 	base = titanLiveHeap()
 
-	internet.TitanIdleAfter = 400 * time.Millisecond
 	var quiet []int64
 	for r := range rounds {
-		probe(subjects[:n])
-		busy := titanH2Open(nil)
-		// The idle close, then the keep-alive timer of the closed connections (1 s).
-		time.Sleep(internet.TitanIdleAfter + 1500*time.Millisecond)
+		before := titanH2Dials.Load()
+		run(subjects[:n], true)
+		busy, dials := titanH2Open(nil), titanH2Dials.Load()-before
+		// The retired clients' second look, then the keep-alive timer of the closed connections (1 s).
+		time.Sleep(titanRetireAgain + 1500*time.Millisecond)
 		if open := titanH2Open(nil); open != 0 {
-			t.Fatalf("round %d: %d connections open %v after the probes", r, open, internet.TitanIdleAfter+1500*time.Millisecond)
+			t.Fatalf("round %d: %d connections open %v after the probes", r, open, titanRetireAgain+1500*time.Millisecond)
+		}
+		if dials != n {
+			t.Fatalf("round %d: %d dials for %d probes (each its own: a dial each)", r, dials, n)
 		}
 		h := titanLiveHeap() - base
 		quiet = append(quiet, h)
-		t.Logf("round %2d: %2d connections right after the probes, none open after; live heap %+5d KiB", r, busy, h>>10)
+		t.Logf("round %2d: %2d dials, %2d connections right after the probes, none open after; live heap %+5d KiB", r, dials, busy, h>>10)
 	}
-	// Steady: the last rounds hold no more than the first ones (XMUX keeps up to 3 clients a
-	// subject, ~1 KiB each, once all 3 have been made: by the third round).
+	// Steady: the last rounds hold no more than the first ones.
 	first, last := max(quiet[2], quiet[3], quiet[4]), max(quiet[rounds-3], quiet[rounds-2], quiet[rounds-1])
 	step := titanSteadyStep(quiet, 2)
 	t.Logf("live heap %+d KiB in rounds 2-4, %+d KiB in the last ones, %+d KiB a round from round 2 on (median)",
@@ -643,12 +666,11 @@ func TestTitanH2IdleProbes(t *testing.T) {
 		t.Fatalf("live heap +%d KiB a round from round 2 on (median)", step>>10)
 	}
 	globalDialerAccess.Lock()
-	for key, m := range globalDialerMap {
-		if len(m.xmuxClients) > 3 {
-			t.Errorf("%d XMUX clients for %v", len(m.xmuxClients), key.Destination)
-		}
-	}
+	pooled := len(globalDialerMap)
 	globalDialerAccess.Unlock()
+	if pooled != 0 {
+		t.Fatalf("the probes left %d subjects in the pool", pooled)
+	}
 }
 
 // titanSteadyStep is the median change of the live heap from one probe round to the next, from
@@ -665,12 +687,16 @@ func titanSteadyStep(quiet []int64, from int) int64 {
 }
 
 // A proxied connection that sends nothing for many idle periods keeps its HTTP/2 connection (its
-// streams are open: the idle close never touches it) while probes come and go on the same subject
-// and others, and still carries data both ways after; flows that start as connections close idle
-// all get through.
+// streams are open: the idle close never touches it) while probes come and go on its subject and
+// others, and still carries data both ways after. Every probe dials a connection of its own, on
+// the user's subject too, and leaves nothing open; the pool holds the user's connection only.
+// Once the user's flow ends its connection stays up internet.TitanIdleAfter (the probes
+// meanwhile don't touch it), then closes. Flows that start as connections close (user flows and
+// probes on one subject) all get through.
 func TestTitanH2IdleUser(t *testing.T) {
-	defer func(d time.Duration) { internet.TitanIdleAfter = d }(internet.TitanIdleAfter)
-	internet.TitanIdleAfter = 300 * time.Millisecond
+	defer func(d, r time.Duration) { internet.TitanIdleAfter, titanRetireAgain = d, r }(internet.TitanIdleAfter, titanRetireAgain)
+	internet.TitanIdleAfter = 800 * time.Millisecond
+	titanRetireAgain = 200 * time.Millisecond
 	dest, subjects := titanXHTTP(t, 4)
 	race := subjects[3]
 	subjects = subjects[:3]
@@ -690,42 +716,75 @@ func TestTitanH2IdleUser(t *testing.T) {
 	if mine == nil {
 		t.Fatal("the user's connection isn't tracked")
 	}
+	tracked := func(c *titanH2Conn) bool {
+		titanH2Conns.Lock()
+		defer titanH2Conns.Unlock()
+		_, ok := titanH2Conns.m[c]
+		return ok
+	}
+	probe := func(ss *internet.MemoryStreamConfig) {
+		before := titanH2Dials.Load()
+		if err := titanProbe(dest, ss); err != nil {
+			t.Fatal(err)
+		}
+		if d := titanH2Dials.Load() - before; d != 1 {
+			t.Fatalf("a probe: %d dials, not its own", d)
+		}
+	}
 	for i := range 20 {
 		for _, ss := range subjects {
-			if _, err := titanFlow(dest, ss, false); err != nil {
-				t.Fatal(err)
-			}
+			probe(ss)
 		}
-		time.Sleep(internet.TitanIdleAfter / 2)
+		time.Sleep(internet.TitanIdleAfter / 4)
 		if i%5 == 4 {
-			time.Sleep(2 * internet.TitanIdleAfter)
-			if titanH2Open(subjects[1]) != 0 || titanH2Open(subjects[2]) != 0 {
-				t.Fatalf("a probe-only connection open %v after its probe", 2*internet.TitanIdleAfter)
+			time.Sleep(titanRetireAgain + 100*time.Millisecond)
+			if titanH2Open(subjects[1]) != 0 || titanH2Open(subjects[2]) != 0 || titanH2Open(subjects[0]) != 1 {
+				t.Fatalf("%d, %d, %d connections open %v after the probes (the user's only)",
+					titanH2Open(subjects[0]), titanH2Open(subjects[1]), titanH2Open(subjects[2]), titanRetireAgain+100*time.Millisecond)
 			}
 		}
 	}
-	titanH2Conns.Lock()
-	_, open := titanH2Conns.m[mine]
-	titanH2Conns.Unlock()
-	if !open {
+	if !tracked(mine) {
 		t.Fatal("the user's connection was closed")
 	}
 	if err := titanEcho(user); err != nil {
-		t.Fatalf("the user's connection after %v idle: %v", 20*internet.TitanIdleAfter, err)
+		t.Fatalf("the user's connection after %v idle: %v", 5*internet.TitanIdleAfter, err)
 	}
 
-	// New flows around the moment a connection closes idle: each gets an open connection or a
-	// new one, none fails (CloseIdleConnections leaves a connection a request has reserved).
+	// The user's flow ends: its connection stays for TitanIdleAfter, the probes don't touch it.
+	user.Close()
+	ended := time.Now()
+	for _, at := range []time.Duration{internet.TitanIdleAfter / 4, internet.TitanIdleAfter * 3 / 4} {
+		time.Sleep(time.Until(ended.Add(at)))
+		probe(subjects[0])
+		if !tracked(mine) {
+			t.Fatalf("the user's connection closed %v after its flow", at)
+		}
+	}
+	time.Sleep(time.Until(ended.Add(internet.TitanIdleAfter + titanRetireAgain + 300*time.Millisecond)))
+	if n := titanH2Open(subjects[0]); n != 0 || tracked(mine) {
+		t.Fatalf("%d of the user's subject's connections open %v after its last flow", n, time.Since(ended))
+	}
+
+	// New flows around the moment a connection closes: user flows and probes on one subject,
+	// each gets an open connection or a new one, none fails (CloseIdleConnections leaves a
+	// connection a request has reserved).
 	internet.TitanIdleAfter = 50 * time.Millisecond
 	var wg sync.WaitGroup
 	var failed atomic.Int32
-	for range 4 {
+	for g := range 4 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for range 40 {
+			for k := range 40 {
 				time.Sleep(time.Duration(30+rand.IntN(50)) * time.Millisecond)
-				if _, err := titanFlow(dest, race, false); err != nil {
+				var err error
+				if (g+k)%2 == 0 {
+					err = titanProbe(dest, race)
+				} else {
+					_, err = titanFlow(dest, race, false)
+				}
+				if err != nil {
 					failed.Add(1)
 					t.Error(err)
 				}
