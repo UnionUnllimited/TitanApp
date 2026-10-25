@@ -17,8 +17,16 @@ const (
 	titanConnWindow   = 4 << 20
 )
 
-// titanWindows adds the fixed windows unless the config has a smaller stream window.
-func titanWindows(opts []grpc.DialOption, configured int32) []grpc.DialOption {
+// titanDialOptions adds the fixed windows (unless the config has a smaller stream window) and
+// the idle timeout: grpc-go's default is 30 min, and with the observatory's probes ~5 min apart
+// every subject's ClientConn stayed READY with its transport for good (72 KiB of heap and 5
+// goroutines each), though only the balancers' picks carry traffic. With no RPC (a stream:
+// multiMode's per proxied connection, a probe's) for internet.TitanIdleAfter the channel goes
+// IDLE and drops its transport; the next RPC connects again. grpc-go's own idleness: an RPC
+// open keeps it from going idle, and one that comes as it goes brings it back
+// (internal/idle). The pool keeps the ClientConn (an idle one isn't Shutdown).
+func titanDialOptions(opts []grpc.DialOption, configured int32) []grpc.DialOption {
+	opts = append(opts, grpc.WithIdleTimeout(internet.TitanIdleAfter))
 	if configured > 0 && configured <= titanStreamWindow {
 		return opts
 	}

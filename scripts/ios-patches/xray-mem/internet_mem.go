@@ -31,6 +31,25 @@ func TitanRegisterCloser(f func() int) {
 // closes those this much later (a variable for the tests).
 var TitanSweepAfter = 90 * time.Second
 
+// How long a pooled connection stays up with no stream on it: XHTTP's HTTP/2 connections
+// (IdleConnTimeout, was net.ConnIdleTimeout: 300 s), gRPC's ClientConns (WithIdleTimeout, was
+// grpc-go's 30 min) and Hysteria's QUIC connections (with no TCP stream and no UDP session; the
+// panel's keep-alive under QUIC's idle timeout kept them for good, the cleaner only dropped dead
+// ones). User traffic rides only the balancers' picks (leastLoad picks one); every other
+// subject's connection was there only for the observatory's next probe (interval × sampling: 5 per
+// subject each round, ~5 min apart), and they stayed: with 60 outbounds (30 XHTTP, 10 gRPC, 10
+// Hysteria, 10 TCP REALITY) 21-28 HTTP/2, 10 gRPC and 10 QUIC connections, ~60 / 72 / 100 KiB of
+// heap each (3.1 MiB in all, 3.7 MiB of Go with the goroutines' stacks), and the HTTP/2 ones went
+// up to 59 for the minutes after every start (XMUX's default 3 per subject); now 6, 1.6 and 1.9
+// on average, the live heap 6.4 -> 3.9 MiB, Go's 17.0 -> 13.2 (docs/HANDOFF.md). A connection
+// with a stream on it is never closed (each pool's own idle rule: HTTP/2 and gRPC count their
+// streams, Hysteria's cleaner its streams and sessions under the client's lock, which a new
+// stream takes too); the next stream after the idle close dials again: the probes of the
+// subjects that carry no traffic are cold, as TCP REALITY's always were (it pools nothing).
+// XHTTP over HTTP/3 keeps its connections as before (quic-go's http3 counts a request until its
+// headers only). A variable for the tests.
+var TitanIdleAfter = 60 * time.Second
+
 // TitanCloseTransports closes the pooled connections of every transport, without waiting
 // for them. Only once no Xray instance runs in the process (the tunnel, between stopXray and
 // the next runXray): the pools are the process's, a running instance would lose its

@@ -6,8 +6,10 @@ package splithttp
 import (
 	"context"
 	gotls "crypto/tls"
+	gonet "net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xtls/xray-core/common/net"
@@ -31,7 +33,9 @@ const (
 )
 
 // titanH2Transport is XHTTP's HTTP/2 transport with the limits above; dial gives the TLS /
-// REALITY connection for streamSettings.
+// REALITY connection for streamSettings. A connection closes idle after its last stream ends
+// (internet.TitanIdleAfter in the build); ping is the panel's keep-alive (PING after that long
+// with nothing read, Chrome's 45 s by default).
 func titanH2Transport(dial func(context.Context) (net.Conn, error), streamSettings *internet.MemoryStreamConfig, idle, ping time.Duration) *http2.Transport {
 	t, err := http2.ConfigureTransports(&http.Transport{HTTP2: &http.HTTP2Config{
 		MaxReceiveBufferPerStream:     titanH2StreamWindow,
@@ -58,8 +62,17 @@ func titanH2Transport(dial func(context.Context) (net.Conn, error), streamSettin
 // scratch buffer of that size, up to 512 KiB, for each request body as long as the body lasts,
 // and a stream-up upload lasts as long as its proxied connection. Frames we send stay within
 // what the server accepts (and Xray writes 8 KiB at a time).
+//
+// Closed, it lets go of the TLS / REALITY connection under it: Go's HTTP/2 client (Go 1.27,
+// net/http/internal/http2 clientConnReadLoop.run) never stops its keep-alive timer
+// (ReadIdleTimeout, 45 s) when the connection ends, so the timer kept the whole connection in the
+// heap until it fired, ~55 KiB each (26 of them REALITY / uTLS state, 8 the TLS buffers), and a
+// restart closes them all just before the watchdog's "after" reading (stand: 35 closed by a
+// restart, +1.85 MiB 5-40 s later). Now ~27 KiB (the client's own buffers and tables) until then:
+// 31 such, +0.85 MiB.
 type titanH2Conn struct {
-	net.Conn
+	conn           atomic.Pointer[net.Conn] // nil once closed
+	local, remote  net.Addr
 	streamSettings *internet.MemoryStreamConfig
 	closeOnce      sync.Once
 
@@ -75,9 +88,44 @@ type titanH2Conn struct {
 var titanMaxFrame = [4]byte{0, 0, titanH2FrameSize >> 8, 0}
 
 func (c *titanH2Conn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
+	conn := c.conn.Load()
+	if conn == nil {
+		return 0, gonet.ErrClosed
+	}
+	n, err := (*conn).Read(p)
 	c.scan(p[:n])
 	return n, err
+}
+
+func (c *titanH2Conn) Write(p []byte) (int, error) {
+	conn := c.conn.Load()
+	if conn == nil {
+		return 0, gonet.ErrClosed
+	}
+	return (*conn).Write(p)
+}
+
+func (c *titanH2Conn) LocalAddr() net.Addr  { return c.local }
+func (c *titanH2Conn) RemoteAddr() net.Addr { return c.remote }
+
+func (c *titanH2Conn) SetDeadline(t time.Time) error {
+	return c.deadline(func(conn net.Conn) error { return conn.SetDeadline(t) })
+}
+
+func (c *titanH2Conn) SetReadDeadline(t time.Time) error {
+	return c.deadline(func(conn net.Conn) error { return conn.SetReadDeadline(t) })
+}
+
+func (c *titanH2Conn) SetWriteDeadline(t time.Time) error {
+	return c.deadline(func(conn net.Conn) error { return conn.SetWriteDeadline(t) })
+}
+
+func (c *titanH2Conn) deadline(f func(net.Conn) error) error {
+	conn := c.conn.Load()
+	if conn == nil {
+		return gonet.ErrClosed
+	}
+	return f(*conn)
 }
 
 // scan follows the frames in b, the server's next bytes, rewriting MAX_FRAME_SIZE in place.
@@ -127,7 +175,11 @@ func (c *titanH2Conn) Close() error {
 		delete(titanH2Conns.m, c)
 		titanH2Conns.Unlock()
 	})
-	return c.Conn.Close()
+	conn := c.conn.Swap(nil)
+	if conn == nil {
+		return gonet.ErrClosed
+	}
+	return (*conn).Close()
 }
 
 // The HTTP/2 connections open now (the client closes each when it ends), for titanCloseAll.
@@ -137,7 +189,8 @@ var titanH2Conns struct {
 }
 
 func titanTrack(conn net.Conn, streamSettings *internet.MemoryStreamConfig) *titanH2Conn {
-	c := &titanH2Conn{Conn: conn, streamSettings: streamSettings}
+	c := &titanH2Conn{local: conn.LocalAddr(), remote: conn.RemoteAddr(), streamSettings: streamSettings}
+	c.conn.Store(&conn)
 	titanH2Conns.Lock()
 	defer titanH2Conns.Unlock()
 	if titanH2Conns.m == nil {
@@ -146,6 +199,19 @@ func titanTrack(conn net.Conn, streamSettings *internet.MemoryStreamConfig) *tit
 	titanH2Conns.m[c] = struct{}{}
 	return c
 }
+
+// titanRetire closes a retired XMUX client's idle HTTP/2 connection (DefaultDialerClient.Close:
+// XMUX calls it once the client's last proxied connection is done), now and again a moment
+// later: XMUX calls it from splitConn.Close before that closes the connection's request and
+// response bodies, so its streams were still open then and nothing closed it until
+// IdleConnTimeout. A stream still open stays open (CloseIdleConnections).
+func (c *DefaultDialerClient) titanRetire() {
+	c.client.CloseIdleConnections()
+	time.AfterFunc(titanRetireAgain, c.client.CloseIdleConnections)
+}
+
+// When titanRetire looks again: the bodies' ends reach the server and its answers come back.
+var titanRetireAgain = 2 * time.Second
 
 func init() {
 	internet.TitanRegisterCloser(titanCloseAll)

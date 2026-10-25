@@ -13,8 +13,16 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
 - XHTTP, gRPC and Hysteria pools closed on request (internet.TitanCloseTransports, titan's
   closeTransports after stopXray): keyed by the instance's own stream settings, a restart
   left the old instance's whole set alive. A retired XMUX client's idle HTTP/2 connection
-  closes at once, not after 300 s idle. Hysteria's cleaner no longer waits for a dialing
-  client under the pool's lock (closeTransports waited with it).
+  closes once its last streams have ended, not after IdleConnTimeout. Hysteria's cleaner no
+  longer waits for a dialing client under the pool's lock (closeTransports waited with it).
+- Pooled connections with no stream close after internet.TitanIdleAfter (60 s): XHTTP's
+  HTTP/2 (300 s before), gRPC's ClientConn goes IDLE (grpc-go's 30 min), Hysteria's QUIC with
+  no stream and no UDP session (never before: the panel's keep-alive). Only the balancers'
+  picks carry traffic; the other subjects' connections were kept for the next probe. gRPC
+  dials on grpc-go's context, not on that of the proxied connection that made the ClientConn
+  (once that one ended, every later dial failed at once). A closed XHTTP connection lets go of
+  its REALITY connection (Go's HTTP/2 client keeps itself until its keep-alive timer fires),
+  and REALITY drops uTLS's key share private keys after the handshake (ML-KEM-768, ~8 KiB).
 - Receive windows: XHTTP's HTTP/2 1 MiB per stream / 16 MiB per connection (Go: 4 MiB / 1 GiB),
   16 KiB frames both ways (the server's 1 MiB frame size gave each stream-up upload a 512 KiB
   buffer); gRPC fixed 1 / 4 MiB (the BDP estimate grows to 16 MiB); QUIC 1 / 16 MiB (with the
@@ -122,6 +130,16 @@ changes = {
          "\t\t\t\tdelay, err := client.MeasureDelay(h.Settings.HttpMethod)\n"
          "\t\t\t\th.titanFree(slots)\n"),
     ],
+    # uTLS keeps the ClientHello's key share private keys in the UConn's handshake state after the
+    # handshake (u_handshake_client.go toPublic13): the ML-KEM-768 decapsulation key, ~8 KiB, on
+    # every REALITY connection for its whole life. Nothing reads them after it (REALITY's AuthKey
+    # comes from them before; KeyUpdate and tickets use the traffic secrets).
+    "transport/internet/reality/reality.go": [
+        ("\tif err := uConn.HandshakeContext(ctx); err != nil {\n\t\treturn nil, err\n\t}\n",
+         "\tif err := uConn.HandshakeContext(ctx); err != nil {\n\t\treturn nil, err\n\t}\n"
+         "\t// Titan patch: the key shares' private keys (ML-KEM-768: ~8 KiB) aren't needed any more.\n"
+         "\tuConn.HandshakeState.State13.KeyShareKeys = nil\n"),
+    ],
     "app/observatory/burst/burstobserver.go": [
         ("\thp := NewHealthPing(ctx, dispatcher, config.PingConfig)\n",
          "\thp := NewHealthPing(ctx, dispatcher, config.PingConfig)\n"
@@ -137,8 +155,9 @@ changes = {
          "\t\t\tIdleConnTimeout: net.ConnIdleTimeout,\n"
          "\t\t\tReadIdleTimeout: keepAlivePeriod,\n"
          "\t\t}\n",
-         "\t\t// Titan patch: smaller windows and frames, connections tracked (titan_mem.go).\n"
-         "\t\ttransport = titanH2Transport(dialContext, streamSettings, net.ConnIdleTimeout, keepAlivePeriod)\n"),
+         "\t\t// Titan patch: smaller windows and frames, connections tracked, closed sooner idle\n"
+         "\t\t// (titan_mem.go).\n"
+         "\t\ttransport = titanH2Transport(dialContext, streamSettings, internet.TitanIdleAfter, keepAlivePeriod)\n"),
         ("\t\t\tquicConfig.MaxIncomingStreams = -1\n\t\t}\n",
          "\t\t\tquicConfig.MaxIncomingStreams = -1\n\t\t}\n"
          "\t\t// Titan patch: smaller receive windows.\n\t\tinternet.TitanQUICWindows(quicConfig)\n"),
@@ -146,16 +165,25 @@ changes = {
     "transport/internet/splithttp/client.go": [
         ("\tif h3Transport, ok := transport.(*http3.Transport); ok {\n\t\th3Transport.Close()\n\t}\n\treturn nil\n}\n",
          "\tif h3Transport, ok := transport.(*http3.Transport); ok {\n\t\th3Transport.Close()\n\t} else {\n"
-         "\t\t// Titan patch: a retired client's idle HTTP/2 connection closes now, not 300 s later.\n"
-         "\t\tc.client.CloseIdleConnections()\n\t}\n\treturn nil\n}\n"),
+         "\t\t// Titan patch: a retired client's idle HTTP/2 connection closes now, not idle later\n"
+         "\t\t// (titan_mem.go).\n"
+         "\t\tc.titanRetire()\n\t}\n\treturn nil\n}\n"),
     ],
     "transport/internet/grpc/dial.go": [
         ("\tif grpcSettings.InitialWindowsSize > 0 {\n"
          "\t\tdialOptions = append(dialOptions, grpc.WithInitialWindowSize(grpcSettings.InitialWindowsSize))\n\t}\n",
          "\tif grpcSettings.InitialWindowsSize > 0 {\n"
          "\t\tdialOptions = append(dialOptions, grpc.WithInitialWindowSize(grpcSettings.InitialWindowsSize))\n\t}\n"
-         "\t// Titan patch: fixed windows (titan_mem.go).\n"
-         "\tdialOptions = titanWindows(dialOptions, grpcSettings.InitialWindowsSize)\n"),
+         "\t// Titan patch: fixed windows, idle after a minute without RPCs (titan_mem.go).\n"
+         "\tdialOptions = titanDialOptions(dialOptions, grpcSettings.InitialWindowsSize)\n"),
+        # The ClientConn dials again whenever it connects (after IDLE above, a lost connection),
+        # but dialed on the context of the proxied connection that made it: once that one ended
+        # (any short flow of an app), every later dial failed at once ("operation was canceled")
+        # and the RPCs with it. grpc-go's dial context, with the values copied into it above (as
+        # finalmask's dial has it).
+        ("\t\t\t\tc, err = internet.DialSystem(ctx, dest, streamSettings.SocketSettings)\n",
+         "\t\t\t\t// Titan patch: on grpc-go's dial context, not the first proxied connection's.\n"
+         "\t\t\t\tc, err = internet.DialSystem(gctx, dest, streamSettings.SocketSettings)\n"),
     ],
     "transport/internet/hysteria/dialer.go": [
         ("\tif quicParams.MaxIdleTimeout == 0 {\n\t\tquicConfig.MaxIdleTimeout = 30 * time.Second\n\t}\n",
@@ -164,6 +192,28 @@ changes = {
         ("\t\tm.RLock()\n\t\tfor _, c := range m.m {\n\t\t\tc.clean()\n\t\t}\n\t\tm.RUnlock()\n",
          "\t\t// Titan patch: cleaned outside the pool's lock (titan_mem.go).\n"
          "\t\tfor _, c := range m.titanClients() {\n\t\t\tc.clean()\n\t\t}\n"),
+        # A connection with no stream and no UDP session for a minute is closed (titan_mem.go).
+        ("\tudpSM   *udpSessionManager\n}\n",
+         "\tudpSM   *udpSessionManager\n\n\t// Titan patch: its streams, and when it was last used (titan_mem.go).\n"
+         "\ttitan titanUse\n}\n"),
+        ("\tc.Lock()\n\tdefer c.Unlock()\n\n\terr := c.dial(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
+         "\tstream, err := c.conn.OpenStream()\n",
+         "\tc.Lock()\n\tdefer c.Unlock()\n\t// Titan patch: in use (titan_mem.go).\n\tc.titanUsed()\n\n"
+         "\terr := c.dial(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
+         "\tstream, err := c.conn.OpenStream()\n"),
+        ("\treturn &interConn{\n\t\tstream: stream,\n\t\tlocal:  c.conn.LocalAddr(),\n\t\tremote: c.conn.RemoteAddr(),\n\n"
+         "\t\tclient: true,\n\t}, nil\n}\n",
+         "\t// Titan patch: counted until closed (titan_mem.go).\n"
+         "\treturn c.titanStream(&interConn{\n\t\tstream: stream,\n\t\tlocal:  c.conn.LocalAddr(),\n\t\tremote: c.conn.RemoteAddr(),\n\n"
+         "\t\tclient: true,\n\t}), nil\n}\n"),
+        ("\tc.Lock()\n\tdefer c.Unlock()\n\n\terr := c.dial(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
+         "\treturn c.udpSM.udp()\n",
+         "\tc.Lock()\n\tdefer c.Unlock()\n\t// Titan patch: in use (titan_mem.go).\n\tc.titanUsed()\n\n"
+         "\terr := c.dial(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
+         "\treturn c.udpSM.udp()\n"),
+        ("\tc.Lock()\n\tif c.status() == StatusInactive {\n\t\tc.close()\n\t}\n\tc.Unlock()\n",
+         "\tc.Lock()\n\tif c.status() == StatusInactive {\n\t\tc.close()\n"
+         "\t} else if c.titanIdle() { // Titan patch: idle a minute (titan_mem.go).\n\t\tc.close()\n\t}\n\tc.Unlock()\n"),
     ],
 }
 files = {"internet_mem.go": "transport/internet", "splithttp_mem.go": "transport/internet/splithttp",

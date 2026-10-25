@@ -1,18 +1,33 @@
 package splithttp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
+	"math/rand/v2"
 	gonet "net"
 	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
+	"runtime/metrics"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/protocol/tls/cert"
+	"github.com/xtls/xray-core/testing/servers/tcp"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
+	"github.com/xtls/xray-core/transport/internet/tls"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 )
@@ -385,4 +400,416 @@ func titanDelayLine(t *testing.T, addr string, delay time.Duration) string {
 		}
 	}()
 	return ln.Addr().String()
+}
+
+// An XHTTP server over TLS (HTTP/2) on localhost that echoes each proxied connection, in a
+// process of its own (TestTitanH2Server: Xray's server keeps a stream-up session and its padding
+// goroutine 30-80 s after the connection ends, which in this process would count in the client's
+// heap), and the stream settings of n subjects dialing it (each its own pool, as each outbound
+// has): stream-up (a download and an upload stream per proxied connection), Xray's default XMUX
+// (3 connections a subject at most: the JSON config's, transport_method.go) with a 1 s keep-alive
+// (the HTTP/2 client's PING timer keeps a closed connection's client in the heap that long).
+func titanXHTTP(t *testing.T, n int) (net.Destination, []*internet.MemoryStreamConfig) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTitanH2Server$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "TITAN_H2_SERVER=1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stdin.Close()
+		done := make(chan struct{})
+		go func() { cmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			cmd.Process.Kill()
+		}
+	})
+	ready := make(chan string, 1)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			if line, ok := strings.CutPrefix(sc.Text(), "titan-server "); ok {
+				ready <- line
+			}
+		}
+	}()
+	var port net.Port
+	var hash []byte
+	select {
+	case line := <-ready:
+		var p int
+		var h string
+		if _, err := fmt.Sscanf(line, "%d %s", &p, &h); err != nil {
+			t.Fatal(line, err)
+		}
+		port = net.Port(p)
+		hash, _ = hex.DecodeString(h)
+	case <-time.After(20 * time.Second):
+		t.Fatal("the XHTTP server didn't start")
+	}
+	subjects := make([]*internet.MemoryStreamConfig, n)
+	for i := range subjects {
+		subjects[i] = &internet.MemoryStreamConfig{
+			ProtocolName: "splithttp",
+			ProtocolSettings: &Config{Path: "titan", Mode: "stream-up", Xmux: &XmuxConfig{
+				MaxConnections:   &RangeConfig{From: 3, To: 3},
+				HMaxRequestTimes: &RangeConfig{From: 600, To: 900},
+				HMaxReusableSecs: &RangeConfig{From: 1800, To: 3000},
+				HKeepAlivePeriod: 1,
+			}},
+			SecurityType:     "tls",
+			SecuritySettings: &tls.Config{PinnedPeerCertSha256: [][]byte{hash}},
+		}
+	}
+	return net.TCPDestination(net.LocalHostIP, port), subjects
+}
+
+// titanXHTTP's server, when the test binary runs as it: until its stdin closes.
+func TestTitanH2Server(t *testing.T) {
+	if os.Getenv("TITAN_H2_SERVER") == "" {
+		t.Skip("the idle tests' XHTTP server, run in a process of its own")
+	}
+	ct, hash := cert.MustGenerate(nil, cert.CommonName("localhost"))
+	// Loaded once: Xray's reload ticker rewrites the certificate as handshakes read it.
+	c := tls.ParseCertificate(ct)
+	c.OneTimeLoading = true
+	port := tcp.PickPort()
+	ln, err := ListenXH(context.Background(), net.LocalHostIP, port, &internet.MemoryStreamConfig{
+		ProtocolName:     "splithttp",
+		ProtocolSettings: &Config{Path: "titan"},
+		SecurityType:     "tls",
+		SecuritySettings: &tls.Config{Certificate: []*tls.Certificate{c}},
+	}, func(conn stat.Connection) {
+		go func() {
+			defer conn.Close()
+			io.Copy(conn, conn)
+		}()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	fmt.Printf("titan-server %d %x\n", port, hash[:])
+	io.Copy(io.Discard, os.Stdin)
+}
+
+// titanFlow dials a proxied connection through ss and checks it echoes; open, it is left open
+// (with its close) for the caller.
+func titanFlow(dest net.Destination, ss *internet.MemoryStreamConfig, open bool) (stat.Connection, error) {
+	type result struct {
+		conn stat.Connection
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		conn, err := Dial(context.Background(), dest, ss)
+		if err == nil {
+			err = titanEcho(conn)
+		}
+		if err != nil || !open {
+			if conn != nil {
+				conn.Close()
+			}
+			conn = nil
+		}
+		done <- result{conn, err}
+	}()
+	select {
+	case r := <-done:
+		return r.conn, r.err
+	case <-time.After(10 * time.Second):
+		return nil, errors.New("no echo in 10 s")
+	}
+}
+
+func titanEcho(conn gonet.Conn) error {
+	msg := fmt.Appendf(nil, "titan %d", rand.Int())
+	if _, err := conn.Write(msg); err != nil {
+		return err
+	}
+	got := make([]byte, len(msg))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		return err
+	}
+	if !bytes.Equal(got, msg) {
+		return fmt.Errorf("echo %q, sent %q", got, msg)
+	}
+	return nil
+}
+
+// The tracked HTTP/2 connections now, in all or of ss.
+func titanH2Open(ss *internet.MemoryStreamConfig) int {
+	titanH2Conns.Lock()
+	defer titanH2Conns.Unlock()
+	n := 0
+	for c := range titanH2Conns.m {
+		if ss == nil || c.streamSettings == ss {
+			n++
+		}
+	}
+	return n
+}
+
+// The live heap after a full GC (what stays, as the tunnel's GOGC 10 and FreeOSMemory see it).
+func titanLiveHeap() int64 {
+	runtime.GC()
+	runtime.GC()
+	s := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+	metrics.Read(s)
+	return int64(s[0].Value.Uint64())
+}
+
+// Probe rounds, as the observatory runs them on subjects that carry no traffic (a proxied
+// connection that echoes, then closes): with internet.TitanIdleAfter each subject's HTTP/2
+// connection closes that long after its probe, so between rounds none is open and the live heap
+// comes back to the same level round after round. Before (300 s idle) every subject kept its
+// connections between probes, and XMUX opened a new one for each of the next probes up to its 3.
+func TestTitanH2IdleProbes(t *testing.T) {
+	defer func(d time.Duration) { internet.TitanIdleAfter = d }(internet.TitanIdleAfter)
+	const n, rounds = 20, 12
+	dest, subjects := titanXHTTP(t, 2*n)
+	probe := func(subjects []*internet.MemoryStreamConfig) {
+		var wg sync.WaitGroup
+		slots := make(chan struct{}, 4) // the observatory's probes at once
+		for _, ss := range subjects {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				slots <- struct{}{}
+				defer func() { <-slots }()
+				if _, err := titanFlow(dest, ss, false); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		wg.Wait()
+	}
+	// Keep-alive timers of what earlier tests closed (1 s here, 45 s by default).
+	time.Sleep(1500 * time.Millisecond)
+	base := titanLiveHeap()
+
+	// What the pools held before: idle connections kept (an hour here, 300 s before), the next
+	// probes opening more, up to XMUX's 3 a subject.
+	internet.TitanIdleAfter = time.Hour
+	kept := subjects[n:]
+	for range 4 {
+		probe(kept)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	keptOpen, keptHeap := titanH2Open(nil), titanLiveHeap()-base
+	t.Logf("idle kept: %d HTTP/2 connections for %d subjects, %d KiB of live heap (%d KiB a subject)",
+		keptOpen, n, keptHeap>>10, keptHeap>>10/n)
+	if keptOpen < 2*n {
+		t.Fatalf("idle kept: only %d connections for %d subjects", keptOpen, n)
+	}
+	titanCloseAll()
+	time.Sleep(1500 * time.Millisecond)
+	base = titanLiveHeap()
+
+	internet.TitanIdleAfter = 400 * time.Millisecond
+	var quiet []int64
+	for r := range rounds {
+		probe(subjects[:n])
+		busy := titanH2Open(nil)
+		// The idle close, then the keep-alive timer of the closed connections (1 s).
+		time.Sleep(internet.TitanIdleAfter + 1500*time.Millisecond)
+		if open := titanH2Open(nil); open != 0 {
+			t.Fatalf("round %d: %d connections open %v after the probes", r, open, internet.TitanIdleAfter+1500*time.Millisecond)
+		}
+		h := titanLiveHeap() - base
+		quiet = append(quiet, h)
+		t.Logf("round %2d: %2d connections right after the probes, none open after; live heap %+5d KiB", r, busy, h>>10)
+	}
+	// Steady: the last rounds hold no more than the first ones (XMUX keeps up to 3 clients a
+	// subject, ~1 KiB each, once all 3 have been made: by the third round).
+	first, last := max(quiet[2], quiet[3], quiet[4]), max(quiet[rounds-3], quiet[rounds-2], quiet[rounds-1])
+	if last > first+256<<10 || last > keptHeap/4 {
+		t.Fatalf("live heap +%d KiB in rounds 2-4, +%d KiB in the last ones (kept idle: +%d)", first>>10, last>>10, keptHeap>>10)
+	}
+	globalDialerAccess.Lock()
+	for key, m := range globalDialerMap {
+		if len(m.xmuxClients) > 3 {
+			t.Errorf("%d XMUX clients for %v", len(m.xmuxClients), key.Destination)
+		}
+	}
+	globalDialerAccess.Unlock()
+}
+
+// A proxied connection that sends nothing for many idle periods keeps its HTTP/2 connection (its
+// streams are open: the idle close never touches it) while probes come and go on the same subject
+// and others, and still carries data both ways after; flows that start as connections close idle
+// all get through.
+func TestTitanH2IdleUser(t *testing.T) {
+	defer func(d time.Duration) { internet.TitanIdleAfter = d }(internet.TitanIdleAfter)
+	internet.TitanIdleAfter = 300 * time.Millisecond
+	dest, subjects := titanXHTTP(t, 4)
+	race := subjects[3]
+	subjects = subjects[:3]
+	user, err := titanFlow(dest, subjects[0], true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer user.Close()
+	titanH2Conns.Lock()
+	var mine *titanH2Conn
+	for c := range titanH2Conns.m {
+		if c.streamSettings == subjects[0] {
+			mine = c
+		}
+	}
+	titanH2Conns.Unlock()
+	if mine == nil {
+		t.Fatal("the user's connection isn't tracked")
+	}
+	for i := range 20 {
+		for _, ss := range subjects {
+			if _, err := titanFlow(dest, ss, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(internet.TitanIdleAfter / 2)
+		if i%5 == 4 {
+			time.Sleep(2 * internet.TitanIdleAfter)
+			if titanH2Open(subjects[1]) != 0 || titanH2Open(subjects[2]) != 0 {
+				t.Fatalf("a probe-only connection open %v after its probe", 2*internet.TitanIdleAfter)
+			}
+		}
+	}
+	titanH2Conns.Lock()
+	_, open := titanH2Conns.m[mine]
+	titanH2Conns.Unlock()
+	if !open {
+		t.Fatal("the user's connection was closed")
+	}
+	if err := titanEcho(user); err != nil {
+		t.Fatalf("the user's connection after %v idle: %v", 20*internet.TitanIdleAfter, err)
+	}
+
+	// New flows around the moment a connection closes idle: each gets an open connection or a
+	// new one, none fails (CloseIdleConnections leaves a connection a request has reserved).
+	internet.TitanIdleAfter = 50 * time.Millisecond
+	var wg sync.WaitGroup
+	var failed atomic.Int32
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 40 {
+				time.Sleep(time.Duration(30+rand.IntN(50)) * time.Millisecond)
+				if _, err := titanFlow(dest, race, false); err != nil {
+					failed.Add(1)
+					t.Error(err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if failed.Load() > 0 {
+		t.Fatalf("%d of 160 flows failed", failed.Load())
+	}
+}
+
+// A closed HTTP/2 connection lets go of the TLS / REALITY connection under it at once: Go's
+// client keeps itself in the heap until its keep-alive timer fires (it never stops it when the
+// connection ends), 45 s by default.
+func TestTitanH2Released(t *testing.T) {
+	ln, err := gonet.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go (&http2.Server{}).ServeConn(conn, &http2.ServeConnOpts{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})})
+		}
+	}()
+	var inner weak.Pointer[gonet.TCPConn]
+	var tracked weak.Pointer[titanH2Conn]
+	dial := func(ctx context.Context) (net.Conn, error) {
+		conn, err := gonet.Dial("tcp", ln.Addr().String())
+		if err == nil {
+			inner = weak.Make(conn.(*gonet.TCPConn))
+		}
+		return conn, err
+	}
+	tr := titanH2Transport(dial, &internet.MemoryStreamConfig{}, 200*time.Millisecond, 30*time.Second)
+	resp, err := (&http.Client{Transport: tr}).Get("https://titan.test/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	titanH2Conns.Lock()
+	for c := range titanH2Conns.m {
+		tracked = weak.Make(c)
+	}
+	titanH2Conns.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for titanH2Open(nil) != 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if titanH2Open(nil) != 0 {
+		t.Fatal("the connection didn't close idle")
+	}
+	titanLiveHeap()
+	if inner.Value() != nil {
+		t.Fatal("the closed connection's TCP connection is still in the heap")
+	}
+	t.Logf("closed idle: the TCP connection collected; the HTTP/2 client still holds its connection: %v (its PING timer, 30 s here)",
+		tracked.Value() != nil)
+}
+
+// A retired XMUX client whose last proxied connection is closing (XMUX calls Close before the
+// connection's bodies are closed, so its streams are still open then) closes its HTTP/2
+// connection once they have ended, not IdleConnTimeout later.
+func TestTitanH2RetiredOpen(t *testing.T) {
+	defer func(d time.Duration) { titanRetireAgain = d }(titanRetireAgain)
+	titanRetireAgain = 300 * time.Millisecond
+	ln, err := gonet.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	ended := make(chan struct{}, 1)
+	release := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		(&http2.Server{}).ServeConn(conn, &http2.ServeConnOpts{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-release
+		})})
+		ended <- struct{}{}
+	}()
+	dial := func(ctx context.Context) (net.Conn, error) { return gonet.Dial("tcp", ln.Addr().String()) }
+	c := &DefaultDialerClient{client: &http.Client{Transport: titanH2Transport(dial, &internet.MemoryStreamConfig{}, time.Hour, 0)}, httpVersion: "2"}
+	resp, err := c.client.Get("https://titan.test/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close() // the stream is open: nothing to close yet
+	close(release)
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	select {
+	case <-ended:
+	case <-time.After(titanRetireAgain + 2*time.Second):
+		t.Fatal("the retired client's connection is still open after its stream ended")
+	}
 }
