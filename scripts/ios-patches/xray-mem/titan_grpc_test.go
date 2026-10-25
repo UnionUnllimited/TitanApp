@@ -16,8 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/testing/servers/tcp"
+	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 	"golang.org/x/net/http2"
@@ -317,9 +321,9 @@ func titanSteadyStep(quiet []int64, from int) int64 {
 // stream is an RPC: grpc-go never goes idle under one) while probes come and go on its subject
 // and others, and still carries data after. The probes don't touch the pool (each a ClientConn
 // of its own, closed as it ends), on the user's subject too. Once the user's flow ends its
-// ClientConn goes IDLE internet.TitanIdleAfter later (up to twice that: grpc-go's timer), the
-// probes meanwhile notwithstanding. Flows that start as a ClientConn goes idle (user flows and
-// probes on one subject) all connect.
+// ClientConn goes IDLE internet.TitanIdleAfter later (grpc-go's timer: one timeout after its last
+// RPC ended; checked at twice that), the probes meanwhile notwithstanding. Flows that start as a
+// ClientConn goes idle (user flows and probes on one subject) all connect.
 func TestTitanGRPCIdleUser(t *testing.T) {
 	defer func(d time.Duration) { internet.TitanIdleAfter = d }(internet.TitanIdleAfter)
 	internet.TitanCloseTransports()
@@ -397,4 +401,84 @@ func TestTitanGRPCIdleUser(t *testing.T) {
 	if failed.Load() > 0 {
 		t.Fatalf("%d of 160 flows failed", failed.Load())
 	}
+}
+
+// A subject chained through a dialerProxy hop (sockopt.dialerProxy: DialSystem hands the
+// ClientConn's TCP to the hop's outbound): a probe's ClientConn dials the hop with the probe's
+// mark (grpc-go's dial context gets it with the flow's other values), so the hop's transport
+// gives the probe a connection of its own too, not one of its pool's; a user's flow reaches the
+// hop unmarked. Without the mark the hop's XHTTP pooled every probe's connection (XMUX: 3 a hop),
+// warm for the next probe.
+func TestTitanGRPCProbeHop(t *testing.T) {
+	internet.TitanCloseTransports()
+	defer internet.TitanCloseTransports()
+	dest, _ := titanGRPCServer(t, 0)
+	hop := &titanHop{addr: fmt.Sprintf("127.0.0.1:%d", dest.Port), marks: make(chan bool, 16)}
+	m := titanHopManager{hop: hop}
+	ss := &internet.MemoryStreamConfig{
+		ProtocolName:     "grpc",
+		ProtocolSettings: &Config{ServiceName: "titan", MultiMode: true},
+		SocketSettings:   &internet.SocketConfig{DialerProxy: "hop"},
+	}
+	flow := func(name string, ctx context.Context, probe bool) {
+		if _, _, err := titanGRPCFlowCtx(internet.TitanWithOutboundManager(ctx, m), dest, ss, false); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		select {
+		case marked := <-hop.marks:
+			if marked != probe {
+				t.Fatalf("%s: the hop saw the probe's mark: %v", name, marked)
+			}
+		default:
+			t.Fatalf("%s: not through the hop", name)
+		}
+	}
+	probeCtx := internet.TitanProbeContext(context.Background())
+	flow("a probe", probeCtx, true)
+	flow("a user's flow", context.Background(), false)
+	flow("a probe next to the user's ClientConn", probeCtx, true)
+	select {
+	case marked := <-hop.marks:
+		t.Fatalf("one more dial through the hop (marked %v)", marked)
+	default:
+	}
+}
+
+// titanHopManager is the dialing instance's outbound manager (TitanWithOutboundManager) with
+// the hop; DialSystem calls only GetHandler.
+type titanHopManager struct {
+	outbound.Manager
+	hop outbound.Handler
+}
+
+func (m titanHopManager) GetHandler(tag string) outbound.Handler {
+	if tag == "hop" {
+		return m.hop
+	}
+	return nil
+}
+
+// titanHop is a dialerProxy hop's outbound: it says whether each flow it gets is a probe's and
+// forwards it over TCP to addr. redirect calls only Dispatch.
+type titanHop struct {
+	outbound.Handler
+	addr  string
+	marks chan bool
+}
+
+func (h *titanHop) Dispatch(ctx context.Context, link *transport.Link) {
+	h.marks <- internet.TitanProbe(ctx)
+	conn, err := gonet.Dial("tcp", h.addr)
+	if err != nil {
+		common.Interrupt(link.Reader)
+		common.Interrupt(link.Writer)
+		return
+	}
+	defer conn.Close()
+	go func() {
+		buf.Copy(link.Reader, buf.NewWriter(conn))
+		conn.(*gonet.TCPConn).CloseWrite()
+	}()
+	buf.Copy(buf.NewReader(conn), link.Writer)
+	common.Interrupt(link.Writer)
 }

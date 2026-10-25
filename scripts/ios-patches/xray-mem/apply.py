@@ -24,9 +24,11 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
   as it ends, so every probe is cold, as TCP REALITY's always were, and leastLoad's deviations
   aren't a mix of warm and cold probes. gRPC
   dials on grpc-go's context, not on that of the proxied connection that made the ClientConn
-  (once that one ended, every later dial failed at once). A closed XHTTP connection lets go of
-  its REALITY connection (Go's HTTP/2 client keeps itself until its keep-alive timer fires),
-  and REALITY drops uTLS's key share private keys after the handshake (ML-KEM-768, ~8 KiB).
+  (once that one ended, every later dial failed at once), with the flow's values copied into
+  it, a probe's mark too (a dialerProxy hop's transport gives the probe its own as well). A
+  closed XHTTP connection lets go of its REALITY connection (Go's HTTP/2 client keeps itself
+  until its keep-alive timer fires), and REALITY drops uTLS's key share private keys after the
+  handshake (ML-KEM-768, ~8 KiB).
   XHTTP's HTTP/2 dials one connection at a time for each XMUX client, as x/net's own pool did
   (Go 1.27's net/http pool dialed one for every request waiting: a burst of flows on a cold
   client made a handshake each); the requests waiting behind a failed dial fail with it.
@@ -208,6 +210,14 @@ changes = {
         ("\t\t\t\tc, err = internet.DialSystem(ctx, dest, streamSettings.SocketSettings)\n",
          "\t\t\t\t// Titan patch: on grpc-go's dial context, not the first proxied connection's.\n"
          "\t\t\t\tc, err = internet.DialSystem(gctx, dest, streamSettings.SocketSettings)\n"),
+        # A probe's mark copied too: with sockopt.dialerProxy (or finalmask's dial) DialSystem hands
+        # the flow to the hop's outbound on gctx, and without the mark the hop's XHTTP / gRPC /
+        # Hysteria put the probe's flow in their pools (warm for the next probe, XMUX's 3 a hop).
+        # ctx is a probe's only in a probe's own ClientConn: probes never make pooled ones.
+        ("\t\t\tgctx = session.ContextWithTimeoutOnly(gctx, true)\n",
+         "\t\t\tgctx = session.ContextWithTimeoutOnly(gctx, true)\n"
+         "\t\t\tif internet.TitanProbe(ctx) { // Titan patch: the probe's mark for a dialerProxy hop\n"
+         "\t\t\t\tgctx = internet.TitanProbeContext(gctx)\n\t\t\t}\n"),
         # The observatory's probes don't use the pool: a ClientConn of their own each, closed as the
         # probe ends (titan_mem.go).
         ("\tif client, found := globalDialerMap[dialerConf{dest, streamSettings}]; found && client.GetState() != connectivity.Shutdown {\n",

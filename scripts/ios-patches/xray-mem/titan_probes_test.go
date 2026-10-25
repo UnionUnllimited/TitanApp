@@ -41,8 +41,9 @@ import (
 //   - probes next to a user: the same, on subjects that each carry a user's flow all along (the
 //     balancer's pick: its pooled connection up);
 //   - kept a minute: the probes' flows counted as a user's, each keeping its subject's pooled
-//     connection internet.TitanIdleAfter after it: what the probes did before (60 s next to probes
-//     about a minute apart: a random mix of warm and cold ones);
+//     connection internet.TitanIdleAfter after it (each flow ends with its context, as the TUN's:
+//     titanTimedEcho): what the probes did before (60 s next to probes about a minute apart: a
+//     random mix of warm and cold ones, for each of the three);
 //   - always cold: the probes, each on a subject of its own (a pool entry with nothing to reuse).
 //
 // The probes must be cold every time, next to a user's flow too (a pick's probes warm and the
@@ -88,7 +89,9 @@ func TestTitanProbeDeviation(t *testing.T) {
 				for range subjects {
 					ss := subject()
 					if g.user {
-						flow, err := tr.dial(context.Background(), dest, ss)
+						ctx, cancel := context.WithCancel(context.Background())
+						defer cancel() // after the flow's Close, as the TUN's
+						flow, err := tr.dial(ctx, dest, ss)
 						if err == nil {
 							_, err = titanEcho(flow)
 						}
@@ -149,10 +152,14 @@ func TestTitanProbeDeviation(t *testing.T) {
 					t.Errorf("%s: deviation %.1f ms, always cold %.1f ms (a handshake +%.1f)", probes.name, ms(probes.deviation()), ms(cold.deviation()), ms(delta))
 				}
 			}
-			// That the test sees a mix (where there is one: grpc-go's idle timer fires 1-2 times its
-			// timeout after the last RPC, and gRPC's probes kept a minute were nearly all warm).
+			// That the test sees a mix where there is one (15-85% cold; kept a minute here: XHTTP ~77%,
+			// gRPC ~38%, Hysteria ~20%, its cleaner ticking once a second over the 600 ms): its deviation
+			// over the probes' by a tenth of a handshake at least, as the probes may be over the always
+			// cold ones'. 5 independent samples 15% cold deviate by 0.24 of a handshake on average, 20%
+			// by 0.29, and the probes' own deviation grows on a busy machine (-race: up to 13 ms): a fifth
+			// of a handshake over the probes' left Hysteria a few ms and failed now and then.
 			probes := groups[0]
-			if share := mix.coldShare(); share > 0.15 && share < 0.85 && mix.deviation() < probes.deviation()+delta/5 {
+			if share := mix.coldShare(); share > 0.15 && share < 0.85 && mix.deviation() < probes.deviation()+delta/10 {
 				t.Errorf("kept a minute: deviation %.1f ms, the probes' %.1f: the mix doesn't show (a handshake +%.1f)", ms(mix.deviation()), ms(probes.deviation()), ms(delta))
 			}
 		})
@@ -230,7 +237,11 @@ func (g *titanGroup) deviation() time.Duration {
 	return titanMean(g.deviations)
 }
 
-// titanTimedEcho is one probe: a flow through ss on ctx, from its dial to its echo, then closed.
+// titanTimedEcho is one probe: a flow through ss on ctx, from its dial to its echo, then closed,
+// and its context with it, as the TUN's flows end (proxy/tun cancels a flow's as its handler
+// returns). A gRPC RPC ends only then (or once its stream is read to EOF), and a ClientConn's idle
+// timer counts from the end of its last RPC: with the flow closed alone the RPCs never ended, and
+// the pooled ClientConns never went idle.
 func titanTimedEcho(ctx context.Context, dial func(context.Context, net.Destination, *internet.MemoryStreamConfig) (stat.Connection, error),
 	dest net.Destination, ss *internet.MemoryStreamConfig) (time.Duration, error) {
 	type result struct {
@@ -239,6 +250,8 @@ func titanTimedEcho(ctx context.Context, dial func(context.Context, net.Destinat
 	}
 	done := make(chan result, 1)
 	go func() {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
 		start := time.Now()
 		conn, err := dial(ctx, dest, ss)
 		if err != nil {

@@ -65,7 +65,10 @@ type titanProbeKey struct{}
 
 // TitanProbeContext marks ctx as the observatory's probes' (the burst observatory's ping client:
 // burst_mem.go). The mark goes with each probe's flow through the outbound to its transport's
-// dial; a flow through Xray's mux (mux.cool) loses it and goes in the pool, as the tunnel's do.
+// dial, and on through a dialerProxy hop to the hop's transport (XHTTP's and Hysteria's dials
+// keep the flow's values; gRPC's copies it into grpc-go's dial context): the hop gives the probe
+// a connection of its own too. A flow through Xray's mux (mux.cool) loses it and goes in the
+// pool, as the tunnel's do.
 func TitanProbeContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, titanProbeKey{}, true)
 }

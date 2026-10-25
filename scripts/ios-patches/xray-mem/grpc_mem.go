@@ -46,7 +46,9 @@ var titanProbeConns = map[*grpc.ClientConn]struct{}{}
 // closes it here. So every probe is cold, as TCP REALITY's always were (it pools nothing), on a
 // subject that carries the tunnel's flows too, and the pool's ClientConns carry only those flows'
 // RPCs. With the probes in the pool a subject's were a random mix of warm ones and cold ones
-// (internet.TitanIdleAfter), and leastLoad ranks by their deviation.
+// (internet.TitanIdleAfter), and leastLoad ranks by their deviation. Its ClientConn dials with
+// the probe's mark copied into grpc-go's dial context (dial.go), so a dialerProxy hop's
+// transport gives the probe a connection of its own as well, not one of its pool's.
 func titanDone(ctx context.Context, conn *grpc.ClientConn) func() {
 	if !internet.TitanProbe(ctx) {
 		return func() {}
