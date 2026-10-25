@@ -167,14 +167,18 @@ var titanProbes = struct {
 	m map[*client]struct{}
 }{m: map[*client]struct{}{}}
 
-// titanProbeDial is Dial for a TCP flow of the observatory's probes (internet.TitanProbe): they
-// don't use the pool. Each gets a client of its own, with its own QUIC connection (handshake and
-// auth), out of the pool (no keep-alive, no cleaner), and closes it as the flow ends. So every
-// probe is cold, as TCP REALITY's always were (it pools nothing), on a subject that carries the
-// tunnel's flows too, and the pool's connections carry only those flows. With the probes in the
-// pool a subject's were a random mix of warm ones and cold ones (internet.TitanIdleAfter), and
-// leastLoad ranks by their deviation.
-func titanProbeDial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig, tlsConfig *tls.Config) (stat.Connection, error) {
+// titanProbeDial is Dial for a flow of the observatory's probes (internet.TitanProbe): they don't
+// use the pool. Each gets a client of its own, with its own QUIC connection (handshake and auth),
+// out of the pool (no keep-alive, no cleaner), and closes it as the flow ends. So every probe is
+// cold, as TCP REALITY's always were (it pools nothing), on a subject that carries the tunnel's
+// flows too, and the pool's connections carry only those flows. With the probes in the pool a
+// subject's were a random mix of warm ones and cold ones (internet.TitanIdleAfter), and leastLoad
+// ranks by their deviation. A probe's flow is TCP (its HTTP request); a UDP one (datagram) is its
+// leg through this outbound as a dialerProxy hop of a subject on UDP (Hysteria, XHTTP/3): a UDP
+// session on the probe's own client, which closes with it (the subject's close ends the session:
+// its packet conn is the hop's flow). In the pool, the hop's connection stayed warm for the next
+// probe TitanIdleAfter.
+func titanProbeDial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig, tlsConfig *tls.Config, datagram bool) (stat.Connection, error) {
 	c := &client{
 		dest:         dest,
 		config:       streamSettings.ProtocolSettings.(*Config),
@@ -186,6 +190,22 @@ func titanProbeDial(ctx context.Context, dest net.Destination, streamSettings *i
 	titanProbes.Lock()
 	titanProbes.m[c] = struct{}{}
 	titanProbes.Unlock()
+	if datagram {
+		conn, err := c.udp(ctx)
+		if err != nil {
+			c.titanProbeClose()
+			return nil, err
+		}
+		// proxy/hysteria takes the session as an *InterConn: its close is what changes. Set before
+		// anything has it; only InterConn.Close calls it.
+		s := conn.(*InterConn)
+		end, once := s.close, sync.Once{}
+		s.close = func() {
+			end()
+			once.Do(c.titanProbeClose)
+		}
+		return s, nil
+	}
 	conn, err := c.tcp(ctx)
 	if err != nil {
 		c.titanProbeClose()

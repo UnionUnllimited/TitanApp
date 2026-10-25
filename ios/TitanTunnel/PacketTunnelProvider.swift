@@ -441,12 +441,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private static let mib: Int64 = 1 << 20
     /// Above it the checks and the marker come every second.
     private static let busy = 35 * mib
-    /// The restart line, this far under the limit (44 MiB of 50): the kill is still a new QUIC
-    /// stream's 6 MiB away (what the handshake gives it, before quic-go's 2 s stall check). Go's
-    /// limit is tied to it (titan memory.go watchdogMargin). Before, 5 MiB under it, but the line
-    /// that counted was 10 under (40 of 50): iOS's own warning at 80% of the limit, which this
-    /// source gets as critical pressure (below), was taken for "over".
-    private static let lineUnder = 6 * mib
+    /// The restart line, this far under the limit (42 MiB of 50). One new QUIC stream that stalls
+    /// (Hysteria, XHTTP/3: a paused player) holds the 6 MiB of data its handshake gave, +7.5 MiB of
+    /// heap (xray-mem internet_mem.go), as long as it stalls: quic-go cancels stalled streams only
+    /// past half of the connection's window (8 MiB), never one alone. From just under the line it
+    /// leaves the footprint under the kill (49.5); over the line a restart comes. 6 under before
+    /// (44): from there the same stream was a kill unless the restart at 47 got in first (2.4 MiB
+    /// of data, one 200 ms check at 100 Mbit/s). While a restart is held back (too soon, wouldn't
+    /// help) the footprint may stay over the line with Go at its ceiling (43): only the restart at
+    /// 47 is in the way then. Go's limit is tied to it (titan memory.go watchdogMargin). 5 under
+    /// before that, but the line that counted was 10 under (40 of 50): iOS's own warning at 80% of
+    /// the limit, which this source gets as critical pressure (below), was taken for "over".
+    private static let lineUnder = 8 * mib
     /// This close to the limit (47 MiB of 50) a restart comes at once and 10 s after the last.
     private static let rightAtUnder = 3 * mib
     /// This close (40 MiB of 50, where iOS's own warning comes) the checks come every 200 ms.
@@ -467,10 +473,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// under that long did, and they come 30 s apart again.
     private static let holdFor: TimeInterval = 180
     private static let maxRestartEvery: TimeInterval = 240
-    /// A restart's "after" is read once the new Xray's first observatory check is done (its
-    /// probes add connections to the pools till then: 7-10 s with 85 outbounds), `afterDelay`
-    /// at the least and `afterMax` at the most (before a memory restart may come again); the
-    /// least of `afterReadings` a second apart (apps reconnecting after it).
+    /// A restart's "after" is read once the new Xray's first observatory check is done (till then
+    /// its probes' own connections are up, 12 at a time, each closed as its probe ends: 7-10 s
+    /// with 85 outbounds), `afterDelay` at the least and `afterMax` at the most (before a memory
+    /// restart may come again); the least of `afterReadings` a second apart (apps reconnecting
+    /// after it).
     private static let afterDelay: TimeInterval = 5
     private static let afterMax: TimeInterval = 25
     private static let afterReadings = 3
@@ -505,7 +512,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     /// Every 10 s, every second above 35 MiB, every 200 ms within 10 MiB of the limit. Within
-    /// 6 MiB (44 of 50), when a restart may come and would free enough: freeMemory (once in
+    /// 8 MiB (42 of 50), when a restart may come and would free enough: freeMemory (once in
     /// 10 s at most), and if it is still over a moment later, the restart; within 3 MiB the
     /// restart at once (it frees Go's memory itself). A restart held back (too soon, wouldn't
     /// help, no network) is decided again on every check, without freeing again.
@@ -604,7 +611,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let self, !self.stopped, self.running != nil else { return }
             self.pendingAfter = nil
             let waited = Self.clock - started
-            // Its first check still probing: the pools aren't all there yet.
+            // Its first check still probing: its probes' connections are still up.
             if low == nil, waited < Self.afterMax, Self.observatoryChecking() {
                 self.readAfter(started: started, before: before, line: line, low: nil, readings: 0, in: 1)
                 return
@@ -625,8 +632,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     /// Go's soft limit for the extension's limit and what isn't Go's now (titan setMemoryLimit:
-    /// the limit less the rest (at least 4 MiB) and 9 MiB, raised to what Go needs up to 2 MiB
-    /// over the watchdog's line (44 of 50) for the rest as measured (at least 1 MiB): Go at it
+    /// the limit less the rest (at least 4 MiB) and 11 MiB, raised to what Go needs up to 2 MiB
+    /// over the watchdog's line (42 of 50) for the rest as measured (at least 1 MiB): Go at it
     /// puts the footprint over the line, the watchdog decides, not a GC running nonstop under
     /// it; to that while the GC is busy, 24 MiB at least). After each start, since libXray's
     /// first runXray sets its own 30 MiB, then every 10 s and on memory pressure.

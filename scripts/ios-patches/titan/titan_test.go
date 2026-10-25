@@ -134,7 +134,7 @@ func TestMemStats(t *testing.T) {
 	}
 }
 
-// The soft limit: the extension's limit less the rest (at least 4 MiB) and 9 MiB, at least
+// The soft limit: the extension's limit less the rest (at least 4 MiB) and 11 MiB, at least
 // 24 MiB, while Go needs no more (this test's heap is small); memStats reports it.
 func TestMemoryLimit(t *testing.T) {
 	defer debug.SetMemoryLimit(math.MaxInt64)
@@ -145,9 +145,9 @@ func TestMemoryLimit(t *testing.T) {
 		limit, rest, want int64
 		exact             bool
 	}{
-		{50 << 20, 2 << 20, 37 << 20, true},   // the rest under 4 MiB counts as 4
-		{50 << 20, 10 << 20, 31 << 20, false}, // the rest read as it is: Go's moves meanwhile
-		{50 << 20, 16 << 20, 25 << 20, false},
+		{50 << 20, 2 << 20, 35 << 20, true},   // the rest under 4 MiB counts as 4
+		{50 << 20, 10 << 20, 29 << 20, false}, // the rest read as it is: Go's moves meanwhile
+		{50 << 20, 14 << 20, 25 << 20, false},
 		{30 << 20, 10 << 20, 24 << 20, true}, // never under 24 MiB
 	} {
 		r := call(t, map[string]any{"method": "setMemoryLimit", "limit": c.limit, "footprint": goRetained + c.rest})
@@ -168,7 +168,7 @@ func TestMemoryLimit(t *testing.T) {
 }
 
 // What Go needs raises the limit up to 2 MiB over the watchdog's threshold (limit − the
-// rest − 4 MiB: Go at it puts the footprint over the threshold), a busy GC to it; never
+// rest − 6 MiB: Go at it puts the footprint over the threshold), a busy GC to it; never
 // under 24 MiB. The rest as the phone's journal has it (2.2-3.1 MiB) counts as 4 for "fit",
 // as it is for the ceiling (1 MiB at least).
 func TestGoLimitFor(t *testing.T) {
@@ -184,17 +184,17 @@ func TestGoLimitFor(t *testing.T) {
 		want, need        int64
 		why               string
 	}{
-		{50, 18, 3, false, 37, 28, "fit"},  // needs 18 + 7 + 3
-		{50, 26, 3, false, 37, 36, "fit"},  // the field's Go after a restart: 30-35 MiB
-		{50, 30, 3, false, 40, 40, "need"}, // over 37: raised to it
-		{50, 29, 6, false, 39, 39, "need"}, // over the watchdog's line (50 − 6 − 6)
-		{50, 30, 8, false, 38, 40, "need"}, // up to 50 − 8 − 4 at most
-		{50, 40, 2, false, 44, 51, "need"}, // up to 50 − 2 − 4: the rest as it is, not 4
-		{50, 18, 3, true, 43, 28, "gc"},    // the GC busy: to that
-		{50, 18, 2, true, 44, 28, "gc"},
-		{50, 18, 0, true, 45, 28, "gc"},    // a rest read as none counts as 1 MiB
-		{50, 18, 10, false, 31, 28, "fit"}, // less as the rest grows
-		{50, 26, 12, true, 34, 36, "gc"},
+		{50, 18, 3, false, 35, 28, "fit"},  // needs 18 + 7 + 3
+		{50, 24, 3, false, 35, 34, "fit"},  // the field's Go after a restart: 30-35 MiB
+		{50, 30, 3, false, 40, 40, "need"}, // over 35: raised to it
+		{50, 27, 6, false, 37, 37, "need"}, // over the watchdog's line (50 − 6 − 8)
+		{50, 30, 8, false, 36, 40, "need"}, // up to 50 − 8 − 6 at most
+		{50, 40, 2, false, 42, 51, "need"}, // up to 50 − 2 − 6: the rest as it is, not 4
+		{50, 18, 3, true, 41, 28, "gc"},    // the GC busy: to that
+		{50, 18, 2, true, 42, 28, "gc"},
+		{50, 18, 0, true, 43, 28, "gc"},    // a rest read as none counts as 1 MiB
+		{50, 18, 10, false, 29, 28, "fit"}, // less as the rest grows
+		{50, 26, 12, true, 32, 36, "gc"},
 		{30, 18, 10, false, 24, 28, "min"},
 		{30, 18, 10, true, 24, 28, "min"},
 	} {

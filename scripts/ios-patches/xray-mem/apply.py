@@ -20,18 +20,22 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
   no stream and no UDP session (never before: the panel's keep-alive). Only the balancers'
   picks carry traffic; the other subjects' connections were kept for the next probe. The
   observatory's probes (their context marked, internet.TitanProbe) don't use the pools: each
-  gets a connection of its own (an XHTTP client, a gRPC ClientConn, a Hysteria client), closed
-  as it ends, so every probe is cold, as TCP REALITY's always were, and leastLoad's deviations
-  aren't a mix of warm and cold probes. gRPC
-  dials on grpc-go's context, not on that of the proxied connection that made the ClientConn
-  (once that one ended, every later dial failed at once), with the flow's values copied into
-  it, a probe's mark too (a dialerProxy hop's transport gives the probe its own as well). A
-  closed XHTTP connection lets go of its REALITY connection (Go's HTTP/2 client keeps itself
-  until its keep-alive timer fires), and REALITY drops uTLS's key share private keys after the
-  handshake (ML-KEM-768, ~8 KiB).
+  gets a connection of its own (an XHTTP client with no keep-alive, a gRPC ClientConn, a
+  Hysteria client, for a stream or a UDP session), closed as it ends, so every probe is cold, as
+  TCP REALITY's always were, and leastLoad's deviations aren't a mix of warm and cold probes.
+  gRPC dials on grpc-go's context, not on that of the proxied connection that made the
+  ClientConn (once that one ended, every later dial failed at once), with the flow's values
+  copied into it, a probe's mark too (a dialerProxy hop's transport gives the probe its own as
+  well). A closed XHTTP connection lets go of its REALITY connection (Go's HTTP/2 client keeps
+  itself until its keep-alive timer fires), and REALITY drops uTLS's key share private keys
+  after the handshake (ML-KEM-768, ~8 KiB).
+  A QUIC transport (Hysteria, XHTTP/3) closes its packet conn before itself: over a dialerProxy
+  hop's (it ignores read deadlines) quic.Transport.Close waited for the hop's flow to end
+  (Hysteria's under the client's lock). A failed XHTTP/3 dial closes its socket and transport.
   XHTTP's HTTP/2 dials one connection at a time for each XMUX client, as x/net's own pool did
   (Go 1.27's net/http pool dialed one for every request waiting: a burst of flows on a cold
-  client made a handshake each); the requests waiting behind a failed dial fail with it.
+  client made a handshake each), each dial bounded (20 s); the requests waiting behind two dials
+  that failed slowly fail with them.
 - Receive windows: XHTTP's HTTP/2 1 MiB per stream / 16 MiB per connection (Go: 4 MiB / 1 GiB),
   16 KiB frames both ways (the server's 1 MiB frame size gave each stream-up upload a 512 KiB
   buffer); gRPC fixed 1 / 4 MiB (the BDP estimate grows to 16 MiB); QUIC 1 / 16 MiB (with the
@@ -174,11 +178,23 @@ changes = {
         ("\t\t\tquicConfig.MaxIncomingStreams = -1\n\t\t}\n",
          "\t\t\tquicConfig.MaxIncomingStreams = -1\n\t\t}\n"
          "\t\t// Titan patch: smaller receive windows.\n\t\tinternet.TitanQUICWindows(quicConfig)\n"),
+        # quic.Transport.Close sets a read deadline on the packet conn and waits for its reader:
+        # a dialerProxy hop's (cnc through FakePacketConn) ignores deadlines, so Close waited for
+        # the hop's flow to end (connIdle) and the socket was closed only after. The packet conn
+        # first: the connection has sent its CONNECTION_CLOSE by then. A failed dial left both
+        # (the socket and the transport's reader) for good.
+        ("\t\t\t\tconn, err := tr.DialEarly(ctx, udpAddr, tlsCfg, cfg)\n\t\t\t\tif err != nil {\n\t\t\t\t\treturn nil, err\n\t\t\t\t}\n"
+         "\t\t\t\tcontext.AfterFunc(conn.Context(), func() { tr.Close(); pktConn.Close() })\n",
+         "\t\t\t\tconn, err := tr.DialEarly(ctx, udpAddr, tlsCfg, cfg)\n\t\t\t\tif err != nil {\n"
+         "\t\t\t\t\t// Titan patch: the socket and the transport go with a failed dial.\n"
+         "\t\t\t\t\tpktConn.Close()\n\t\t\t\t\ttr.Close()\n\t\t\t\t\treturn nil, err\n\t\t\t\t}\n"
+         "\t\t\t\t// Titan patch: the packet conn first (a dialerProxy hop's ignores tr.Close's deadline).\n"
+         "\t\t\t\tcontext.AfterFunc(conn.Context(), func() { pktConn.Close(); tr.Close() })\n"),
         # The observatory's probes don't use the pool: a client of their own each, closed as the
         # probe ends (titan_mem.go).
         ("\tglobalDialerAccess.Lock()\n\tdefer globalDialerAccess.Unlock()\n\n\tif globalDialerMap == nil {\n",
          "\t// Titan patch: a probe's flow gets a client of its own, closed as it ends (titan_mem.go).\n"
-         "\tif internet.TitanProbe(ctx) {\n\t\treturn createHTTPClient(dest, streamSettings), nil\n\t}\n\n"
+         "\tif internet.TitanProbe(ctx) {\n\t\treturn titanProbeClient(dest, streamSettings), nil\n\t}\n\n"
          "\tglobalDialerAccess.Lock()\n\tdefer globalDialerAccess.Unlock()\n\n\tif globalDialerMap == nil {\n"),
         ("\tvar closed atomic.Int32\n\n\treader, writer := io.Pipe()\n",
          "\t// Titan patch: a probe's clients close with it (titan_mem.go).\n"
@@ -241,6 +257,18 @@ changes = {
          "\treturn encoding.NewHunkConn(grpcService, titanEnd, nil), nil // Titan patch: titanEnd\n"),
     ],
     "transport/internet/hysteria/dialer.go": [
+        # The packet conn before the transport (as XHTTP/3's above): with a dialerProxy hop
+        # tr.Close waited for the hop's flow to end, under the client's lock (a probe's close, the
+        # cleaner's idle close: the subject's next flows and every client's clean waited).
+        ("\tc.conn.CloseWithError(closeErrCodeOK, \"\")\n\tc.tr.Close()\n\tc.pktConn.Close()\n",
+         "\tc.conn.CloseWithError(closeErrCodeOK, \"\")\n"
+         "\t// Titan patch: the packet conn first (a dialerProxy hop's ignores tr.Close's deadline).\n"
+         "\tc.pktConn.Close()\n\tc.tr.Close()\n"),
+        ("\t\t_ = tr.Close()\n\t\t_ = pktConn.Close()\n\t\treturn err\n",
+         "\t\t_ = pktConn.Close() // Titan patch: first, as in close\n\t\t_ = tr.Close()\n\t\treturn err\n"),
+        ("\t\t_ = tr.Close()\n\t\t_ = pktConn.Close()\n\t\treturn errors.New(\"auth failed code \", resp.StatusCode)\n",
+         "\t\t_ = pktConn.Close() // Titan patch: first, as in close\n\t\t_ = tr.Close()\n"
+         "\t\treturn errors.New(\"auth failed code \", resp.StatusCode)\n"),
         ("\tif quicParams.MaxIdleTimeout == 0 {\n\t\tquicConfig.MaxIdleTimeout = 30 * time.Second\n\t}\n",
          "\tif quicParams.MaxIdleTimeout == 0 {\n\t\tquicConfig.MaxIdleTimeout = 30 * time.Second\n\t}\n"
          "\t// Titan patch: smaller receive windows.\n\tinternet.TitanQUICWindows(quicConfig)\n"),
@@ -267,10 +295,11 @@ changes = {
          "\terr := c.dial(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
          "\treturn c.udpSM.udp()\n"),
         # The observatory's probes don't use the pool: a client (a QUIC connection) of their own
-        # each, closed as the probe ends (titan_mem.go).
+        # each, closed as the probe ends (titan_mem.go). A UDP session too: a probe's UDP leg
+        # through a Hysteria dialerProxy hop (a Hysteria or XHTTP/3 subject's).
         ("\tmanager.RLock()\n\tc := manager.m[dialerConf{dest, streamSettings}]\n\tmanager.RUnlock()\n",
          "\t// Titan patch: a probe's flow gets a client of its own, closed as it ends (titan_mem.go).\n"
-         "\tif !datagram && internet.TitanProbe(ctx) {\n\t\treturn titanProbeDial(ctx, dest, streamSettings, tlsConfig)\n\t}\n\n"
+         "\tif internet.TitanProbe(ctx) {\n\t\treturn titanProbeDial(ctx, dest, streamSettings, tlsConfig, datagram)\n\t}\n\n"
          "\tmanager.RLock()\n\tc := manager.m[dialerConf{dest, streamSettings}]\n\tmanager.RUnlock()\n"),
         ("\tc.Lock()\n\tif c.status() == StatusInactive {\n\t\tc.close()\n\t}\n\tc.Unlock()\n",
          "\tc.Lock()\n\tif c.status() == StatusInactive {\n\t\tc.close()\n"

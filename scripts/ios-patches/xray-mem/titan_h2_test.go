@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"runtime"
 	"runtime/metrics"
+	"runtime/pprof"
 	"slices"
 	"strings"
 	"sync"
@@ -587,13 +588,18 @@ func titanLiveHeap() int64 {
 // meet), so between rounds none is open, nothing is pooled and the live heap comes back to the
 // same level round after round. Before, the probes kept their connections in the pool as the
 // tunnel's flows do (300 s, then a minute: the same flows as a user's here, with an hour), and
-// XMUX opened a new one for each of the next probes up to its 3.
+// XMUX opened a new one for each of the next probes up to its 3. The probes' subjects have the
+// panel's keep-alive (none set: Chrome's 45 s): a probe's own client has none, or each closed one
+// stayed in the heap for it (+28 KiB a probe, ~+560 a round).
 func TestTitanH2IdleProbes(t *testing.T) {
 	defer func(d, r time.Duration) { internet.TitanIdleAfter, titanRetireAgain = d, r }(internet.TitanIdleAfter, titanRetireAgain)
 	internet.TitanIdleAfter = time.Hour
 	titanRetireAgain = 300 * time.Millisecond
 	const n, rounds = 20, 12
 	dest, subjects := titanXHTTP(t, 2*n)
+	for _, ss := range subjects[:n] {
+		ss.ProtocolSettings.(*Config).Xmux.HKeepAlivePeriod = 0
+	}
 	run := func(subjects []*internet.MemoryStreamConfig, probe bool) {
 		var wg sync.WaitGroup
 		slots := make(chan struct{}, 4) // the observatory's probes at once
@@ -642,7 +648,8 @@ func TestTitanH2IdleProbes(t *testing.T) {
 		before := titanH2Dials.Load()
 		run(subjects[:n], true)
 		busy, dials := titanH2Open(nil), titanH2Dials.Load()-before
-		// The retired clients' second look, then the keep-alive timer of the closed connections (1 s).
+		// The retired clients' second look, and a moment (the probes' clients have no keep-alive
+		// timer to wait for).
 		time.Sleep(titanRetireAgain + 1500*time.Millisecond)
 		if open := titanH2Open(nil); open != 0 {
 			t.Fatalf("round %d: %d connections open %v after the probes", r, open, titanRetireAgain+1500*time.Millisecond)
@@ -896,11 +903,16 @@ func TestTitanH2RetiredOpen(t *testing.T) {
 // One dial at a time on a transport (MaxConnsPerHost 1): requests that come together on a cold
 // transport, at first and after its connection closed idle, share one dial (net/http dialed one
 // for each and closed all but the first up: 12 handshakes for 12); a request a full connection
-// can't take (the server's MAX_CONCURRENT_STREAMS) gets a second connection at once; the
-// requests that waited behind a dial that failed fail with it, not one dial after another.
+// can't take (the server's MAX_CONCURRENT_STREAMS) gets a second connection at once. A dial that
+// fails quickly (a reset) fails its own request only: the next dials and serves the rest (with
+// each failure failing the next dials, all 8 failed). A handshake that hangs ends at the dial's
+// bound (it held them all for good), and the next dial serves the rest. A server whose dials
+// fail slowly (no answer: the connect timeout, the bound) fails the requests behind two of them,
+// not one dial after another.
 func TestTitanH2OneDial(t *testing.T) {
-	defer func(d time.Duration) { titanDialFailFor = d }(titanDialFailFor)
+	defer func(f, s, d time.Duration) { titanDialFailFor, titanDialSlow, titanDialTimeout = f, s, d }(titanDialFailFor, titanDialSlow, titanDialTimeout)
 	titanDialFailFor = 500 * time.Millisecond
+	titanDialTimeout = 400 * time.Millisecond
 	release := make(chan struct{})
 	serve := func(streams uint32) string {
 		ln, err := gonet.Listen("tcp", "127.0.0.1:0")
@@ -925,13 +937,30 @@ func TestTitanH2OneDial(t *testing.T) {
 		}()
 		return ln.Addr().String()
 	}
-	var dials atomic.Int32
-	var fail atomic.Bool
+	// What the dials do: all work; all fail (after the handshake's 100 ms); the burst's first one
+	// fails; the first one's handshake hangs (until its context ends); all hang.
+	const (
+		works = iota
+		failAll
+		failFirst
+		hangFirst
+		hangAll
+	)
+	var dials, bounded atomic.Int32
+	var mode atomic.Int32
 	client := func(addr string, ss *internet.MemoryStreamConfig) *http.Client {
 		dial := func(ctx context.Context) (net.Conn, error) {
-			dials.Add(1)
+			n := dials.Add(1)
+			if _, ok := ctx.Deadline(); ok {
+				bounded.Add(1)
+			}
+			m := mode.Load()
+			if m == hangAll || m == hangFirst && n == 1 {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
 			time.Sleep(100 * time.Millisecond) // the handshake: the others wait meanwhile
-			if fail.Load() {
+			if m == failAll || m == failFirst && n == 1 {
 				return nil, errors.New("titan: no answer")
 			}
 			return gonet.Dial("tcp", addr)
@@ -943,6 +972,7 @@ func TestTitanH2OneDial(t *testing.T) {
 	defer c.CloseIdleConnections()
 	burst := func(n int) (int32, int32, time.Duration) {
 		dials.Store(0)
+		bounded.Store(0)
 		var failed atomic.Int32
 		var wg sync.WaitGroup
 		start := time.Now()
@@ -974,24 +1004,43 @@ func TestTitanH2OneDial(t *testing.T) {
 	for _, when := range []string{"cold", "after the idle close", "after the idle close again"} {
 		d, failed, took := burst(12)
 		t.Logf("%s: 12 requests at once, %d dials, %d failed, %v", when, d, failed, took.Round(time.Millisecond))
-		if d != 1 || failed != 0 {
-			t.Fatalf("%s: 12 requests at once: %d dials, %d failed", when, d, failed)
+		if d != 1 || failed != 0 || bounded.Load() != d {
+			t.Fatalf("%s: 12 requests at once: %d dials (%d with a deadline), %d failed", when, d, bounded.Load(), failed)
 		}
 		idle()
 	}
 
-	fail.Store(true)
-	d, failed, took := burst(8)
-	t.Logf("dial failing after 100 ms: 8 requests at once, %d dials, %d failed, %v", d, failed, took.Round(time.Millisecond))
-	if d != 1 || failed != 8 {
-		t.Fatalf("dial failing: 8 requests at once: %d dials, %d failed (in %v)", d, failed, took)
+	for _, c := range []struct {
+		name         string
+		mode         int32
+		slow         time.Duration // titanDialSlow
+		dials, fails int32
+		within       time.Duration
+	}{
+		// Quick (100 ms, under titanDialSlow): its own request.
+		{"the first dial reset", failFirst, 2 * time.Second, 2, 1, time.Second},
+		// The bound (400 ms) is slow: the next dial still goes, and serves the rest.
+		{"the first handshake hanging", hangFirst, 50 * time.Millisecond, 2, 1, titanDialTimeout + time.Second},
+		// Slow failures (100 ms over a titanDialSlow of 50): two, then the rest fail with them.
+		{"every dial failing slowly", failAll, 50 * time.Millisecond, 2, 8, time.Second},
+		{"every handshake hanging", hangAll, 50 * time.Millisecond, 2, 8, 2*titanDialTimeout + time.Second},
+	} {
+		titanDialSlow = c.slow
+		mode.Store(c.mode)
+		d, failed, took := burst(8)
+		t.Logf("%s: 8 requests at once, %d dials, %d failed, %v", c.name, d, failed, took.Round(time.Millisecond))
+		if d != c.dials || failed != c.fails || took > c.within {
+			t.Fatalf("%s: 8 requests at once: %d dials, %d failed in %v (want %d, %d within %v)",
+				c.name, d, failed, took, c.dials, c.fails, c.within)
+		}
+		mode.Store(works)
+		idle()
+		time.Sleep(titanDialFailFor)
+		if d, failed, _ := burst(4); d != 1 || failed != 0 {
+			t.Fatalf("%s, %v after: %d dials, %d failed", c.name, titanDialFailFor, d, failed)
+		}
+		idle()
 	}
-	fail.Store(false)
-	time.Sleep(titanDialFailFor)
-	if d, failed, _ := burst(4); d != 1 || failed != 0 {
-		t.Fatalf("%v after the failed dial: %d dials, %d failed", titanDialFailFor, d, failed)
-	}
-	idle()
 
 	// A server that takes 2 streams a connection: 2 long ones open, a third request dials anew.
 	full := client(serve(2), ss)
@@ -1076,5 +1125,59 @@ func TestTitanH2BurstAfterIdle(t *testing.T) {
 				t.Fatalf("after the idle close: %d connections pooled, %d dials for %d XMUX clients", pooled, d, n)
 			}
 		}
+	}
+}
+
+// A failed XHTTP/3 dial (a server that doesn't answer: QUIC's 5 s handshake timeout) closes its
+// socket and its quic.Transport, a probe's too: each failed dial left both, the transport's reader
+// blocked on the socket, for good (two a flow: its download's dial and its upload's).
+func TestTitanQUICXHTTPFailedDial(t *testing.T) {
+	u, err := gonet.ListenUDP("udp", &gonet.UDPAddr{IP: gonet.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := net.UDPDestination(net.LocalHostIP, net.Port(u.LocalAddr().(*gonet.UDPAddr).Port))
+	u.Close() // nothing answers there
+	readers := func() int {
+		var b bytes.Buffer
+		pprof.Lookup("goroutine").WriteTo(&b, 2)
+		n := 0
+		for _, g := range strings.Split(b.String(), "\n\n") {
+			if strings.Contains(g, "quic-go.(*Transport).listen") {
+				n++
+			}
+		}
+		return n
+	}
+	before := readers()
+	var wg sync.WaitGroup
+	for _, probe := range []bool{false, true} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx := context.Background()
+			if probe {
+				ctx = internet.TitanProbeContext(ctx)
+			}
+			ss := &internet.MemoryStreamConfig{
+				ProtocolName:     "splithttp",
+				ProtocolSettings: &Config{Path: "titan", Mode: "stream-up"},
+				SecurityType:     "tls",
+				SecuritySettings: &tls.Config{ServerName: "localhost", NextProtocol: []string{"h3"}},
+			}
+			// Dial returns once its download's dial is done, failed or not.
+			if conn, err := Dial(ctx, dest, ss); err == nil {
+				conn.Write([]byte("titan"))
+				conn.Close()
+			}
+		}()
+	}
+	wg.Wait()
+	deadline := time.Now().Add(15 * time.Second) // the uploads' dials, a handshake timeout each
+	for readers() > before && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if n := readers() - before; n > 0 {
+		t.Fatalf("%d quic.Transport readers left by 2 flows' failed dials", n)
 	}
 }

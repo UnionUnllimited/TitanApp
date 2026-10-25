@@ -45,10 +45,8 @@ const (
 // without any) made a TCP + TLS / REALITY handshake per request, 12 for a page's 12, where one
 // for each of XMUX's clients serves them all (3). A request a full connection can't take
 // (MAX_CONCURRENT_STREAMS) still gets a new one at once: net/http takes the full one out of its
-// count. A failed dial fails the requests that waited behind it too (titanDialGate), as x/net's
-// did, instead of each dialing in turn (16 s each to a server that doesn't answer). As with
-// x/net's, a dial that hangs (REALITY has no handshake timeout) holds its XMUX client's new
-// requests until it ends; with a dial each, another could have served them meanwhile.
+// count. Each dial is bounded, and the requests waiting behind dials that failed slowly twice
+// fail with them, not each dialing in turn (titanDialGate).
 func titanH2Transport(dial func(context.Context) (net.Conn, error), streamSettings *internet.MemoryStreamConfig, idle, ping time.Duration) *http2.Transport {
 	t, err := http2.ConfigureTransports(&http.Transport{MaxConnsPerHost: 1, HTTP2: &http.HTTP2Config{
 		MaxReceiveBufferPerStream:     titanH2StreamWindow,
@@ -71,22 +69,40 @@ func titanH2Transport(dial func(context.Context) (net.Conn, error), streamSettin
 	return t
 }
 
-// titanDialGate is a transport's dials. With one dial at a time net/http gives a failed dial's
-// error to its own request only, then starts the next waiting request's dial, and so on: a
-// burst of flows to a server that doesn't answer failed one connect timeout after another, not
-// all after one. A dial within titanDialFailFor of a failed one fails with its error (net/http
-// starts the next as the failed one returns, so these are the requests that waited behind it),
-// and that one's XMUX client is closed by then (XHTTP marks it so when a download fails): new
-// flows dial on another.
+// titanDialGate is a transport's dials, one at a time (MaxConnsPerHost 1): every new request of
+// the XMUX client waits for the one under way.
+//
+// Each is bounded (titanDialTimeout). net/http dials on a context with no deadline, DialSystem
+// bounds the connect (16 s) but not the TLS / REALITY handshake after it, and the requests'
+// contexts don't end with their flows (OpenStream): a handshake that hung (a server that took
+// the connection and never answered, a REALITY server whose dest stalls) held its XMUX client's
+// new flows, about a third of the subject's, until a restart.
+//
+// With one dial at a time net/http gives a failed dial's error to its own request only, then
+// starts the next waiting request's dial. A quick failure (under titanDialSlow: a reset, an EOF,
+// a refused connect) is that connection's: the next one dials and serves all the rest, as when
+// each request dialed its own (while every failure failed the dials after it, one reset failed
+// every request waiting). A slow one (the connect timeout, the bound) may be the server's: the
+// next still dials (one connection that hangs: the next serves the rest), and if that fails
+// slowly too, the dials within titanDialFailFor fail with its error (the requests that waited
+// behind both), not one connect timeout after another (16 s each to a server that doesn't
+// answer: two now). Their XMUX client is closed by then (XHTTP marks it so when a download
+// fails): new flows dial on another.
 type titanDialGate struct {
-	mu  sync.Mutex
-	err error     // the last dial's, nil once one succeeds
-	at  time.Time // when it failed
+	mu   sync.Mutex
+	slow time.Time // the last dial that failed slowly, zero once one succeeds
+	err  error     // a second slow failure in a row: the next dials fail with it
+	at   time.Time // when it came
 }
 
-// titanDialFailFor: how long a failed dial fails the next ones (net/http starts them within
-// milliseconds).
-var titanDialFailFor = time.Second
+var (
+	// How long the gate fails the next dials (net/http starts them within milliseconds).
+	titanDialFailFor = time.Second
+	// A dial that failed sooner failed on that connection, not the server.
+	titanDialSlow = 2 * time.Second
+	// The most a dial (TCP + TLS / REALITY) takes: over DialSystem's 16 s connect timeout.
+	titanDialTimeout = 20 * time.Second
+)
 
 // titanH2Dials counts the dials made (each a TCP + TLS / REALITY handshake), for the tests.
 var titanH2Dials atomic.Int64
@@ -99,11 +115,24 @@ func (g *titanDialGate) dial(ctx context.Context, dial func(context.Context) (ne
 		return nil, err
 	}
 	titanH2Dials.Add(1)
-	conn, err := dial(ctx)
-	if err == nil || ctx.Err() == nil { // a dial cancelled (CloseIdleConnections) says nothing of the server
-		g.mu.Lock()
+	start := time.Now()
+	// Nothing outlives the dial on its context: the handshakes stop watching it as they return,
+	// a dialerProxy hop's flow runs on one without its cancel, TFO's connect too.
+	dctx, cancel := context.WithTimeout(ctx, titanDialTimeout)
+	defer cancel()
+	conn, err := dial(dctx)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	switch {
+	case err == nil:
+		g.slow, g.err = time.Time{}, nil
+	case ctx.Err() != nil, time.Since(start) < titanDialSlow:
+		// Cancelled (CloseIdleConnections: nothing of the server), or quick: its own request's.
+	case start.Sub(g.slow) < titanDialFailFor:
+		// Started as a slow failure returned (or alongside it) and failed slowly too.
 		g.err, g.at = err, time.Now()
-		g.mu.Unlock()
+	default:
+		g.slow = time.Now()
 	}
 	return conn, err
 }
@@ -272,6 +301,12 @@ var titanRetireAgain = 2 * time.Second
 // carries the tunnel's flows too, and the pools hold only connections those use. With the
 // probes in the pool a subject's were a random mix of warm ones and cold ones (internet.
 // TitanIdleAfter), and leastLoad ranks by their deviation.
+//
+// A probe's client has no keep-alive (titanProbeClient): a probe lasts seconds (the observatory's
+// timeout), a PING timer does nothing on it but keep it in the heap once closed (titanH2Conn:
+// Go 1.27's HTTP/2 client never stops it), ~29 KiB for Chrome's 45 s (the panel's default) after
+// every XHTTP probe, ~1-1.3 MiB after each start's first check with 30-45 XHTTP subjects, just as
+// the tunnel reads what the start left.
 func titanProbeEnd(ctx context.Context, clients ...DialerClient) func() {
 	if !internet.TitanProbe(ctx) {
 		return func() {}
@@ -288,6 +323,19 @@ func titanProbeEnd(ctx context.Context, clients ...DialerClient) func() {
 			c.Close()
 		}
 	}
+}
+
+// titanProbeClient is a probe's own client (getHTTPClient, titanProbeEnd): createHTTPClient's,
+// its HTTP/2 transport without the keep-alive (ReadIdleTimeout is read as each connection is
+// made: none is yet).
+func titanProbeClient(dest net.Destination, streamSettings *internet.MemoryStreamConfig) DialerClient {
+	c := createHTTPClient(dest, streamSettings)
+	if d, ok := c.(*DefaultDialerClient); ok {
+		if t, ok := d.client.Transport.(*http2.Transport); ok {
+			t.ReadIdleTimeout = 0
+		}
+	}
+	return c
 }
 
 func init() {

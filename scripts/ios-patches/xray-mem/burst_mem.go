@@ -44,7 +44,7 @@ func titanProbeContext(ctx context.Context) context.Context {
 var titanChecking atomic.Int32
 
 // TitanChecking is how many first checks are still running: while one does, the new
-// instance's probes are still adding connections to its pools (the tunnel reads what a start
+// instance's probes have their own connections up, 12 at a time (the tunnel reads what a start
 // left once it's done).
 func TitanChecking() int32 { return titanChecking.Load() }
 

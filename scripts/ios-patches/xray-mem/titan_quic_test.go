@@ -23,12 +23,16 @@ import (
 	"time"
 
 	"github.com/apernet/quic-go"
+	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/net/cnc"
 	"github.com/xtls/xray-core/common/protocol/tls/cert"
 	"github.com/xtls/xray-core/testing/servers/udp"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
+	"github.com/xtls/xray-core/transport/pipe"
 )
 
 // With Chrome parroting (as Hysteria dials) a stalled stream holds at most about the capped
@@ -985,5 +989,143 @@ func TestTitanQUICIdleUser(t *testing.T) {
 	wg.Wait()
 	if failed.Load() > 0 {
 		t.Fatalf("%d of 120 flows failed", failed.Load())
+	}
+}
+
+// A client that dials through a dialerProxy hop closes at once. Its packet conn is then the hop's
+// flow (internet.DialSystem's cnc, as a FakePacketConn), whose read deadline does nothing, and
+// quic.Transport.Close waits for its reader: only the packet conn's close ends that, and it came
+// after (upstream's order). A probe's close, and the cleaner's idle close under the client's lock
+// (the subject's next flows and every client's clean waiting on it), waited for the hop's flow
+// to end, its connIdle (300 s). Through a UDP socket too.
+func TestTitanQUICHopClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := titanQUICServer(t, ctx, make([]atomic.Int64, 1), nil)
+	for _, hop := range []bool{true, false} {
+		var pc gonet.PacketConn
+		var addr gonet.Addr = server
+		end := func() {}
+		if hop {
+			// The hop's flow: two pipes, their far ends relayed to the server, until end (its connIdle).
+			ur, uw := pipe.New(pipe.WithoutSizeLimit())
+			dr, dw := pipe.New(pipe.WithoutSizeLimit())
+			relay, err := gonet.DialUDP("udp", nil, server)
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() {
+				for {
+					mb, err := ur.ReadMultiBuffer()
+					if err != nil {
+						return
+					}
+					for _, b := range mb {
+						relay.Write(b.Bytes())
+					}
+					buf.ReleaseMulti(mb)
+				}
+			}()
+			go func() {
+				p := make([]byte, 2048)
+				for {
+					n, err := relay.Read(p)
+					if err != nil {
+						return
+					}
+					b := buf.New()
+					b.Write(p[:n])
+					if dw.WriteMultiBuffer(buf.MultiBuffer{b}) != nil {
+						return
+					}
+				}
+			}()
+			end = func() {
+				relay.Close()
+				dw.Close()
+				ur.Interrupt()
+			}
+			pc = &internet.FakePacketConn{Conn: cnc.NewConnection(cnc.ConnectionInputMulti(uw),
+				cnc.ConnectionOutputMultiUDP(dr), cnc.ConnectionOnClose(common.ChainedClosable{uw, dw}))}
+			addr = &gonet.UDPAddr{IP: gonet.IPv4zero}
+		} else {
+			u, err := gonet.ListenUDP("udp", &gonet.UDPAddr{IP: gonet.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pc = u
+		}
+		tr := &quic.Transport{Conn: pc, ConnectionIDGenerator: quic.ZeroLengthConnectionIDGenerator{}}
+		dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
+		conn, err := tr.Dial(dctx, addr, &gotls.Config{InsecureSkipVerify: true, NextProtos: []string{"titan"}}, &quic.Config{KeepAlivePeriod: time.Second})
+		dcancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &client{conn: conn, tr: tr, pktConn: pc}
+		closed := make(chan struct{})
+		start := time.Now()
+		go func() {
+			c.Lock()
+			c.close()
+			c.Unlock()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+			t.Logf("hop %v: closed in %v", hop, time.Since(start).Round(time.Microsecond))
+		case <-time.After(3 * time.Second):
+			end()
+			<-closed
+			t.Fatalf("hop %v: the close waited for the hop's flow to end (%v)", hop, time.Since(start))
+		}
+		end()
+	}
+}
+
+// A probe's UDP session (its leg through this outbound as a Hysteria subject's dialerProxy hop)
+// is on a client of its own, out of the pool, and closes it as it ends: in the pool the hop's
+// connection stayed warm for the next probe internet.TitanIdleAfter. A user's goes in the pool.
+func TestTitanQUICProbeSession(t *testing.T) {
+	internet.TitanCloseTransports()
+	dest, subjects := titanHysteria(t, 1)
+	ss := subjects[0]
+	probes := func() (n, live int) {
+		titanProbes.Lock()
+		defer titanProbes.Unlock()
+		for c := range titanProbes.m {
+			n++
+			c.Lock()
+			if c.conn != nil {
+				live++
+			}
+			c.Unlock()
+		}
+		return
+	}
+	for range 3 {
+		session, err := Dial(ContextWithDatagram(internet.TitanProbeContext(context.Background()), true), dest, ss)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := session.(*InterConn); !ok {
+			t.Fatalf("a probe's UDP session is %T", session)
+		}
+		if n, live := probes(); n != 1 || live != 1 || len(manager.titanClients()) != 0 {
+			t.Fatalf("a probe's session open: %d probe clients (%d live), %d pooled", n, live, len(manager.titanClients()))
+		}
+		session.Close()
+		session.Close() // the proxy's and the flow's: once is the client's
+		if n, _ := probes(); n != 0 || len(manager.titanClients()) != 0 {
+			t.Fatalf("a probe's session closed: %d probe clients left, %d pooled", n, len(manager.titanClients()))
+		}
+	}
+	session, err := Dial(ContextWithDatagram(context.Background(), true), dest, ss)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if n, _ := probes(); n != 0 || titanHyLive(ss) != 1 {
+		t.Fatalf("a user's session: %d probe clients, %d pooled live", n, titanHyLive(ss))
 	}
 }
