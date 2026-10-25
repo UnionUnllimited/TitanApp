@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"runtime"
 	"runtime/metrics"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -632,8 +633,14 @@ func TestTitanH2IdleProbes(t *testing.T) {
 	// Steady: the last rounds hold no more than the first ones (XMUX keeps up to 3 clients a
 	// subject, ~1 KiB each, once all 3 have been made: by the third round).
 	first, last := max(quiet[2], quiet[3], quiet[4]), max(quiet[rounds-3], quiet[rounds-2], quiet[rounds-1])
+	step := titanSteadyStep(quiet, 2)
+	t.Logf("live heap %+d KiB in rounds 2-4, %+d KiB in the last ones, %+d KiB a round from round 2 on (median)",
+		first>>10, last>>10, step>>10)
 	if last > first+256<<10 || last > keptHeap/4 {
 		t.Fatalf("live heap +%d KiB in rounds 2-4, +%d KiB in the last ones (kept idle: +%d)", first>>10, last>>10, keptHeap>>10)
+	}
+	if step > 32<<10 {
+		t.Fatalf("live heap +%d KiB a round from round 2 on (median)", step>>10)
 	}
 	globalDialerAccess.Lock()
 	for key, m := range globalDialerMap {
@@ -642,6 +649,19 @@ func TestTitanH2IdleProbes(t *testing.T) {
 		}
 	}
 	globalDialerAccess.Unlock()
+}
+
+// titanSteadyStep is the median change of the live heap from one probe round to the next, from
+// round from on: what each round keeps. Unlike the last rounds against the first ones, a level
+// that falls once meanwhile (what an earlier test left, freed late) moves it one step at most,
+// so it can't hide growth.
+func titanSteadyStep(quiet []int64, from int) int64 {
+	steps := make([]int64, 0, len(quiet))
+	for i := from + 1; i < len(quiet); i++ {
+		steps = append(steps, quiet[i]-quiet[i-1])
+	}
+	slices.Sort(steps)
+	return (steps[(len(steps)-1)/2] + steps[len(steps)/2]) / 2
 }
 
 // A proxied connection that sends nothing for many idle periods keeps its HTTP/2 connection (its
@@ -811,5 +831,191 @@ func TestTitanH2RetiredOpen(t *testing.T) {
 	case <-ended:
 	case <-time.After(titanRetireAgain + 2*time.Second):
 		t.Fatal("the retired client's connection is still open after its stream ended")
+	}
+}
+
+// One dial at a time on a transport (MaxConnsPerHost 1): requests that come together on a cold
+// transport, at first and after its connection closed idle, share one dial (net/http dialed one
+// for each and closed all but the first up: 12 handshakes for 12); a request a full connection
+// can't take (the server's MAX_CONCURRENT_STREAMS) gets a second connection at once; the
+// requests that waited behind a dial that failed fail with it, not one dial after another.
+func TestTitanH2OneDial(t *testing.T) {
+	defer func(d time.Duration) { titanDialFailFor = d }(titanDialFailFor)
+	titanDialFailFor = 500 * time.Millisecond
+	release := make(chan struct{})
+	serve := func(streams uint32) string {
+		ln, err := gonet.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go (&http2.Server{MaxConcurrentStreams: streams}).ServeConn(conn, &http2.ServeConnOpts{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+					if r.URL.Path == "/long" {
+						<-release
+					}
+				})})
+			}
+		}()
+		return ln.Addr().String()
+	}
+	var dials atomic.Int32
+	var fail atomic.Bool
+	client := func(addr string, ss *internet.MemoryStreamConfig) *http.Client {
+		dial := func(ctx context.Context) (net.Conn, error) {
+			dials.Add(1)
+			time.Sleep(100 * time.Millisecond) // the handshake: the others wait meanwhile
+			if fail.Load() {
+				return nil, errors.New("titan: no answer")
+			}
+			return gonet.Dial("tcp", addr)
+		}
+		return &http.Client{Transport: titanH2Transport(dial, ss, 200*time.Millisecond, 0)}
+	}
+	ss := &internet.MemoryStreamConfig{}
+	c := client(serve(0), ss)
+	defer c.CloseIdleConnections()
+	burst := func(n int) (int32, int32, time.Duration) {
+		dials.Store(0)
+		var failed atomic.Int32
+		var wg sync.WaitGroup
+		start := time.Now()
+		for range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				resp, err := c.Get("https://titan.test/")
+				if err != nil {
+					failed.Add(1)
+					return
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}()
+		}
+		wg.Wait()
+		return dials.Load(), failed.Load(), time.Since(start)
+	}
+	idle := func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for titanH2Open(ss) != 0 && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if n := titanH2Open(ss); n != 0 {
+			t.Fatalf("%d connections open 3 s after the last request", n)
+		}
+	}
+	for _, when := range []string{"cold", "after the idle close", "after the idle close again"} {
+		d, failed, took := burst(12)
+		t.Logf("%s: 12 requests at once, %d dials, %d failed, %v", when, d, failed, took.Round(time.Millisecond))
+		if d != 1 || failed != 0 {
+			t.Fatalf("%s: 12 requests at once: %d dials, %d failed", when, d, failed)
+		}
+		idle()
+	}
+
+	fail.Store(true)
+	d, failed, took := burst(8)
+	t.Logf("dial failing after 100 ms: 8 requests at once, %d dials, %d failed, %v", d, failed, took.Round(time.Millisecond))
+	if d != 1 || failed != 8 {
+		t.Fatalf("dial failing: 8 requests at once: %d dials, %d failed (in %v)", d, failed, took)
+	}
+	fail.Store(false)
+	time.Sleep(titanDialFailFor)
+	if d, failed, _ := burst(4); d != 1 || failed != 0 {
+		t.Fatalf("%v after the failed dial: %d dials, %d failed", titanDialFailFor, d, failed)
+	}
+	idle()
+
+	// A server that takes 2 streams a connection: 2 long ones open, a third request dials anew.
+	full := client(serve(2), ss)
+	defer full.CloseIdleConnections()
+	dials.Store(0)
+	for range 2 {
+		resp, err := full.Get("https://titan.test/long")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+	}
+	done := make(chan error, 1)
+	go func() {
+		resp, err := full.Get("https://titan.test/")
+		if err == nil {
+			resp.Body.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil || dials.Load() != 2 {
+			t.Fatalf("a third request on a full connection: %v, %d dials", err, dials.Load())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a third request on a full connection waits")
+	}
+	close(release)
+}
+
+// The balancer's pick after a pause: a page's flows at once on a subject whose connections closed
+// idle make one dial (a TCP + TLS / REALITY handshake) for each of XMUX's clients, 3, not one a
+// flow (12, 8, 12, 12 before); with its connections still pooled, none.
+func TestTitanH2BurstAfterIdle(t *testing.T) {
+	defer func(d time.Duration) { internet.TitanIdleAfter = d }(internet.TitanIdleAfter)
+	dest, subjects := titanXHTTP(t, 2)
+	clients := func(ss *internet.MemoryStreamConfig) int {
+		globalDialerAccess.Lock()
+		defer globalDialerAccess.Unlock()
+		for key, m := range globalDialerMap {
+			if key.MemoryStreamConfig == ss {
+				return len(m.xmuxClients)
+			}
+		}
+		return 0
+	}
+	for i, idle := range []time.Duration{time.Hour, 400 * time.Millisecond} {
+		internet.TitanIdleAfter = idle // the XMUX clients' transports take it as they are made
+		ss := subjects[i]
+		for range 6 { // the pick in use: its 3 XMUX clients made
+			if _, err := titanFlow(dest, ss, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		pause := 1500 * time.Millisecond // the closed connections' keep-alive timers (1 s)
+		if idle < time.Hour {
+			pause += idle // past the idle close
+		}
+		for r := range 3 {
+			time.Sleep(pause)
+			pooled := titanH2Open(ss)
+			before := titanH2Dials.Load()
+			var wg sync.WaitGroup
+			for range 12 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if _, err := titanFlow(dest, ss, false); err != nil {
+						t.Error(err)
+					}
+				}()
+			}
+			wg.Wait()
+			d, n := titanH2Dials.Load()-before, clients(ss)
+			t.Logf("idle close after %v, burst %d: %d connections pooled before, 12 flows at once: %d dials, %d XMUX clients",
+				idle, r, pooled, d, n)
+			if idle == time.Hour && (pooled != n || d != 0) {
+				t.Fatalf("pooled: %d connections for %d XMUX clients, %d dials", pooled, n, d)
+			}
+			if idle < time.Hour && (pooled != 0 || d < 1 || d > int64(n)) {
+				t.Fatalf("after the idle close: %d connections pooled, %d dials for %d XMUX clients", pooled, d, n)
+			}
+		}
 	}
 }

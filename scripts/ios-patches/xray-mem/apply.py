@@ -23,6 +23,9 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
   (once that one ended, every later dial failed at once). A closed XHTTP connection lets go of
   its REALITY connection (Go's HTTP/2 client keeps itself until its keep-alive timer fires),
   and REALITY drops uTLS's key share private keys after the handshake (ML-KEM-768, ~8 KiB).
+  XHTTP's HTTP/2 dials one connection at a time for each XMUX client, as x/net's own pool did
+  (Go 1.27's net/http pool dialed one for every request waiting: a burst of flows on a cold
+  client made a handshake each); the requests waiting behind a failed dial fail with it.
 - Receive windows: XHTTP's HTTP/2 1 MiB per stream / 16 MiB per connection (Go: 4 MiB / 1 GiB),
   16 KiB frames both ways (the server's 1 MiB frame size gave each stream-up upload a 512 KiB
   buffer); gRPC fixed 1 / 4 MiB (the BDP estimate grows to 16 MiB); QUIC 1 / 16 MiB (with the

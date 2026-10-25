@@ -10,6 +10,7 @@ import (
 	gonet "net"
 	"runtime"
 	"runtime/metrics"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -266,9 +267,28 @@ func TestTitanGRPCIdleProbes(t *testing.T) {
 		t.Logf("round %2d: %v right after the probes, all idle after; live heap %+5d KiB", r, busy, h>>10)
 	}
 	first, last := max(quiet[1], quiet[2], quiet[3]), max(quiet[rounds-3], quiet[rounds-2], quiet[rounds-1])
+	step := titanSteadyStep(quiet, 1)
+	t.Logf("live heap %+d KiB in rounds 1-3, %+d KiB in the last ones, %+d KiB a round from round 1 on (median)",
+		first>>10, last>>10, step>>10)
 	if last > first+128<<10 || last > keptHeap/2 {
 		t.Fatalf("live heap +%d KiB in rounds 1-3, +%d KiB in the last ones (kept: +%d)", first>>10, last>>10, keptHeap>>10)
 	}
+	if step > 24<<10 {
+		t.Fatalf("live heap +%d KiB a round from round 1 on (median)", step>>10)
+	}
+}
+
+// titanSteadyStep is the median change of the live heap from one probe round to the next, from
+// round from on: what each round keeps. Unlike the last rounds against the first ones, a level
+// that falls once meanwhile (what an earlier test left, freed late) moves it one step at most,
+// so it can't hide growth.
+func titanSteadyStep(quiet []int64, from int) int64 {
+	steps := make([]int64, 0, len(quiet))
+	for i := from + 1; i < len(quiet); i++ {
+		steps = append(steps, quiet[i]-quiet[i-1])
+	}
+	slices.Sort(steps)
+	return (steps[(len(steps)-1)/2] + steps[len(steps)/2]) / 2
 }
 
 // A proxied connection that sends nothing for many idle periods keeps its ClientConn READY (its

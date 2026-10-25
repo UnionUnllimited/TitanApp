@@ -16,6 +16,7 @@ import (
 	gonet "net"
 	"runtime"
 	"runtime/metrics"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -531,7 +532,11 @@ func TestTitanQUICCloseDialing(t *testing.T) {
 // then as much data as the client's windows let through, counted in sent: in 16 KiB writes; with
 // 0x80 set in the number in 200-byte ones 20 µs apart, each its own frame (a ticker); with 0x40
 // titanPattern in writes of titanSizes, 20 µs apart. stopped (if given) says the client
-// cancelled reading it (STOP_SENDING).
+// cancelled reading it (STOP_SENDING). Its connections close with the test: quic-go's
+// Listener.Close leaves them up, and one whose client's close a delay line dropped (closed by
+// its Cleanup within its delay) lived out its 30 s idle timeout with what it had in flight,
+// ~1.2 MiB in the heap the next tests measure (TestTitanQUICStalled's last case:
+// TestTitanQUICIdleProbes's rounds fell by that halfway, which hid any growth in them).
 func titanQUICServer(t *testing.T, ctx context.Context, sent []atomic.Int64, stopped []atomic.Bool) *gonet.UDPAddr {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour)},
@@ -545,13 +550,25 @@ func titanQUICServer(t *testing.T, ctx context.Context, sent []atomic.Int64, sto
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	var mu sync.Mutex
+	var conns []*quic.Conn
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range conns {
+			conn.CloseWithError(0, "")
+		}
+	})
 	go func() {
 		for {
 			conn, err := ln.Accept(ctx)
 			if err != nil {
 				return
 			}
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
 			go func() {
 				for {
 					str, err := conn.AcceptStream(ctx)
@@ -819,9 +836,28 @@ func TestTitanQUICIdleProbes(t *testing.T) {
 		t.Logf("round %d: %2d connections up right after the probes, none after; live heap %+5d KiB", r, busy, h>>10)
 	}
 	first, last := max(quiet[1], quiet[2]), max(quiet[rounds-2], quiet[rounds-1])
+	step := titanSteadyStep(quiet, 1)
+	t.Logf("live heap %+d KiB in rounds 1-2, %+d KiB in the last ones, %+d KiB a round from round 1 on (median)",
+		first>>10, last>>10, step>>10)
 	if last > first+128<<10 || last > keptHeap/2 {
 		t.Fatalf("live heap +%d KiB in rounds 1-2, +%d KiB in the last ones (kept: +%d)", first>>10, last>>10, keptHeap>>10)
 	}
+	if step > 24<<10 {
+		t.Fatalf("live heap +%d KiB a round from round 1 on (median)", step>>10)
+	}
+}
+
+// titanSteadyStep is the median change of the live heap from one probe round to the next, from
+// round from on: what each round keeps. Unlike the last rounds against the first ones, a level
+// that falls once meanwhile (what an earlier test left, freed late) moves it one step at most,
+// so it can't hide growth.
+func titanSteadyStep(quiet []int64, from int) int64 {
+	steps := make([]int64, 0, len(quiet))
+	for i := from + 1; i < len(quiet); i++ {
+		steps = append(steps, quiet[i]-quiet[i-1])
+	}
+	slices.Sort(steps)
+	return (steps[(len(steps)-1)/2] + steps[len(steps)/2]) / 2
 }
 
 // A proxied TCP connection, and a UDP session, that send nothing for many idle periods keep their

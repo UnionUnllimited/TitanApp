@@ -36,8 +36,20 @@ const (
 // REALITY connection for streamSettings. A connection closes idle after its last stream ends
 // (internet.TitanIdleAfter in the build); ping is the panel's keep-alive (PING after that long
 // with nothing read, Chrome's 45 s by default).
+//
+// One dial at a time (MaxConnsPerHost 1), as x/net's own pool had it: with Go 1.27 x/net's
+// HTTP/2 client is net/http's, whose pool dials for every request that waits for a connection,
+// gives all of them the first that is up and closes the others. So each burst of flows on a
+// cold XMUX client (a start, a restart, a network change, the first flows after a minute
+// without any) made a TCP + TLS / REALITY handshake per request, 12 for a page's 12, where one
+// for each of XMUX's clients serves them all (3). A request a full connection can't take
+// (MAX_CONCURRENT_STREAMS) still gets a new one at once: net/http takes the full one out of its
+// count. A failed dial fails the requests that waited behind it too (titanDialGate), as x/net's
+// did, instead of each dialing in turn (16 s each to a server that doesn't answer). As with
+// x/net's, a dial that hangs (REALITY has no handshake timeout) holds its XMUX client's new
+// requests until it ends; with a dial each, another could have served them meanwhile.
 func titanH2Transport(dial func(context.Context) (net.Conn, error), streamSettings *internet.MemoryStreamConfig, idle, ping time.Duration) *http2.Transport {
-	t, err := http2.ConfigureTransports(&http.Transport{HTTP2: &http.HTTP2Config{
+	t, err := http2.ConfigureTransports(&http.Transport{MaxConnsPerHost: 1, HTTP2: &http.HTTP2Config{
 		MaxReceiveBufferPerStream:     titanH2StreamWindow,
 		MaxReceiveBufferPerConnection: titanH2ConnWindow,
 		MaxReadFrameSize:              titanH2FrameSize,
@@ -45,8 +57,9 @@ func titanH2Transport(dial func(context.Context) (net.Conn, error), streamSettin
 	if err != nil { // only for an http.Transport that has HTTP/2 already
 		t = &http2.Transport{}
 	}
+	gate := &titanDialGate{}
 	t.DialTLSContext = func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
-		conn, err := dial(ctx)
+		conn, err := gate.dial(ctx, dial)
 		if err != nil {
 			return nil, err
 		}
@@ -55,6 +68,43 @@ func titanH2Transport(dial func(context.Context) (net.Conn, error), streamSettin
 	t.IdleConnTimeout = idle
 	t.ReadIdleTimeout = ping
 	return t
+}
+
+// titanDialGate is a transport's dials. With one dial at a time net/http gives a failed dial's
+// error to its own request only, then starts the next waiting request's dial, and so on: a
+// burst of flows to a server that doesn't answer failed one connect timeout after another, not
+// all after one. A dial within titanDialFailFor of a failed one fails with its error (net/http
+// starts the next as the failed one returns, so these are the requests that waited behind it),
+// and that one's XMUX client is closed by then (XHTTP marks it so when a download fails): new
+// flows dial on another.
+type titanDialGate struct {
+	mu  sync.Mutex
+	err error     // the last dial's, nil once one succeeds
+	at  time.Time // when it failed
+}
+
+// titanDialFailFor: how long a failed dial fails the next ones (net/http starts them within
+// milliseconds).
+var titanDialFailFor = time.Second
+
+// titanH2Dials counts the dials made (each a TCP + TLS / REALITY handshake), for the tests.
+var titanH2Dials atomic.Int64
+
+func (g *titanDialGate) dial(ctx context.Context, dial func(context.Context) (net.Conn, error)) (net.Conn, error) {
+	g.mu.Lock()
+	err, at := g.err, g.at
+	g.mu.Unlock()
+	if err != nil && time.Since(at) < titanDialFailFor {
+		return nil, err
+	}
+	titanH2Dials.Add(1)
+	conn, err := dial(ctx)
+	if err == nil || ctx.Err() == nil { // a dial cancelled (CloseIdleConnections) says nothing of the server
+		g.mu.Lock()
+		g.err, g.at = err, time.Now()
+		g.mu.Unlock()
+	}
+	return conn, err
 }
 
 // titanH2Conn is an XHTTP HTTP/2 connection. In the server's frames it lowers the
