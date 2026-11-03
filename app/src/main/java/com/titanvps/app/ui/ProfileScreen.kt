@@ -39,7 +39,6 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tag
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -70,6 +69,7 @@ import com.titanvps.app.data.Flags
 import com.titanvps.app.data.Fmt
 import com.titanvps.app.data.Subscription
 import com.titanvps.app.data.ThemeMode
+import com.titanvps.app.ui.kit.TitanAlertDialog
 import com.titanvps.app.ui.kit.FlagCircle
 import com.titanvps.app.ui.kit.RowDivider
 import com.titanvps.app.ui.kit.SectionTitle
@@ -80,7 +80,6 @@ import com.titanvps.app.ui.kit.SettingsToggleRow
 import com.titanvps.app.ui.kit.TitanCard
 import com.titanvps.app.ui.kit.pressable
 import com.titanvps.app.ui.kit.rememberHaptics
-import com.titanvps.app.ui.theme.ProvideTitanTextScale
 import com.titanvps.app.ui.theme.Titan
 import com.titanvps.app.ui.theme.fixedSp
 
@@ -396,28 +395,6 @@ private fun AccountCard(sub: Subscription, account: AccountApi.Info?, onClick: (
         }
     }
 }
-
-/**
- * AlertDialog in the app's text size: a dialog is a window of its own, with the system's
- * text size otherwise.
- */
-@Composable
-private fun TitanAlertDialog(
-    onDismissRequest: () -> Unit,
-    confirmButton: @Composable () -> Unit,
-    dismissButton: (@Composable () -> Unit)? = null,
-    title: (@Composable () -> Unit)? = null,
-    text: (@Composable () -> Unit)? = null,
-) {
-    AlertDialog(
-        onDismissRequest = onDismissRequest,
-        confirmButton = { ProvideTitanTextScale(confirmButton) },
-        dismissButton = dismissButton?.let { slot -> { ProvideTitanTextScale(slot) } },
-        title = title?.let { slot -> { ProvideTitanTextScale(slot) } },
-        text = text?.let { slot -> { ProvideTitanTextScale(slot) } },
-    )
-}
-
 
 /** Check / download / install flow for "Обновление приложения". */
 @Composable

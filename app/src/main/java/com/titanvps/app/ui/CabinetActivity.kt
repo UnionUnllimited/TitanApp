@@ -137,6 +137,7 @@ class CabinetActivity : ComponentActivity() {
         val link = intent.getStringExtra(EXTRA_LINK) ?: run { finish(); return }
         // Connected devices / limit from the subscription's account info (-1: not known).
         val devices = intent.getIntExtra(EXTRA_DEVICES, -1).takeIf { it >= 0 }?.let { it to intent.getIntExtra(EXTRA_LIMIT, 0) }
+        val startTab = intent.getIntExtra(EXTRA_TAB, TAB_SUBSCRIPTION)
         setContent {
             val mode by TitanApp.get(this).settings.theme.collectAsState()
             val dark = isDark(mode)
@@ -147,7 +148,7 @@ class CabinetActivity : ComponentActivity() {
                 enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
             }
             TitanTheme(mode) {
-                CabinetScreen(link, devices, onClose = ::finish)
+                CabinetScreen(link, devices, startTab, onClose = ::finish)
             }
         }
     }
@@ -156,12 +157,21 @@ class CabinetActivity : ComponentActivity() {
         private const val EXTRA_LINK = "link"
         private const val EXTRA_DEVICES = "devices"
         private const val EXTRA_LIMIT = "limit"
+        private const val EXTRA_TAB = "tab"
 
-        /** [devices]: connected devices and the limit (0 = not known), if the app knows them. */
-        fun open(context: Context, link: String, devices: Pair<Int, Int>? = null) {
+        /** The cabinet's tabs: the subscription, and the tariffs to pay for. */
+        const val TAB_SUBSCRIPTION = 0
+        const val TAB_TARIFFS = 1
+
+        /**
+         * [devices]: connected devices and the limit (0 = not known), if the app knows them.
+         * [tab]: the tab it opens on.
+         */
+        fun open(context: Context, link: String, devices: Pair<Int, Int>? = null, tab: Int = TAB_SUBSCRIPTION) {
             context.startActivity(
                 Intent(context, CabinetActivity::class.java).putExtra(EXTRA_LINK, link)
                     .putExtra(EXTRA_DEVICES, devices?.first ?: -1).putExtra(EXTRA_LIMIT, devices?.second ?: 0)
+                    .putExtra(EXTRA_TAB, tab)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }
@@ -173,7 +183,7 @@ private const val CHECKING = "Проверяем оплату: кабинет о
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, onClose: () -> Unit) {
+private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, startTab: Int, onClose: () -> Unit) {
     val context = LocalContext.current
     val palette = Titan.palette
     val scope = rememberCoroutineScope()
@@ -183,7 +193,7 @@ private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, onClose: () ->
     var note by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var pulling by remember { mutableStateOf(false) }
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by remember { mutableIntStateOf(startTab) }
     // A payment page was opened: its result is read when the cabinet is back on screen.
     var awaitingPayment by remember { mutableStateOf(false) }
     var recheck by remember { mutableIntStateOf(0) }

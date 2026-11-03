@@ -252,13 +252,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Personal cabinet: the site's cabinet inside the app, signed in by the link the
-     * subscription brings (profile-web-page-url); without one, the Telegram bot.
+     * subscription brings (profile-web-page-url); without one, the Telegram bot. [tab]: the
+     * cabinet's tab it opens on (CabinetActivity.TAB_TARIFFS to renew or add GB).
      */
-    fun openCabinet() = viewModelScope.launch {
+    fun openCabinet(tab: Int = CabinetActivity.TAB_SUBSCRIPTION) = viewModelScope.launch {
         val page = subscription.value?.info?.webPageUrl
         if (page != null) {
             val devices = _account.value?.let { it.devices.size to it.deviceLimit }
-            CabinetActivity.open(getApplication<Application>(), page, devices)
+            CabinetActivity.open(getApplication<Application>(), page, devices, tab)
         }
         else _openUrl.send(BuildConfig.TELEGRAM_URL)
     }
