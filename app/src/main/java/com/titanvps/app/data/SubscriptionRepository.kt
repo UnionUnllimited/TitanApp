@@ -60,21 +60,28 @@ class SubscriptionRepository(private val context: Context) {
         val url = deepLinks.extractSubscriptionUrl(link)
             ?: linkFinder.find(link)
             ?: throw SubscriptionException("Это не ключ Titan VPS")
-        return fetch(url)
+        return fetch(url, generation) ?: throw SubscriptionException("Вы вышли из аккаунта")
     }
 
+    /** The current key's subscription again; null without a key or if it was signed out meanwhile. */
     suspend fun refresh(): Subscription? {
         val url = _subscription.value?.url ?: return null
-        return fetch(url)
+        return fetch(url, generation)
     }
 
-    fun logout() {
+    fun logout() = synchronized(saving) {
+        generation++
         store.clear()
         _subscription.value = null
         _selectedId.value = null
     }
 
-    private suspend fun fetch(url: String): Subscription = withContext(Dispatchers.IO) {
+    /** Bumped by [logout]: a fetch begun before it doesn't save the key back (as iOS's generation). */
+    @Volatile private var generation = 0
+    private val saving = Any()
+
+    /** null: [logout] came while it downloaded (begun at [gen]), nothing saved. */
+    private suspend fun fetch(url: String, gen: Int): Subscription? = withContext(Dispatchers.IO) {
         if (!deepLinks.isAllowed(url)) throw SubscriptionException("Недопустимый адрес подписки")
 
         val (info, body) = downloadWithFallback(url)
@@ -94,8 +101,13 @@ class SubscriptionRepository(private val context: Context) {
 
         val sub = withoutHidden(Subscription(url, info, servers, System.currentTimeMillis()))
         if (sub.servers.isEmpty()) throw SubscriptionException("В подписке нет серверов")
-        store.save(sub)
-        _subscription.value = sub
+        val saved = synchronized(saving) {
+            if (gen != generation) return@synchronized false
+            store.save(sub)
+            _subscription.value = sub
+            true
+        }
+        if (!saved) return@withContext null
         // Trim geo files now so the first connect doesn't wait for it.
         runCatching {
             com.titanvps.app.core.GeoFiles.prepare(

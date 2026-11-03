@@ -238,7 +238,7 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onO
                             Feature(Icons.Outlined.CalendarMonth, "Сколько дней осталось")
                             Feature(Icons.Outlined.PieChart, "Трафик на обходах")
                             Feature(Icons.Outlined.Badge, "Устройства и ваш ID")
-                            Feature(Icons.Outlined.Sell, "Тарифы и коды на продление")
+                            Feature(Icons.Outlined.Sell, "Тарифы и коды оплаты")
                         }
                     }
 
