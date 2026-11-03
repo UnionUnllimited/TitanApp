@@ -390,14 +390,15 @@ private fun PillContent(check: ConnectionCheck.State) {
             }
             is ConnectionCheck.State.Ok -> {
                 val latency = check.ms?.let(ConnectionCheck::latencyOf)
-                // Never red or orange: green when fast (or not measured), plain up to 300 ms,
-                // slower a word instead of the number.
-                val color = if (latency == null || latency == ConnectionCheck.Latency.FAST) palette.green else palette.textSecondary
-                Box(Modifier.size(9.dp).clip(CircleShape).background(color))
+                // Never red or orange: the dot and the number green only under 120 ms; else a grey
+                // dot and the number in the text's colour up to 300 ms, slower (or not measured)
+                // a word instead of it.
+                val fast = latency == ConnectionCheck.Latency.FAST
+                Box(Modifier.size(9.dp).clip(CircleShape).background(if (fast) palette.green else palette.textSecondary))
                 when (latency) {
                     null -> PillText("Работает", text)
                     ConnectionCheck.Latency.SLOW -> PillText("Работает · медленно", text)
-                    else -> PillText("${check.ms} мс", color, tabular = true)
+                    else -> PillText("${check.ms} мс", if (fast) palette.green else text, tabular = true)
                 }
                 check.country?.let { code ->
                     PillText("·", palette.textSecondary)
