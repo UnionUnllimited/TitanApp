@@ -21,13 +21,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -39,6 +39,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.addPathNodes
+import androidx.compose.ui.graphics.vector.group
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -56,11 +61,16 @@ import com.titanvps.app.data.Server
 import com.titanvps.app.data.ServerGroups
 import com.titanvps.app.data.Subscription
 import com.titanvps.app.data.UserAgent
-import com.titanvps.app.ui.theme.ProvideTitanTextScale
+import com.titanvps.app.ui.kit.DialogButton
+import com.titanvps.app.ui.kit.PrimaryButton
+import com.titanvps.app.ui.kit.SecondaryButton
+import com.titanvps.app.ui.kit.TitanAlertDialog
+import com.titanvps.app.ui.theme.Titan
 import com.titanvps.app.vpn.BypassReturn
 import com.titanvps.app.vpn.VpnState
 import com.titanvps.app.vpn.VpnStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -109,10 +119,18 @@ internal fun TechModeScreen(
     var tcp by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var tcpRunning by remember { mutableStateOf(false) }
     var logs by remember { mutableStateOf("") }
+    var copied by remember { mutableStateOf(false) }
     val endpoints = remember(sub) { TechChecks.endpoints(sub.servers) }
 
     BackHandler(onBack = onBack)
     LaunchedEffect(Unit) { logs = withContext(Dispatchers.IO) { readLogs(context.cacheDir, 60, 140) } }
+    // «Отчёт скопирован» for a moment, then the button is as before.
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(2_000)
+            copied = false
+        }
+    }
 
     fun checkServers() {
         if (tcpRunning) return
@@ -191,54 +209,61 @@ internal fun TechModeScreen(
     }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        Column(
-            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        Column(Modifier.widthIn(max = 640.dp).fillMaxSize()) {
+            // Above the scroll, as DevicesScreen: TopBar keeps its own side padding.
             TopBar("Технический режим", onBack = onBack)
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // As iOS: one under another, the check first.
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    PrimaryButton("Проверить всё", { checkAll() }, icon = Stethoscope)
+                    SecondaryButton(
+                        if (copied) "Отчёт скопирован" else "Копировать отчёт",
+                        {
+                            clipboard.setText(AnnotatedString(report()))
+                            copied = true
+                        },
+                        icon = if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
+                    )
+                    SecondaryButton("Выключить технический режим", { viewModel.setTechMode(false); onBack() }, tint = Titan.palette.red)
+                }
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { checkAll() }, modifier = Modifier.weight(1f)) { Text("Проверить всё") }
-                OutlinedButton(onClick = { clipboard.setText(AnnotatedString(report())) }, modifier = Modifier.weight(1f)) {
-                    Text("Копировать отчёт")
+                SectionCard(title = "Устройство") { Rows(devRows) }
+                SectionCard(title = "Сеть") { Rows(netRows) }
+                SectionCard(title = "Обходы") { Rows(bypassRows) }
+                SectionCard(title = "Доступ") {
+                    Caption("HTTPS-запрос (HEAD, 6 с): код ответа и время. Идёт напрямую, мимо VPN Titan.")
+                    Rows(accessRows)
                 }
-            }
-            OutlinedButton(onClick = { viewModel.setTechMode(false); onBack() }, modifier = Modifier.fillMaxWidth()) {
-                Text("Выключить технический режим", color = MaterialTheme.colorScheme.error)
-            }
-
-            SectionCard(title = "Устройство") { Rows(devRows) }
-            SectionCard(title = "Сеть") { Rows(netRows) }
-            SectionCard(title = "Обходы") { Rows(bypassRows) }
-            SectionCard(title = "Доступ") {
-                Caption("HTTPS-запрос (HEAD, 6 с): код ответа и время. Идёт напрямую, мимо VPN Titan.")
-                Rows(accessRows)
-            }
-            SectionCard(title = "Серверы") {
-                Caption(
-                    "TCP-подключение к каждому серверу подписки (4 с), напрямую. «нет TCP» — IP/порт заблокирован или " +
-                        "сервер лежит; TCP есть, а пинг в приложении не проходит — протокол режется (DPI)."
-                )
-                OutlinedButton(onClick = { checkServers() }, enabled = !tcpRunning, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (tcpRunning) "Проверяем…" else "Проверить серверы")
+                SectionCard(title = "Серверы") {
+                    Caption(
+                        "TCP-подключение к каждому серверу подписки (4 с), напрямую. «нет TCP» — IP/порт заблокирован или " +
+                            "сервер лежит; TCP есть, а пинг в приложении не проходит — протокол режется (DPI)."
+                    )
+                    OutlinedButton(onClick = { checkServers() }, enabled = !tcpRunning, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (tcpRunning) "Проверяем…" else "Проверить серверы")
+                    }
+                    Rows(serverRows)
                 }
-                Rows(serverRows)
-            }
-            SectionCard(title = "Журнал") {
-                Caption("Журнал Xray текущего подключения (ошибки и последние соединения).")
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { scope.launch { logs = withContext(Dispatchers.IO) { readLogs(context.cacheDir, 60, 140) } } },
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Обновить") }
-                    OutlinedButton(onClick = onOpenLogs, modifier = Modifier.weight(1f)) { Text("Весь журнал") }
-                }
-                SelectionContainer(
-                    Modifier.fillMaxWidth().heightIn(max = 320.dp).padding(top = 8.dp)
-                        .clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant)
-                        .verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()).padding(8.dp)
-                ) {
-                    Text(logs, fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 13.sp)
+                SectionCard(title = "Журнал") {
+                    Caption("Журнал Xray текущего подключения (ошибки и последние соединения).")
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { scope.launch { logs = withContext(Dispatchers.IO) { readLogs(context.cacheDir, 60, 140) } } },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Обновить") }
+                        OutlinedButton(onClick = onOpenLogs, modifier = Modifier.weight(1f)) { Text("Весь журнал") }
+                    }
+                    SelectionContainer(
+                        Modifier.fillMaxWidth().heightIn(max = 320.dp).padding(top = 8.dp)
+                            .clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant)
+                            .verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()).padding(8.dp)
+                    ) {
+                        Text(logs, fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 13.sp)
+                    }
                 }
             }
         }
@@ -466,27 +491,45 @@ internal fun TechCodeDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
             code = ""
         }
     }
-    // A dialog is a window of its own, with the system's text size otherwise.
-    AlertDialog(
+    TitanAlertDialog(
         onDismissRequest = onDismiss,
-        title = { ProvideTitanTextScale { Text("Код") } },
+        title = { Text("Код") },
         text = {
-            ProvideTitanTextScale {
-                OutlinedTextField(
-                    value = code,
-                    onValueChange = { code = it.filter(Char::isDigit); wrong = false },
-                    singleLine = true,
-                    isError = wrong,
-                    supportingText = if (wrong) { { Text("Неверный код") } } else null,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            OutlinedTextField(
+                value = code,
+                onValueChange = { code = it.filter(Char::isDigit); wrong = false },
+                singleLine = true,
+                isError = wrong,
+                supportingText = if (wrong) { { Text("Неверный код") } } else null,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                modifier = Modifier.fillMaxWidth(),
+            )
         },
-        confirmButton = { ProvideTitanTextScale { TextButton(onClick = submit) { Text("OK") } } },
-        dismissButton = { ProvideTitanTextScale { TextButton(onClick = onDismiss) { Text("Отмена") } } },
+        confirmButton = { DialogButton("Открыть", submit, bold = true) },
+        dismissButton = { DialogButton("Отмена", onDismiss) },
     )
+}
+
+/** Проверить всё's stethoscope, as iOS's (Material Symbols; Material Icons has none). */
+private val Stethoscope: ImageVector by lazy {
+    ImageVector.Builder("Stethoscope", 24.dp, 24.dp, viewportWidth = 960f, viewportHeight = 960f).apply {
+        // The symbol's viewBox is 0 -960 960 960.
+        group(translationY = 960f) {
+            addPath(
+                addPathNodes(
+                    "M540-80q-108 0-184-76t-76-184v-23q-86-14-143-80.5T80-600v-200q0-17 11.5-28.5T120-840h80q0-17 " +
+                        "11.5-28.5T240-880q17 0 28.5 11.5T280-840v80q0 17-11.5 28.5T240-720q-17 0-28.5-11.5T200-760h-40v160q0 " +
+                        "66 47 113t113 47q66 0 113-47t47-113v-160h-40q0 17-11.5 28.5T400-720q-17 0-28.5-11.5T360-760v-80q0-17 " +
+                        "11.5-28.5T400-880q17 0 28.5 11.5T440-840h80q17 0 28.5 11.5T560-800v200q0 90-57 156.5T360-363v23q0 75 " +
+                        "52.5 127.5T540-160q75 0 127.5-52.5T720-340v-67q-35-13-57.5-43.5T640-520q0-50 35-85t85-35q50 0 85 35t35 " +
+                        "85q0 39-22.5 69.5T800-407v67q0 108-76 184T540-80Zm220-400q17 0 28.5-11.5T800-520q0-17-11.5-28.5T760-560q-17 " +
+                        "0-28.5 11.5T720-520q0 17 11.5 28.5T760-480Zm0-40Z",
+                ),
+                fill = SolidColor(Color.Black),
+            )
+        }
+    }.build()
 }
 
 private fun techCodeMatches(code: String): Boolean {
