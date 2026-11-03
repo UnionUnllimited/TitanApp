@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.outlined.StarOutline
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -42,7 +41,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -77,8 +75,10 @@ import com.titanvps.app.data.NetworkMonitor
 import com.titanvps.app.data.ServerGroups
 import com.titanvps.app.data.ServerGroups.Group
 import com.titanvps.app.data.SubscriptionInfo
+import com.titanvps.app.ui.kit.DialogButton
 import com.titanvps.app.ui.kit.FlagCircle
 import com.titanvps.app.ui.kit.ProgressRing
+import com.titanvps.app.ui.kit.TitanAlertDialog
 import com.titanvps.app.ui.kit.ToastKind
 import com.titanvps.app.ui.kit.Toasts
 import com.titanvps.app.ui.kit.pressable
@@ -409,9 +409,9 @@ internal fun ListCaption(page: Group, info: SubscriptionInfo, wifiLocked: Boolea
             info.totalBytes > 0 -> Row(verticalAlignment = Alignment.CenterVertically) {
                 val left = (info.totalBytes - info.usedBytes).coerceAtLeast(0)
                 Caption("Трафик: ${Fmt.bytes(left)} из ${Fmt.bytes(info.totalBytes)}", Modifier.weight(1f, fill = false))
-                // Android: more GB in Личный кабинет.
+                // Android: more GB in Личный кабинет, on its tariffs.
                 Text(
-                    "Докупить ГБ",
+                    "Добавить ГБ",
                     Modifier
                         .pressable(onClick = onBuy, scale = 0.95f)
                         .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -612,20 +612,15 @@ private fun MenuItem(text: String, icon: ImageVector, enabled: Boolean = true, o
 /** A bypass server tapped on Wi-Fi: why it can't be picked. */
 @Composable
 internal fun WifiLockedDialog(onDismiss: () -> Unit) {
-    AlertDialog(
+    TitanAlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = onDismiss) { ProvideTitanTextScale { Text("Понятно") } }
-        },
-        title = { ProvideTitanTextScale { Text("Недоступно на Wi-Fi") } },
+        confirmButton = { DialogButton("Понятно", onDismiss, bold = true) },
+        title = { Text("Недоступно на Wi-Fi") },
         text = {
-            ProvideTitanTextScale {
-                Text(
-                    "Обходы работают только через мобильный интернет и нужны при его ограничениях. " +
-                        "На Wi-Fi подключиться к ним нельзя — выберите сервер во вкладке «Страны».",
-                )
-            }
+            Text(
+                "Обходы работают только через мобильный интернет и нужны при его ограничениях. " +
+                    "На Wi-Fi подключиться к ним нельзя — выберите сервер во вкладке «Страны».",
+            )
         },
-        containerColor = Titan.palette.surface,
     )
 }

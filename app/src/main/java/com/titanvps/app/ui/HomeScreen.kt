@@ -25,9 +25,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -38,6 +38,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -72,6 +73,8 @@ import com.titanvps.app.ui.kit.pressable
 import com.titanvps.app.ui.kit.rememberHaptics
 import com.titanvps.app.ui.theme.Titan
 import com.titanvps.app.vpn.VpnState
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * Главная: header (Поддержка, logo, Обновить подписку), the Выкл | Вкл slider, the status
@@ -85,7 +88,6 @@ internal fun HomeScreen(
     sub: Subscription,
     busy: Boolean,
     onConnect: () -> Unit,
-    onOpenSubscription: () -> Unit,
 ) {
     val context = LocalContext.current
     val haptics = rememberHaptics()
@@ -150,7 +152,7 @@ internal fun HomeScreen(
                 AccountBanner(bannerText, blocked = account?.status == "BLOCKED") { context.openUrl(supportUrl) }
             }
         }
-        if (expired) item(key = "home:expired") { ExpiredBanner(onOpenSubscription) }
+        if (expired) item(key = "home:expired") { ExpiredBanner { viewModel.openCabinet(CabinetActivity.TAB_TARIFFS) } }
         // Room round the slider for its glow.
         item(key = "home:slider") { PowerSlider(state, onToggle, Modifier.padding(vertical = 6.dp)) }
         item(key = "home:status") {
@@ -178,7 +180,7 @@ internal fun HomeScreen(
                     // In the order shown (favourites first): results fill the list from the top.
                     onPing = { viewModel.pingAll(shown.map { it.id }) },
                 )
-                ListCaption(page, sub.info, wifiLocked, onBuy = { viewModel.openCabinet() })
+                ListCaption(page, sub.info, wifiLocked, onBuy = { viewModel.openCabinet(CabinetActivity.TAB_TARIFFS) })
             }
         }
         // Read once for the list, not per row.
@@ -218,7 +220,22 @@ internal fun HomeScreen(
             )
         }
     }
-    val listPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
+    // 16 at the top: with the slider's own 6, its glow fades out before the list's edge under
+    // the header cuts it (as on iOS).
+    val listPadding = PaddingValues(16.dp)
+    // Pull to refresh's own spinner for a pull only (as on iOS); the header's arrow turns for
+    // any refresh, the one at launch too.
+    var pulling by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val onPull: () -> Unit = {
+        pulling = true
+        viewModel.refreshByHand()
+        scope.launch {
+            // Till it's done (or the one already running, which a pull doesn't repeat).
+            viewModel.busy.first { !it }
+            pulling = false
+        }
+    }
 
     // Phones: one column up to 640dp, centered. Tablets / landscape: controls on the
     // left, the server list on the right.
@@ -234,8 +251,8 @@ internal fun HomeScreen(
                         content = topItems,
                     )
                     PullToRefreshBox(
-                        isRefreshing = busy,
-                        onRefresh = { viewModel.refreshByHand() },
+                        isRefreshing = pulling,
+                        onRefresh = onPull,
                         modifier = Modifier.weight(1.1f).fillMaxHeight(),
                     ) {
                         LazyColumn(
@@ -251,8 +268,8 @@ internal fun HomeScreen(
             Column(Modifier.widthIn(max = 640.dp).fillMaxSize()) {
                 HomeHeader(busy, { context.openUrl(supportUrl) }, { viewModel.refreshByHand() }, Modifier.fillMaxWidth())
                 PullToRefreshBox(
-                    isRefreshing = busy,
-                    onRefresh = { viewModel.refreshByHand() },
+                    isRefreshing = pulling,
+                    onRefresh = onPull,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 ) {
                     LazyColumn(
@@ -275,7 +292,7 @@ internal fun HomeScreen(
 @Composable
 private fun HomeHeader(busy: Boolean, onSupport: () -> Unit, onRefresh: () -> Unit, modifier: Modifier) {
     Row(modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        SquareIconButton(Icons.Outlined.SupportAgent, "Поддержка", onSupport)
+        SquareIconButton(Icons.Filled.Headphones, "Поддержка", onSupport)
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.logo), null, Modifier.size(40.dp))
             Spacer(Modifier.width(8.dp))
@@ -326,7 +343,7 @@ private fun AccountBanner(text: String, blocked: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** The subscription ran out: one line, a tap opens Подписка (as on iOS). */
+/** The subscription ran out: one line, a tap opens Личный кабинет on its tariffs (iOS: Тарифы). */
 @Composable
 private fun ExpiredBanner(onClick: () -> Unit) {
     val red = Titan.palette.red
