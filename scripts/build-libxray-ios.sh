@@ -52,6 +52,12 @@ PY
 XRAY="$(dirname "$WORK")/Xray-core"
 MEM="$ROOT/scripts/ios-patches/xray-mem"
 python3 "$MEM/apply.py" "$XRAY"
+# libXray's own loop gives Go's free memory back once a minute, not every second (a forced full
+# GC each second, traffic or not).
+python3 "$MEM/apply_libxray.py" "$WORK"
+cp "$MEM/titan_free_test.go" "$WORK/memory/"
+(cd "$WORK" && go test -count=1 -v -run TestTitanFree ./memory/)
+rm "$WORK/memory/titan_free_test.go"
 if grep -qs titanCloseAll "$XRAY/proxy/tun/udp_fullcone.go"; then
   cp "$MEM/titan_udp_close_test.go" "$XRAY/proxy/tun/"
   (cd "$XRAY" && go test -count=1 -v -run TestTitanUDPClose ./proxy/tun/)

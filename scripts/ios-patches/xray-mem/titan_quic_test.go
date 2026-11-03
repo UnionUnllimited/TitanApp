@@ -992,6 +992,49 @@ func TestTitanQUICIdleUser(t *testing.T) {
 	}
 }
 
+// The pool's cleaner runs every TitanIdleAfter / 6 (10 s at the tunnel's 60 s), not every second
+// (xray-mem patch: upstream's woke the process each second once any Hysteria subject was dialed),
+// 1 s at the least, 10 s at the most, as the last client used had it; a shorter one wakes it from
+// a longer wait: an idle connection still closes within TitanIdleAfter and a period.
+func TestTitanQUICCleanEvery(t *testing.T) {
+	for idle, want := range map[time.Duration]time.Duration{
+		60 * time.Second: 10 * time.Second, 30 * time.Second: 5 * time.Second,
+		600 * time.Millisecond: time.Second, time.Hour: 10 * time.Second,
+	} {
+		if got := titanCleanEvery(idle); got != want {
+			t.Fatalf("idle %v: the cleaner every %v, want %v", idle, got, want)
+		}
+	}
+	defer func(d time.Duration) { internet.TitanIdleAfter = d }(internet.TitanIdleAfter)
+	internet.TitanCloseTransports()
+	dest, subjects := titanHysteria(t, 2)
+	// A client used with the tunnel's 60 s: the cleaner waits 10 s.
+	internet.TitanIdleAfter = 60 * time.Second
+	if _, err := titanHyFlow(dest, subjects[0], false); err != nil {
+		t.Fatal(err)
+	}
+	if got := time.Duration(titanCleaner.every.Load()); got != 10*time.Second {
+		t.Fatalf("the cleaner every %v after a client used with 60 s, want 10 s", got)
+	}
+	time.Sleep(100 * time.Millisecond) // the cleaner in its 10 s wait
+	// One used with 1.5 s: every 1 s from now, its connection closed 1.5-2.5 s after its flow.
+	internet.TitanIdleAfter = 1500 * time.Millisecond
+	if _, err := titanHyFlow(dest, subjects[1], false); err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now()
+	if got := time.Duration(titanCleaner.every.Load()); got != time.Second {
+		t.Fatalf("the cleaner every %v after a client used with 1.5 s, want 1 s", got)
+	}
+	for titanHyLive(subjects[1]) > 0 && time.Since(ended) < 5*time.Second {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if d := time.Since(ended); d < internet.TitanIdleAfter || d > internet.TitanIdleAfter+time.Second+300*time.Millisecond {
+		t.Fatalf("the idle connection closed %v after its flow, want 1.5-2.5 s", d)
+	}
+	internet.TitanCloseTransports()
+}
+
 // A client that dials through a dialerProxy hop closes at once. Its packet conn is then the hop's
 // flow (internet.DialSystem's cnc, as a FakePacketConn), whose read deadline does nothing, and
 // quic.Transport.Close waits for its reader: only the packet conn's close ends that, and it came

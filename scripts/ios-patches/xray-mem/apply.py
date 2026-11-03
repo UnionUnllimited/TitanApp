@@ -53,7 +53,9 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
   burst.TitanSleep / TitanWake) the observatory's rounds probe nothing (~60 subjects at 5m x 5, a
   cold handshake every ~5 s, kept the cellular radio up); a first check still runs; the results stay
   and don't age then (validity counts awake time); on wake the schedule goes on at once, after 5 min
-  or more asleep with a wake round (every subject once, 5-30 s after it, 4 at once).
+  or more asleep with a wake round (every subject once, 5-30 s after it, 4 at once). Hysteria's
+  pool cleaner runs every TitanIdleAfter / 6 (10 s), not every second for the process's life.
+  libXray's own loop (apply_libxray.py) frees Go's memory once a minute, not every second.
 Every anchor must be found: a different Xray-core stops the build.
 """
 import pathlib, re, shutil, sys
@@ -305,6 +307,11 @@ changes = {
         ("\t\tm.RLock()\n\t\tfor _, c := range m.m {\n\t\t\tc.clean()\n\t\t}\n\t\tm.RUnlock()\n",
          "\t\t// Titan patch: cleaned outside the pool's lock (titan_mem.go).\n"
          "\t\tfor _, c := range m.titanClients() {\n\t\t\tc.clean()\n\t\t}\n"),
+        # Every TitanIdleAfter / 6 (10 s), not every second: a wake a second for as long as the process
+        # lives, once any Hysteria subject was dialed (titan_mem.go titanCleanWait).
+        ("\tticker := time.NewTicker(idleCleanupInterval)\n\tfor range ticker.C {\n\t\t// Titan patch: cleaned outside",
+         "\t// Titan patch: every TitanIdleAfter / 6, not every second (titan_mem.go).\n"
+         "\tfor titanCleanWait() {\n\t\t// Titan patch: cleaned outside"),
         # A connection with no stream and no UDP session for a minute is closed (titan_mem.go).
         ("\tudpSM   *udpSessionManager\n}\n",
          "\tudpSM   *udpSessionManager\n\n\t// Titan patch: its streams, and when it was last used (titan_mem.go).\n"

@@ -106,6 +106,45 @@ func (u *titanUse) touch() { u.last.Store(time.Now().UnixNano()) }
 func (c *client) titanUsed() {
 	c.titan.idle = internet.TitanIdleAfter
 	c.titan.touch()
+	// The cleaner's period for this idle time (the variable is read here, under c's lock, as idle
+	// is: the tests set it while the cleaner runs).
+	every := int64(titanCleanEvery(c.titan.idle))
+	if titanCleaner.every.Swap(every) != every {
+		select {
+		case titanCleaner.kick <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// The pool's cleaner (dialer.go clientManager.clean) closes dead clients and those idle
+// internet.TitanIdleAfter (titanIdle). Upstream's ticked every second for as long as the process
+// lived once any Hysteria subject was dialed (a probe is enough): a wake a second on an idle
+// phone, next to nothing to clean (the pool holds only the picks' connections, a minute after
+// their last stream). Now every TitanIdleAfter / 6 (10 s: the idle close 60-70 s after the last
+// stream, a dead client's socket and transport closed up to 10 s later; the next stream dials
+// again whatever the cleaner did), 1 s at the least (the tests' 600 ms), as the last client used
+// had it.
+var titanCleaner = struct {
+	every atomic.Int64
+	kick  chan struct{} // the period changed
+}{kick: make(chan struct{}, 1)}
+
+func init() { titanCleaner.every.Store(int64(titanCleanEvery(internet.TitanIdleAfter))) }
+
+func titanCleanEvery(idle time.Duration) time.Duration {
+	return min(max(idle/6, idleCleanupInterval), 10*time.Second)
+}
+
+// titanCleanWait waits for the cleaner's next round (dialer.go clientManager.clean): always true.
+func titanCleanWait() bool {
+	t := time.NewTimer(time.Duration(titanCleaner.every.Load()))
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-titanCleaner.kick:
+	}
+	return true
 }
 
 // titanStream counts s, the TCP stream tcp gives out, until it is closed (the outbound closes
@@ -131,7 +170,7 @@ func (s *titanStreamConn) Close() error {
 }
 
 // titanIdle says c's live connection has had no TCP stream and no UDP session for
-// internet.TitanIdleAfter (60 s): the cleaner (every second, under c's lock) closes it then, and the
+// internet.TitanIdleAfter (60 s): the cleaner (every 10 s, under c's lock) closes it then, and the
 // next stream dials again. The panel's keep-alive (5 s, under QUIC's 30 s idle timeout) kept
 // every subject's connection up for good (~100 KiB of heap and 7 goroutines each, and keep-alives
 // on the phone's network), though only the balancers' picks carry traffic; it still keeps a
