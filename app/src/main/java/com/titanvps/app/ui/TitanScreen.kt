@@ -12,22 +12,26 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.tappableElement
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -45,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -171,10 +176,11 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
 private fun toastKind(text: String): ToastKind =
     if (text == "Подписка подключена" || text == "Настройки сброшены") ToastKind.SUCCESS else ToastKind.WARNING
 
-private enum class MainTab(val title: String, val icon: ImageVector, val selectedIcon: ImageVector) {
-    HOME("Главная", Icons.Outlined.Home, Icons.Filled.Home),
-    SUBSCRIPTION("Подписка", TitanIcons.CrownOutlined, TitanIcons.Crown),
-    PROFILE("Профиль", Icons.Outlined.Person, Icons.Filled.Person),
+/** Filled in either state, as the iPhone's bar: the colour shows the picked one. */
+private enum class MainTab(val title: String, val icon: ImageVector) {
+    HOME("Главная", Icons.Filled.Home),
+    SUBSCRIPTION("Подписка", TitanIcons.Crown),
+    PROFILE("Профиль", Icons.Filled.Person),
 }
 
 private enum class Overlay { APPS, DIAGNOSTICS, DEVICES, TECH }
@@ -222,23 +228,33 @@ private fun SplashScreen() {
 }
 
 /**
- * Главная / Подписка / Профиль: a thin bar on the surface with a hairline on top, right above
- * the system navigation bar; the picked tab in the brand blue.
+ * Главная / Подписка / Профиль: a thin bar on the surface with a one-pixel hairline on top,
+ * down to the screen's edge; the picked tab in the brand blue (iOS TitanTabBar).
  */
 @Composable
 private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit) {
     val palette = Titan.palette
     val haptics = rememberHaptics()
+    // Of gesture navigation's inset (the handle, 24 dp) 20 under the items, as the iPhone keeps of
+    // its home indicator, so the bar sits lower. The system takes only swipes there: the items'
+    // lower edge in it still gets taps, and the padding below them isn't tappable, so a swipe home
+    // doesn't press a tab. Buttons (3-button navigation, a taskbar) are tappable insets: all of it.
+    val nav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val buttons = WindowInsets.tappableElement.asPaddingValues().calculateBottomPadding()
+    val bottom = maxOf(buttons, minOf(nav, 20.dp))
+    val hairline = with(LocalDensity.current) { 1.toDp() }
     Column(Modifier.fillMaxWidth().background(palette.surface)) {
-        Box(Modifier.fillMaxWidth().height(0.5.dp).background(palette.outline))
+        Box(Modifier.fillMaxWidth().height(hairline).background(palette.outline))
         Row(
             Modifier
                 .align(Alignment.CenterHorizontally)
+                // A navigation bar on the side (landscape) isn't covered.
+                .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))
                 // On a tablet the items stay together in the middle.
                 .widthIn(max = 560.dp)
                 .fillMaxWidth()
-                .navigationBarsPadding()
-                .heightIn(min = 56.dp)
+                .padding(bottom = bottom)
+                .heightIn(min = 46.dp)
                 .selectableGroup(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -248,7 +264,7 @@ private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit) {
                 Column(
                     Modifier
                         .weight(1f)
-                        .heightIn(min = 56.dp)
+                        .heightIn(min = 46.dp)
                         .pressable(
                             onClick = {
                                 if (!selected) {
@@ -263,7 +279,7 @@ private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Icon(if (selected) t.selectedIcon else t.icon, null, Modifier.size(22.dp), tint = color)
+                    Icon(t.icon, null, Modifier.size(22.dp), tint = color)
                     Spacer(Modifier.height(2.dp))
                     Text(t.title, fontSize = 10.sp, color = color, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }

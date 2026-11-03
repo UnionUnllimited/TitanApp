@@ -57,7 +57,8 @@ internal fun DevicesScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 700.dp).fillMaxSize()) {
-            TopBar("Устройства", onBack = onBack)
+            // A sheet on the iPhone: «✕», not «‹».
+            TopBar("Устройства", onClose = onBack)
             PullToRefreshBox(isRefreshing = loading, onRefresh = { viewModel.loadAccount() }, modifier = Modifier.fillMaxSize()) {
                 val info = account
                 // Scrollable in every state, so pull-to-refresh works on an empty screen too.
