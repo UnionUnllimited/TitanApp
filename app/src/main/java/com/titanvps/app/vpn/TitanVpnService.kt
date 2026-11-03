@@ -1215,6 +1215,8 @@ class TitanVpnService : VpnService() {
             meterSince = since
             meter = runCatching { TrafficMeter.totals() }.getOrNull()?.let { TrafficMeter.Session(it) }
         }
+        // Coming on with the VPN still off (a sticky restart): the off state's notification waits.
+        if (s == Status.CONNECTING) OffNotification.starting()
         ensureChannel(this)
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         runCatching {
@@ -1497,7 +1499,8 @@ class TitanVpnService : VpnService() {
         private const val ALERT_ID = 2
         /** «Ограничения сняты» and the offers to go back from a bypass. */
         private const val RETURN_ID = 4
-        private const val CHANNEL_ID = "vpn_ongoing"
+        /** The VPN notification's channel, the off state's too ([OffNotification], ID 5). */
+        internal const val CHANNEL_ID = "vpn_ongoing"
         /** Never to be used again: a channel created under a deleted id gets its old settings back. */
         private val OLD_CHANNEL_IDS = arrayOf("vpn", "vpn_status")
         private const val NOTIFICATION_ID = 1
@@ -1573,6 +1576,8 @@ class TitanVpnService : VpnService() {
 
         /** Connects, or switches to the selected server if already on. */
         fun start(context: Context) {
+            // «Выключено» waits for it (OffNotification).
+            OffNotification.starting()
             ContextCompat.startForegroundService(
                 context, Intent(context, TitanVpnService::class.java).setAction(ACTION_START)
             )
@@ -1580,6 +1585,7 @@ class TitanVpnService : VpnService() {
 
         /** Keep-alive brings the VPN back (boot, app update): like [start], with retries. */
         internal fun revive(context: Context) {
+            OffNotification.starting()
             ContextCompat.startForegroundService(
                 context, Intent(context, TitanVpnService::class.java).setAction(ACTION_START).putExtra(EXTRA_REVIVE, true)
             )
@@ -1597,10 +1603,16 @@ class TitanVpnService : VpnService() {
             }
         }
 
-        /** Draws the notification again (its look changed in Настройки, notifications allowed); only while on. */
+        /**
+         * Draws the notification again (its look changed in Настройки, notifications allowed):
+         * the VPN's while on, the off state's ([OffNotification]) while off.
+         */
         fun reshow(context: Context) {
             val st = VpnStatus.state.value
-            if (st !is VpnState.Connected && st != VpnState.Connecting) return
+            if (st !is VpnState.Connected && st != VpnState.Connecting) {
+                OffNotification.update(context)
+                return
+            }
             runCatching { context.startService(Intent(context, TitanVpnService::class.java).setAction(ACTION_RESHOW)) }
         }
 
@@ -1608,14 +1620,14 @@ class TitanVpnService : VpnService() {
         @Volatile private var channelReady = false
 
         /**
-         * The VPN notification's channel: default importance (the main section, not "Silent")
-         * without sound, vibration or badge. Earlier channels: "vpn" was
+         * The VPN notification's channel, also the off state's: default importance (the main
+         * section, not "Silent") without sound, vibration or badge. Earlier channels: "vpn" was
          * of low importance ("Silent", at the bottom), and either may have been lowered since,
          * by hand or by Android. A channel's importance can't be raised and a deleted one comes
          * back as it was, hence a new id. Not while it holds our foreground notification
          * (Android refuses), which only the new one does: tried again then.
          */
-        private fun ensureChannel(context: Context) {
+        internal fun ensureChannel(context: Context) {
             if (channelReady) return
             val nm = context.getSystemService(NotificationManager::class.java) ?: return
             var ready = true
@@ -1632,6 +1644,12 @@ class TitanVpnService : VpnService() {
             channelReady = ready
         }
 
+        /** The VPN notification's channel is turned off in Android's settings. */
+        internal fun channelBlocked(context: Context): Boolean = runCatching {
+            context.getSystemService(NotificationManager::class.java)?.getNotificationChannel(CHANNEL_ID)?.importance ==
+                NotificationManager.IMPORTANCE_NONE
+        }.getOrDefault(false)
+
         /** NotificationManager.canPostPromotedNotifications (Android 16); null where there is none. */
         private val canPromote by lazy {
             runCatching { NotificationManager::class.java.getMethod("canPostPromotedNotifications") }.getOrNull()
@@ -1641,7 +1659,7 @@ class TitanVpnService : VpnService() {
          * Android 16: Live Updates allowed for the app (the user can turn them off). Looked up by
          * name, so any compile SDK builds it; false where there is no such call.
          */
-        private fun liveUpdatesAllowed(context: Context): Boolean = runCatching {
+        internal fun liveUpdatesAllowed(context: Context): Boolean = runCatching {
             canPromote?.invoke(context.getSystemService(NotificationManager::class.java)) as? Boolean
         }.getOrNull() ?: false
 
@@ -1650,7 +1668,7 @@ class TitanVpnService : VpnService() {
          * the shield of a server without a flag still shows; otherwise the shade follows the
          * system theme, so do the disc and the ring.
          */
-        private fun flagBitmap(context: Context, name: String, onBrand: Boolean): Bitmap? {
+        internal fun flagBitmap(context: Context, name: String, onBrand: Boolean): Bitmap? {
             val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
             val px = (64 * context.resources.displayMetrics.density).roundToInt()
             return runCatching {

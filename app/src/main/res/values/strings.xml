@@ -16,6 +16,9 @@
     <!-- Expanded while connected: «45 мс · Потрачено 120 МБ». -->
     <string name="notification_ms">%1$d мс</string>
     <string name="notification_spent">Потрачено %1$s</string>
+    <!-- While the VPN is off: the picked server, ‹ Включить ›. -->
+    <string name="notification_status_off">Выключено</string>
+    <string name="action_connect">Включить</string>
 
     <string name="reminders_channel">Напоминания</string>
 
