@@ -33,9 +33,12 @@ import kotlinx.coroutines.launch
  *
  * Never next to the service's own: it goes once a start is asked for ([starting]) or that one
  * is up ([serviceShown]), and comes a moment after the VPN went off with the service's gone
- * ([serviceGone]). Swiped away (Android 14+ lets users): it stays away, also over a restart of
- * the process, until the app is opened ([opened]) or the VPN changes. TitanApp follows the VPN,
- * the pick and the setting with [update].
+ * ([serviceGone]). Each post has its own time, and it is posted again ([refresh]) when the
+ * screen comes on, the phone is unlocked and the app is opened or left: always the newest, on
+ * top of the shade like Happ (not a foreground service, it can't be colorized). Swiped away
+ * (Android 14+ lets users): it stays away, also over a restart of the process, until the app
+ * is opened ([opened]) or the VPN changes. TitanApp follows the VPN, the pick and the setting
+ * with [update].
  */
 internal object OffNotification {
 
@@ -63,8 +66,8 @@ internal object OffNotification {
     private var pending: Job? = null
     /** When a start was asked for with the VPN off (elapsedRealtime); 0: none, or it is over. */
     private var startAskedAt = 0L
-    /** Shown since (its time, steady so a redraw doesn't move it); 0: not shown. */
-    private var shownSince = 0L
+    /** Shown by this process (and not swiped away since). */
+    private var shown = false
     /** The service's own notification is up. */
     private var serviceUp = false
     /** Its channel is set up in this process. */
@@ -96,13 +99,23 @@ internal object OffNotification {
         }.onFailure { Log.w("Titan", "off notification", it) }
     }
 
+    /**
+     * The screen came on, the phone was unlocked, the app was opened or left: shown, it goes on
+     * top again with a fresh time.
+     */
+    @Synchronized
+    fun refresh(context: Context) {
+        runCatching { if (shown && pending?.isActive != true) show(TitanApp.get(context)) }
+            .onFailure { Log.w("Titan", "off notification", it) }
+    }
+
     /** Swiped away. */
     @Synchronized
     fun dismissed(context: Context) {
         runCatching {
             pending?.cancel()
             pending = null
-            shownSince = 0L
+            shown = false
             // Only the one saying «Выключено»: the VPN on since changes things anyway.
             if (isOff(VpnStatus.state.value)) setDismissed(context, true)
         }.onFailure { Log.w("Titan", "off notification", it) }
@@ -165,7 +178,7 @@ internal object OffNotification {
             show(app)
             return
         }
-        val wait = if (shownSince != 0L) 0L else SETTLE_MS
+        val wait = if (shown) 0L else SETTLE_MS
         pending = scope.launch {
             delay(wait)
             // A start asked for meanwhile: «Выключено» waits for it to get under way.
@@ -194,18 +207,13 @@ internal object OffNotification {
             return
         }
         ensureChannel(app)
-        val nm = app.getSystemService(NotificationManager::class.java)
-        if (shownSince == 0L) {
-            // Still up from before this process: its time stays, so it doesn't move.
-            shownSince = runCatching { nm.activeNotifications.firstOrNull { it.id == ID }?.notification?.`when` }
-                .getOrNull()?.takeIf { it > 0 } ?: System.currentTimeMillis()
-        }
-        nm.notify(ID, build(app, server))
+        app.getSystemService(NotificationManager::class.java).notify(ID, build(app, server))
+        shown = true
     }
 
     /** Also one a previous process left. */
     private fun cancel(app: TitanApp) {
-        shownSince = 0L
+        shown = false
         runCatching { app.getSystemService(NotificationManager::class.java).cancel(ID) }
     }
 
@@ -264,12 +272,15 @@ internal object OffNotification {
             .setContentTitle(Flags.nameWithoutFlag(server.name))
             .setContentText(app.getString(R.string.notification_status_off))
             .setOngoing(true)
+            // A redraw never sounds, vibrates or pops up: its time only puts it on top.
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
+            // Ahead of others of the same importance, as the VPN's own.
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            // Now, not shown: always the newest, like Happ.
             .setShowWhen(false)
-            // When it went off, not now: a redraw doesn't reorder the shade.
-            .setWhen(shownSince)
+            .setWhen(System.currentTimeMillis())
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(open)
             .setDeleteIntent(receiver(app, REQUEST_DISMISSED, ACTION_DISMISSED))

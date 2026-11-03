@@ -2,11 +2,15 @@ package com.titanvps.app
 
 import android.app.Activity
 import android.app.Application
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.VpnService
 import android.os.Bundle
 import android.service.quicksettings.TileService
+import androidx.core.content.ContextCompat
 import com.titanvps.app.data.AppSettings
 import com.titanvps.app.data.NetworkMonitor
 import com.titanvps.app.data.ServerGroups
@@ -82,6 +86,18 @@ class TitanApp : Application() {
             scope.launch {
                 settings.liveNotification.drop(1).collect { TitanVpnService.reshow(this@TitanApp) }
             }
+            // The shade is about to be seen: «Выключено» on top again (while this process lives).
+            val screen = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_USER_PRESENT)
+            }
+            runCatching { ContextCompat.registerReceiver(this, screenReceiver, screen, ContextCompat.RECEIVER_NOT_EXPORTED) }
+        }
+    }
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            OffNotification.refresh(context)
         }
     }
 
@@ -104,6 +120,8 @@ class TitanApp : Application() {
             if (activity is ShortcutActivity) return
             if (activity.isChangingConfigurations) { recreating++; return }
             started = (started - 1).coerceAtLeast(0)
+            // Left: «Выключено» on top again, above what came while in the app.
+            if (started == 0) OffNotification.refresh(this@TitanApp)
         }
 
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
