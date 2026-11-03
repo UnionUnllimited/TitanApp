@@ -1,7 +1,6 @@
 package com.titanvps.app.ui.home
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -34,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -43,7 +43,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -74,6 +73,7 @@ import com.titanvps.app.ui.theme.iosSpring
 import com.titanvps.app.ui.theme.rememberReduceMotion
 import com.titanvps.app.vpn.VpnState
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -107,10 +107,10 @@ private class SliderModel(initial: VpnState) {
 
 /**
  * Выкл | Вкл as one slider (iOS PowerSlider): the knob is dragged across, or a side tapped.
- * Off: a red knob on a translucent red track; on: green; while it connects or goes off: the
- * brand gradient, with a slow shine and a breathing glow. [onToggle] returns false when it
- * can't be done now: the knob goes back with a shake. No ping lock here: on Android pings
- * never pause the VPN.
+ * Off: the knob, the edge and the glow red; on: green; on the way: a blue edge and glow with a
+ * slow shine, the knob blue while it connects and red with a spinner while it goes off. The
+ * glow breathes in every state. [onToggle] returns false when it can't be done now: the knob
+ * goes back with a shake. No ping lock here: on Android pings never pause the VPN.
  */
 @Composable
 internal fun PowerSlider(state: VpnState, onToggle: (Boolean) -> Boolean, modifier: Modifier = Modifier) {
@@ -132,20 +132,26 @@ internal fun PowerSlider(state: VpnState, onToggle: (Boolean) -> Boolean, modifi
     val progress = { model.progress(isOnState.value) }
     val lit by remember { derivedStateOf { model.progress(isOnState.value) > 0.5f } }
 
-    // Brand blue while it connects or goes off, faded in and out.
+    // Brand blue on the edge and the glow while it connects or goes off, faded in and out; on
+    // the knob only while it connects (going off, it stays red with a spinner, as on iOS).
     val busyAmount = animateFloatAsState(if (busy) 1f else 0f, tween(250), label = "sliderBusy")
-    val breath = remember { Animatable(1f) }
+    val connectingAmount = animateFloatAsState(if (phase == SliderPhase.CONNECTING) 1f else 0f, tween(250), label = "sliderConnecting")
+    // The glow breathes in every state (still with animations off). Read only while drawing:
+    // each breath redraws the slider, it doesn't recompose it.
+    val breath = remember { mutableFloatStateOf(1f) }
     val sweep = remember { Animatable(0f) }
     val moving = busy && !reduceMotion
-    LaunchedEffect(moving) {
-        if (!moving) {
-            breath.animateTo(1f, tween(300))
-            return@LaunchedEffect
-        }
-        // One breath in about 2.5 s, between half and full strength.
+    LaunchedEffect(reduceMotion) {
+        breath.floatValue = 1f
+        if (reduceMotion) return@LaunchedEffect
+        // Frames stop while the app is in the background, and the breath with them.
+        val start = withFrameNanos { it }
         while (true) {
-            breath.animateTo(0.5f, tween(1250, easing = FastOutSlowInEasing))
-            breath.animateTo(1f, tween(1250, easing = FastOutSlowInEasing))
+            val t = (withFrameNanos { it } - start) / 1e9
+            // One breath in about 2.5 s, between half and full strength (from full).
+            breath.floatValue = 0.75f + 0.25f * cos(t * 2.5).toFloat()
+            // About 20 frames a second: a slow breath needs no more, and it runs all the time on Главная.
+            delay(40)
         }
     }
     LaunchedEffect(moving) {
@@ -217,7 +223,7 @@ internal fun PowerSlider(state: VpnState, onToggle: (Boolean) -> Boolean, modifi
         if (right == isOnNow()) hint() else commit(right)
     }
 
-    val green = Color(0xFF22C55E)
+    val green = palette.green
     val red = Color(0xFFEF4444)
     val blue = palette.primary
     Box(
@@ -228,25 +234,24 @@ internal fun PowerSlider(state: VpnState, onToggle: (Boolean) -> Boolean, modifi
             .onSizeChanged { model.maxX = ((it.width - 2 * with(density) { INSET.toPx() }) / 2f).coerceAtLeast(1f) }
             .drawWithCache {
                 val radius = size.height / 2
+                val corner = CornerRadius(radius, radius)
                 val capsule = Path().apply { addRoundRect(RoundRect(0f, 0f, size.width, size.height, radius, radius)) }
                 val border = 1.5.dp.toPx()
                 onDrawBehind {
                     val p = progress()
                     val b = busyAmount.value
-                    // A soft light round the slider (outside it only: the track stays see-through).
-                    val glowColor = lerp(lerp(red, Color(0xFF16A34A), p), blue, b)
-                    val glowStrength = mix(mix(0.25f, 0.3f, p), 0.4f * breath.value, b)
+                    // A soft light round the slider, breathing: red off, green on, blue on the way,
+                    // iOS's strengths. Under the track, which is opaque: only the light outside shows.
+                    val glowColor = lerp(lerp(KnobRed[1], KnobGreen[1], p), blue, b)
+                    val glowStrength = mix(mix(0.4f, 0.5f, p), 0.45f, b) * GLOW_SCALE * breath.floatValue
                     val glowRadius = mix(mix(16.dp.toPx(), 24.dp.toPx(), p), 20.dp.toPx(), b)
-                    clipPath(capsule, ClipOp.Difference) {
-                        capsuleGlow(Offset.Zero, size, glowColor, glowStrength, glowRadius)
-                    }
-                    // The track: a translucent tint of the state's colour, a little deeper to one side.
-                    val left = lerp(lerp(red.copy(alpha = 0.2f), green.copy(alpha = 0.13f), p), blue.copy(alpha = 0.12f), b)
-                    val right = lerp(lerp(red.copy(alpha = 0.12f), green.copy(alpha = 0.2f), p), blue.copy(alpha = 0.12f), b)
-                    drawRoundRect(
-                        brush = Brush.horizontalGradient(listOf(left, right)),
-                        cornerRadius = CornerRadius(radius, radius),
-                    )
+                    capsuleGlow(Offset.Zero, size, glowColor, glowStrength, glowRadius)
+                    // The track: flat tints over the palette's, green as the knob goes on, red
+                    // while off (none on the way).
+                    drawRoundRect(palette.track, cornerRadius = corner)
+                    if (p > 0f) drawRoundRect(green.copy(alpha = 0.16f * p), cornerRadius = corner)
+                    val redTint = 0.14f * (1f - p) * (1f - b)
+                    if (redTint > 0f) drawRoundRect(red.copy(alpha = redTint), cornerRadius = corner)
                     if (moving) {
                         clipPath(capsule) {
                             val x = (sweep.value * 1.9f - 0.45f) * size.width
@@ -259,7 +264,8 @@ internal fun PowerSlider(state: VpnState, onToggle: (Boolean) -> Boolean, modifi
                             )
                         }
                     }
-                    val edge = lerp(lerp(red.copy(alpha = 0.5f), green.copy(alpha = 0.4f), p), blue.copy(alpha = 0.55f), b)
+                    // The edge in the state's colour.
+                    val edge = lerp(lerp(red.copy(alpha = 0.5f), green.copy(alpha = 0.45f), p), blue.copy(alpha = 0.5f), b)
                     drawRoundRect(
                         color = edge,
                         topLeft = Offset(border / 2, border / 2),
@@ -355,7 +361,7 @@ internal fun PowerSlider(state: VpnState, onToggle: (Boolean) -> Boolean, modifi
             lit = lit,
             offset = { model.progress(isOnState.value) * model.maxX + model.nudge.value },
             progress = progress,
-            busyAmount = { busyAmount.value },
+            connectingAmount = { connectingAmount.value },
         )
     }
 }
@@ -385,8 +391,8 @@ private fun SideLabels(progress: () -> Float, showHint: Boolean) {
 }
 
 /**
- * The knob: red off, green on, the brand gradient while it connects or goes off, each with
- * its own soft glow; white symbol and text on all of them.
+ * The knob: red off (also while it goes off, with a spinner), green on, the brand gradient
+ * while it connects, each with its own soft glow; white symbol and text on all of them.
  */
 @Composable
 private fun Knob(
@@ -394,7 +400,7 @@ private fun Knob(
     lit: Boolean,
     offset: () -> Float,
     progress: () -> Float,
-    busyAmount: () -> Float,
+    connectingAmount: () -> Float,
 ) {
     Box(
         Modifier
@@ -403,14 +409,18 @@ private fun Knob(
             .graphicsLayer { translationX = offset() }
             .drawBehind {
                 val p = progress()
-                val b = busyAmount()
+                val c = connectingAmount()
                 val radius = size.height / 2
                 val corner = CornerRadius(radius, radius)
-                val glow = lerp(lerp(KnobRed[1], KnobGreen[1], p), KnobBlue, b)
+                val glow = lerp(KnobRed[1], lerp(KnobGreen[1], KnobBlue, c), p)
                 capsuleGlow(Offset(0f, 3.dp.toPx()), size, glow, 0.45f, 10.dp.toPx())
                 drawRoundRect(brush = Brush.verticalGradient(KnobRed), cornerRadius = corner)
-                if (p > 0f) drawRoundRect(brush = Brush.verticalGradient(KnobGreen), cornerRadius = corner, alpha = p)
-                if (b > 0f) drawRoundRect(brush = AccentGradient, cornerRadius = corner, alpha = b)
+                // The lit one fades in over the red with the knob's way across: green, or the
+                // brand's while it connects. The green's alpha makes it red·(1−p) + lit·p.
+                val accentAlpha = p * c
+                val greenAlpha = if (accentAlpha < 1f) p * (1f - c) / (1f - accentAlpha) else 0f
+                if (greenAlpha > 0f) drawRoundRect(brush = Brush.verticalGradient(KnobGreen), cornerRadius = corner, alpha = greenAlpha)
+                if (accentAlpha > 0f) drawRoundRect(brush = AccentGradient, cornerRadius = corner, alpha = accentAlpha)
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -483,6 +493,12 @@ private fun mix(from: Float, to: Float, t: Float): Float = from + (to - from) * 
 private val KnobRed = listOf(Color(0xFFEF4444), Color(0xFFDC2626), Color(0xFFC81E1E))
 private val KnobGreen = listOf(Color(0xFF1AA84E), Color(0xFF16A34A), Color(0xFF15913F))
 private val KnobBlue = Color(0xFF1A66FF)
+
+/**
+ * iOS's glow is a blurred shadow: at the slider's edge it's half the strength it's given,
+ * where [capsuleGlow] is 0.9 of it. At 0.6 of iOS's numbers the light comes out about as strong.
+ */
+private const val GLOW_SCALE = 0.6f
 
 private val HEIGHT = 76.dp
 private val INSET = 6.dp
