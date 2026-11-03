@@ -139,16 +139,20 @@ internal fun RemindersRow() {
     )
 }
 
-/** «Уведомление с сервером»: the look of the VPN notification (iOS: Live Activity / Dynamic Island). */
+/**
+ * «Уведомление с сервером» (iOS: Live Activity / Dynamic Island): the VPN notification with the
+ * server, ‹ › and the numbers, and one while the VPN is off. A hint when Android hides it: the
+ * app's notifications or its channel turned off, or (Android 16) its Live Updates.
+ */
 @Composable
 internal fun LiveNotificationRow() {
     val context = LocalContext.current
     val settings = TitanApp.get(context).settings
     val palette = Titan.palette
     val live by settings.liveNotification.collectAsState()
-    var allowed by remember { mutableStateOf(notificationsEnabled(context)) }
+    var blocked by remember { mutableStateOf(notificationBlock(context)) }
     LifecycleResumeEffect(Unit) {
-        allowed = notificationsEnabled(context)
+        blocked = notificationBlock(context)
         onPauseOrDispose { }
     }
 
@@ -160,16 +164,32 @@ internal fun LiveNotificationRow() {
         iconColor = palette.violet,
         checked = live,
         onCheckedChange = { settings.setLiveNotification(it) },
-        subtitle = "Флаг, сервер и кнопки ‹ › в шторке и на экране блокировки",
+        subtitle = "Сервер, скорость и пинг в шторке и на экране блокировки — и когда VPN выключен",
     )
-    if (!allowed) {
+    // Live Updates matter only to the look with the server.
+    val hint = blocked.takeIf { it != NotificationBlock.LIVE_UPDATES || live }
+    if (hint != null) {
         Column(Modifier.padding(start = 62.dp, end = 16.dp, bottom = 6.dp)) {
-            Text("Уведомления Titan VPS выключены в настройках Android", fontSize = 12.sp, color = palette.orange)
-            TextButton(onClick = { openNotificationSettings(context) }, contentPadding = PaddingValues(0.dp)) {
+            Text(hint.text, fontSize = 12.sp, color = palette.orange)
+            TextButton(onClick = { openNotificationSettings(context, hint) }, contentPadding = PaddingValues(0.dp)) {
                 Text("Открыть настройки", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
+}
+
+/** What in Android's settings keeps the VPN notification from showing as it is set. */
+private enum class NotificationBlock(val text: String) {
+    APP("Уведомления Titan VPS выключены в настройках Android"),
+    CHANNEL("Уведомление «VPN-подключение» выключено в настройках Android"),
+    LIVE_UPDATES("Live Updates для Titan VPS выключены в настройках Android"),
+}
+
+private fun notificationBlock(context: Context): NotificationBlock? = when {
+    !notificationsEnabled(context) -> NotificationBlock.APP
+    TitanVpnService.channelBlocked(context) -> NotificationBlock.CHANNEL
+    Build.VERSION.SDK_INT >= 36 && !TitanVpnService.liveUpdatesAllowed(context) -> NotificationBlock.LIVE_UPDATES
+    else -> null
 }
 
 /** «Кнопка в шторке»: Android 13+ adds the Quick Settings tile from a system dialog. */
@@ -228,4 +248,16 @@ private fun openNotificationSettings(context: Context) {
             Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
         )
     }
+}
+
+/** The screen that lifts [block]; the app's notification settings where it isn't there. */
+private fun openNotificationSettings(context: Context, block: NotificationBlock) {
+    val intent = when (block) {
+        NotificationBlock.APP -> null
+        NotificationBlock.CHANNEL -> Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_CHANNEL_ID, TitanVpnService.CHANNEL_ID)
+        // Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS (Android 16), by its value.
+        NotificationBlock.LIVE_UPDATES -> Intent("android.settings.APP_NOTIFICATION_PROMOTION_SETTINGS")
+    }?.putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+    if (intent == null || runCatching { context.startActivity(intent) }.isFailure) openNotificationSettings(context)
 }

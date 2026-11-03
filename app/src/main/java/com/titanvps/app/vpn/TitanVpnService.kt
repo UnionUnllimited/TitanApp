@@ -4,8 +4,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
@@ -17,8 +19,12 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
 import android.os.SystemClock
 import android.system.Os
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -27,12 +33,17 @@ import androidx.core.content.ContextCompat
 import com.titanvps.app.MainActivity
 import com.titanvps.app.R
 import com.titanvps.app.TitanApp
+import com.titanvps.app.core.ConnectionCheck
 import com.titanvps.app.core.GeoFiles
+import com.titanvps.app.core.LiveLatency
+import com.titanvps.app.core.PingClient
 import com.titanvps.app.core.PluginProcess
 import com.titanvps.app.core.Plugins
+import com.titanvps.app.core.TrafficMeter
 import com.titanvps.app.core.XrayConfigs
 import com.titanvps.app.core.XrayCore
 import com.titanvps.app.data.Flags
+import com.titanvps.app.data.Fmt
 import com.titanvps.app.data.Server
 import com.titanvps.app.data.ServerGroups
 import com.titanvps.app.data.ServerOrder
@@ -46,6 +57,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -119,6 +131,18 @@ class TitanVpnService : VpnService() {
     /** Plugin clients that exited soon after their start, in a row (see [watchPlugin]). */
     @Volatile private var pluginDeaths = 0
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        // The notification's numbers are looked at only while the screen is on.
+        val screen = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        runCatching { ContextCompat.registerReceiver(this, screenReceiver, screen, ContextCompat.RECEIVER_NOT_EXPORTED) }
+            .onFailure { Log.w("Titan", "screen receiver", it) }
+        screenOn = getSystemService(PowerManager::class.java)?.isInteractive != false
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
@@ -1098,6 +1122,8 @@ class TitanVpnService : VpnService() {
         localProxy = null
         since = 0L
         postedAt = 0L
+        // The notification's numbers go with it: nothing redraws it after the stop.
+        stopTicking()
         VpnStatus.set(VpnState.Disconnected)
     }
 
@@ -1111,6 +1137,8 @@ class TitanVpnService : VpnService() {
 
     override fun onDestroy() {
         if (tun != null) stopVpn() else unwatchNetwork()
+        stopTicking()
+        runCatching { unregisterReceiver(screenReceiver) }
         scope.cancel()
         super.onDestroy()
     }
@@ -1129,17 +1157,52 @@ class TitanVpnService : VpnService() {
      * connecting, switching and reconnecting, so its updates don't move it. 0 while off.
      */
     @Volatile private var postedAt = 0L
+    /** startForeground went through: the notification is the service's, a look may redraw it. */
+    @Volatile private var foreground = false
 
     private var iconKey: String? = null
     private var icon: Bitmap? = null
+
+    /** The connection's traffic and speed; [meterSince]: its `since`, so a core restart keeps the count. */
+    private var meter: TrafficMeter.Session? = null
+    private var meterSince = 0L
+    /** What the notification says now: a look posts it only when this changes. */
+    private var shown: Content? = null
+
+    /** The screen is on: the numbers can be seen. */
+    @Volatile private var screenOn = true
+    /** Looks at the numbers ([startTicking]); under the monitor, like what follows. */
+    private var tickJob: Job? = null
+    private var probeJob: Job? = null
+    /** The last probe (elapsedRealtime); 0: none yet. */
+    private var probedAt = 0L
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                // The numbers at once, then every 2 s.
+                Intent.ACTION_SCREEN_ON -> {
+                    screenOn = true
+                    startTicking()
+                }
+                // Nobody sees them: no looks, no probe.
+                Intent.ACTION_SCREEN_OFF -> {
+                    screenOn = false
+                    stopTicking()
+                }
+            }
+        }
+    }
 
     /**
      * The VPN's own notification, kept at the top of the shade while on (like other VPN
      * apps): a channel of default importance (the main section, not "Silent") without sound,
      * colorized in our blue unless it is a Live Update, a time that stays put, connection time
      * on a timer, also on the lock screen, and shown again if swiped away. «Уведомление с
-     * сервером» on: the server's flag and name as the title, the status below and
-     * ‹ Отключить › (on Android 16 asked to be promoted to a Live Update). [since]: connected at.
+     * сервером» on: the server's flag and name as the title, the status below with ↓ ↑ while
+     * connected (expanded: the latency and the traffic), and ‹ Отключить › (on Android 16 asked
+     * to be promoted to a Live Update). [since]: connected at. The numbers between status
+     * changes: [startTicking].
      */
     @Synchronized
     private fun showStatus(s: Status, server: String?, since: Long = 0L) {
@@ -1147,32 +1210,100 @@ class TitanVpnService : VpnService() {
         statusServer = server
         statusSince = since
         if (since > 0) postedAt = since else if (postedAt == 0L) postedAt = System.currentTimeMillis()
+        // A new connection: its traffic counts from its connect.
+        if (s == Status.CONNECTED && since > 0 && since != meterSince) {
+            meterSince = since
+            meter = runCatching { TrafficMeter.totals() }.getOrNull()?.let { TrafficMeter.Session(it) }
+        }
+        // Coming on with the VPN still off (a sticky restart): the off state's notification waits.
+        if (s == Status.CONNECTING) OffNotification.starting()
+        ensureChannel(this)
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
-        runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type) }
+        runCatching {
+            val content = content()
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(content), type)
+            content
+        }
+            .onSuccess {
+                foreground = true
+                shown = it
+            }
             .onFailure { Log.w("Titan", "foreground", it) }
+        if (s == Status.CONNECTED) startTicking()
     }
 
-    private fun buildNotification(): Notification {
-        val nm = getSystemService(NotificationManager::class.java)
-        // Earlier channels: "vpn" was of low importance ("Silent", at the bottom), and either
-        // may have been lowered since, by hand or by Android. A channel's importance can't be
-        // raised and a deleted one comes back as it was, hence a new id. Not while it holds
-        // our foreground notification (Android refuses), which only the new one does.
-        for (old in OLD_CHANNEL_IDS) runCatching { nm.deleteNotificationChannel(old) }
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_DEFAULT).apply {
-                setSound(null, null)
-                enableVibration(false)
-                setShowBadge(false)
+    /**
+     * What the notification says, without its intents and icons: a look redraws it only when
+     * this changes. [more]: under [text] when expanded, the latency and the traffic.
+     */
+    private data class Content(
+        val status: Status,
+        val name: String?,
+        val live: Boolean,
+        val promoted: Boolean,
+        val steps: Boolean,
+        val night: Boolean,
+        val text: String,
+        val latency: String?,
+        /** [latency] under 120 ms: green. */
+        val fast: Boolean,
+        val spent: String?,
+        /** The Live Update's chip (only when [promoted]). */
+        val chip: String?,
+    ) {
+        val more: String? get() = listOfNotNull(latency, spent).joinToString(" · ").ifEmpty { null }
+    }
+
+    /** Under the monitor. */
+    private fun content(): Content {
+        val name = statusServer
+        val live = name != null && TitanApp.get(this).settings.liveNotification.value
+        // Android 16 is asked to promote it to a Live Update, which a colorized one can't be;
+        // only while Live Updates are allowed for the app, or it would lose the top as well.
+        val promoted = live && Build.VERSION.SDK_INT >= 36 && liveUpdatesAllowed(this)
+        // The theme counts only off our blue (the flag's disc, the green).
+        val night = promoted &&
+            (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        var text = statusText(live, name)
+        var latency: String? = null
+        var fast = false
+        var spent: String? = null
+        var chip = if (promoted) name?.let { Flags.codeOf(it)?.uppercase() } ?: "VPN" else null
+        if (live && name != null && status == Status.CONNECTED) {
+            val now = SystemClock.elapsedRealtime()
+            val m = meter
+            val speed = m?.speed(now)
+            // As Главная: «↓ 2.4 МБ/с ↑ 140 КБ/с».
+            if (speed != null) text += " · ↓ " + Fmt.speed(speed.down) + " ↑ " + Fmt.speed(speed.up)
+            val ms = LiveLatency.shown(name, now)
+            if (ms != null) {
+                latency = getString(R.string.notification_ms, ms)
+                fast = ms < ConnectionCheck.FAST_MS
             }
-        )
-        val reshow = PendingIntent.getService(
-            this, 2, Intent(this, TitanVpnService::class.java).setAction(ACTION_RESHOW), PendingIntent.FLAG_IMMUTABLE
-        )
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
-        )
-        val timer = status == Status.CONNECTED && statusSince > 0
+            // Fmt.bytes counts in МБ: «Потрачено 0 МБ» isn't said.
+            if (m != null && m.used >= SPENT_MIN) spent = getString(R.string.notification_spent, Fmt.bytes(m.used))
+            if (promoted) when {
+                speed != null && speed.down >= CHIP_SPEED_MIN -> chip = "↓" + shortSpeed(speed.down)
+                latency != null -> chip = latency
+            }
+        }
+        val steps = live && canStep()
+        return Content(status, name, live, promoted, steps, night, text, latency, fast, spent, chip)
+    }
+
+    /** The notification's intents, the same each time: a redraw asks Android for none. */
+    private val reshowIntent by lazy {
+        PendingIntent.getService(this, 2, Intent(this, TitanVpnService::class.java).setAction(ACTION_RESHOW), PendingIntent.FLAG_IMMUTABLE)
+    }
+    private val openIntent by lazy {
+        PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+    }
+    private val stopIntent by lazy { serviceIntent(1, ACTION_STOP) }
+    private val prevIntent by lazy { serviceIntent(6, ACTION_PREV) }
+    private val nextIntent by lazy { serviceIntent(7, ACTION_NEXT) }
+
+    private fun buildNotification(c: Content): Notification {
+        val timer = c.status == Status.CONNECTED && statusSince > 0
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_shield)
             .setOngoing(true)
@@ -1187,39 +1318,57 @@ class TitanVpnService : VpnService() {
             .setWhen(postedAt)
             .setUsesChronometer(timer)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setDeleteIntent(reshow)
-            .setContentIntent(open)
-        val name = statusServer
-        val stop = serviceIntent(1, ACTION_STOP)
-        val live = name != null && TitanApp.get(this).settings.liveNotification.value
-        // Android 16 is asked to promote it to a Live Update, which a colorized one can't be;
-        // only while Live Updates are allowed for the app, or it would lose the top as well.
-        val promoted = live && Build.VERSION.SDK_INT >= 36 && canPromote(nm)
+            .setDeleteIntent(reshowIntent)
+            .setContentIntent(openIntent)
+        val name = c.name
         // Elsewhere our blue: Android ranks a colorized foreground service first (Android 12+:
         // in the top section, with media and calls), not under every newer notification.
-        if (!promoted) builder.setColorized(true).setColor(BRAND_COLOR)
-        if (name != null && live) {
+        if (!c.promoted) builder.setColorized(true).setColor(BRAND_COLOR)
+        if (name != null && c.live) {
             builder.setContentTitle(Flags.nameWithoutFlag(name))
-                .setContentText(statusText(live = true, name))
-            flagIcon(name, onBrand = !promoted)?.let { builder.setLargeIcon(it) }
-            val steps = canStep()
-            if (steps) builder.addAction(0, getString(R.string.action_prev), serviceIntent(6, ACTION_PREV))
-            builder.addAction(0, getString(R.string.action_disconnect), stop)
-            if (steps) builder.addAction(0, getString(R.string.action_next), serviceIntent(7, ACTION_NEXT))
+                .setContentText(c.text)
+            // Expanded (a Live Update may be): the latency and the traffic on a line of their own.
+            if (c.more != null) builder.setStyle(NotificationCompat.BigTextStyle().bigText(expanded(c)))
+            flagIcon(name, onBrand = !c.promoted)?.let { builder.setLargeIcon(it) }
+            if (c.steps) builder.addAction(0, getString(R.string.action_prev), prevIntent)
+            builder.addAction(0, getString(R.string.action_disconnect), stopIntent)
+            if (c.steps) builder.addAction(0, getString(R.string.action_next), nextIntent)
             // Android 16 Live Update (the Dynamic Island of Android): string keys, so any
             // compile SDK builds it; older versions ignore them.
-            if (promoted) {
+            if (c.promoted) {
                 builder.addExtras(Bundle().apply {
                     putBoolean("android.requestPromotedOngoing", true)
-                    putString("android.shortCriticalText", Flags.codeOf(name)?.uppercase() ?: "VPN")
+                    putString("android.shortCriticalText", c.chip)
                 })
             }
         } else {
             builder.setContentTitle(getString(R.string.app_name))
-                .setContentText(statusText(live = false, name))
-                .addAction(0, getString(R.string.action_disconnect), stop)
+                .setContentText(c.text)
+                .addAction(0, getString(R.string.action_disconnect), stopIntent)
         }
         return builder.build()
+    }
+
+    /**
+     * The status line, then the latency and the traffic. The latency as Главная's: green under
+     * 120 ms, else in the text's colour, never red or orange (from 300 ms none is shown).
+     */
+    private fun expanded(c: Content): CharSequence {
+        val out = SpannableStringBuilder(c.text).append('\n')
+        c.latency?.let { ms ->
+            val start = out.length
+            out.append(ms)
+            // On our blue a light green that reads there; elsewhere Главная's.
+            val green = when {
+                !c.promoted -> GREEN_ON_BRAND
+                c.night -> GREEN_NIGHT
+                else -> GREEN_DAY
+            }
+            if (c.fast) out.setSpan(ForegroundColorSpan(green), start, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (c.spent != null) out.append(" · ")
+        }
+        c.spent?.let { out.append(it) }
+        return out
     }
 
     private fun statusText(live: Boolean, name: String?): String = when (status) {
@@ -1231,6 +1380,81 @@ class TitanVpnService : VpnService() {
         Status.RECONNECTING -> getString(R.string.notification_reconnecting)
     }
 
+    /**
+     * While on with «Уведомление с сервером» and the screen on: a look at once, then every
+     * [TICK_MS] ([look]). Never takes [lock] nor touches the tun, so a switch or an off never
+     * waits for it; stopped with the VPN (stopVpn, onDestroy) and when the screen goes off.
+     */
+    @Synchronized
+    private fun startTicking() {
+        if (tickJob?.isActive == true || !ticks()) return
+        tickJob = scope.launch {
+            val self = coroutineContext.job
+            // A failed look is logged, never thrown: this process carries the VPN.
+            while (runCatching { look(self) }.onFailure { Log.w("Titan", "notification look", it) }.getOrDefault(true)) {
+                delay(TICK_MS)
+            }
+        }
+    }
+
+    /** Worth a look: the VPN on, the screen on, the numbers shown. Under the monitor. */
+    private fun ticks(): Boolean =
+        tun != null && screenOn && TitanApp.get(this).settings.liveNotification.value
+
+    @Synchronized
+    private fun stopTicking() {
+        tickJob?.cancel()
+        tickJob = null
+        probeJob?.cancel()
+        probeJob = null
+    }
+
+    /**
+     * One look of the ticker [self]: the numbers redrawn with notify (never startForeground),
+     * only when what the notification says changed, and the probe when it is due. False:
+     * nothing to look for any more.
+     */
+    private fun look(self: Job): Boolean {
+        val totals = runCatching { TrafficMeter.totals() }.getOrNull()
+        synchronized(this) {
+            // Stopped or replaced meanwhile: nothing more from this one.
+            if (tickJob !== self) return false
+            if (!ticks()) {
+                tickJob = null
+                return false
+            }
+            if (status != Status.CONNECTED || !foreground) return true
+            totals?.let { meter?.look(it) }
+            val content = content()
+            if (content != shown) {
+                runCatching { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(content)) }
+                    .onSuccess { shown = content }
+                    .onFailure { Log.w("Titan", "notification", it) }
+            }
+            statusServer?.let { probeIfDue(it) }
+            return true
+        }
+    }
+
+    /**
+     * The notification's own latency ([ConnectionCheck.probe]) when it has none of [name] under a
+     * minute old: at most once a minute, never next to Проверить соединение or a Пинг, nor in
+     * the first seconds of a core (the app's own check comes then, and traffic may not flow
+     * yet). Under the monitor.
+     */
+    private fun probeIfDue(name: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (probeJob?.isActive == true || (probedAt != 0L && now - probedAt < PROBE_EVERY_MS)) return
+        if (now - launchedAt < PROBE_SETTLE_MS || !LiveLatency.due(name, now)) return
+        if (ConnectionCheck.checking || PingClient.busy) return
+        val on = VpnStatus.state.value as? VpnState.Connected ?: return
+        if (on.serverName != name) return
+        probedAt = now
+        probeJob = scope.launch {
+            runCatching { ConnectionCheck.probe(on) }.onFailure { Log.w("Titan", "latency probe", it) }
+        }
+    }
+
     /** ‹ › only when the current group has another server to step to. */
     private fun canStep(): Boolean {
         val app = TitanApp.get(this)
@@ -1240,14 +1464,6 @@ class TitanVpnService : VpnService() {
     }
 
     /**
-     * Android 16: Live Updates allowed for the app (the user can turn them off). Looked up by
-     * name, so any compile SDK builds it; false where there is no such call.
-     */
-    private fun canPromote(nm: NotificationManager): Boolean = runCatching {
-        NotificationManager::class.java.getMethod("canPostPromotedNotifications").invoke(nm) as Boolean
-    }.getOrDefault(false)
-
-    /**
      * The round flag. On our blue ([onBrand]): a white disc, so the shield of a server without
      * a flag still shows; otherwise the shade follows the system theme, so do the disc and the ring.
      */
@@ -1255,14 +1471,7 @@ class TitanVpnService : VpnService() {
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val key = "$name|$night|$onBrand"
         if (key == iconKey) return icon
-        val px = (64 * resources.displayMetrics.density).roundToInt()
-        icon = runCatching {
-            when {
-                onBrand -> Flags.circleBitmap(this, name, px, 0xFFFFFFFF.toInt(), 0x40FFFFFF)
-                night -> Flags.circleBitmap(this, name, px, 0x1AFFFFFF, 0x26FFFFFF)
-                else -> Flags.circleBitmap(this, name, px, 0x14000000, 0x1F000000)
-            }
-        }.getOrNull()
+        icon = flagBitmap(this, name, onBrand)
         iconKey = key
         return icon
     }
@@ -1290,12 +1499,27 @@ class TitanVpnService : VpnService() {
         private const val ALERT_ID = 2
         /** «Ограничения сняты» and the offers to go back from a bypass. */
         private const val RETURN_ID = 4
-        private const val CHANNEL_ID = "vpn_ongoing"
+        /** The VPN notification's channel, the off state's too ([OffNotification], ID 5). */
+        internal const val CHANNEL_ID = "vpn_ongoing"
         /** Never to be used again: a channel created under a deleted id gets its old settings back. */
         private val OLD_CHANNEL_IDS = arrayOf("vpn", "vpn_status")
         private const val NOTIFICATION_ID = 1
         /** The colour of the VPN notification (the app's blue). */
         private val BRAND_COLOR = 0xFF1A66FF.toInt()
+        /** A quick latency's green: a light one on our blue, else Главная's (light and dark theme). */
+        private val GREEN_ON_BRAND = 0xFF86EFAC.toInt()
+        private val GREEN_DAY = 0xFF12A150.toInt()
+        private val GREEN_NIGHT = 0xFF22C55E.toInt()
+        /** The numbers are looked at this often while the screen is on. */
+        private const val TICK_MS = 2_000L
+        /** The notification's own latency at most this often ([probeIfDue]). */
+        private const val PROBE_EVERY_MS = 60_000L
+        /** Nor sooner than this after a core start. */
+        private const val PROBE_SETTLE_MS = 5_000L
+        /** «Потрачено» from a megabyte. */
+        private const val SPENT_MIN = 1_048_576L
+        /** The Live Update's chip shows ↓ from this speed (bytes a second), else the latency. */
+        private const val CHIP_SPEED_MIN = 10 * 1024.0
         private const val MTU = 1500
         /** A new network settles (DHCP, DNS) before the core restarts on it. */
         private const val NETWORK_SETTLE_MS = 1_500L
@@ -1352,6 +1576,8 @@ class TitanVpnService : VpnService() {
 
         /** Connects, or switches to the selected server if already on. */
         fun start(context: Context) {
+            // «Выключено» waits for it (OffNotification).
+            OffNotification.starting()
             ContextCompat.startForegroundService(
                 context, Intent(context, TitanVpnService::class.java).setAction(ACTION_START)
             )
@@ -1359,6 +1585,7 @@ class TitanVpnService : VpnService() {
 
         /** Keep-alive brings the VPN back (boot, app update): like [start], with retries. */
         internal fun revive(context: Context) {
+            OffNotification.starting()
             ContextCompat.startForegroundService(
                 context, Intent(context, TitanVpnService::class.java).setAction(ACTION_START).putExtra(EXTRA_REVIVE, true)
             )
@@ -1376,11 +1603,87 @@ class TitanVpnService : VpnService() {
             }
         }
 
-        /** Draws the notification again (its look changed in Настройки, notifications allowed); only while on. */
+        /**
+         * Draws the notification again (its look changed in Настройки, notifications allowed):
+         * the VPN's while on, the off state's ([OffNotification]) while off.
+         */
         fun reshow(context: Context) {
             val st = VpnStatus.state.value
-            if (st !is VpnState.Connected && st != VpnState.Connecting) return
+            if (st !is VpnState.Connected && st != VpnState.Connecting) {
+                OffNotification.update(context)
+                return
+            }
             runCatching { context.startService(Intent(context, TitanVpnService::class.java).setAction(ACTION_RESHOW)) }
+        }
+
+        /** The channel is set up in this process: once, not on every redraw. */
+        @Volatile private var channelReady = false
+
+        /**
+         * The VPN notification's channel, also the off state's: default importance (the main
+         * section, not "Silent") without sound, vibration or badge. Earlier channels: "vpn" was
+         * of low importance ("Silent", at the bottom), and either may have been lowered since,
+         * by hand or by Android. A channel's importance can't be raised and a deleted one comes
+         * back as it was, hence a new id. Not while it holds our foreground notification
+         * (Android refuses), which only the new one does: tried again then.
+         */
+        internal fun ensureChannel(context: Context) {
+            if (channelReady) return
+            val nm = context.getSystemService(NotificationManager::class.java) ?: return
+            var ready = true
+            for (old in OLD_CHANNEL_IDS) runCatching { nm.deleteNotificationChannel(old) }.onFailure { ready = false }
+            runCatching {
+                nm.createNotificationChannel(
+                    NotificationChannel(CHANNEL_ID, context.getString(R.string.notification_channel), NotificationManager.IMPORTANCE_DEFAULT).apply {
+                        setSound(null, null)
+                        enableVibration(false)
+                        setShowBadge(false)
+                    }
+                )
+            }.onFailure { ready = false }
+            channelReady = ready
+        }
+
+        /** The VPN notification's channel is turned off in Android's settings. */
+        internal fun channelBlocked(context: Context): Boolean = runCatching {
+            context.getSystemService(NotificationManager::class.java)?.getNotificationChannel(CHANNEL_ID)?.importance ==
+                NotificationManager.IMPORTANCE_NONE
+        }.getOrDefault(false)
+
+        /** NotificationManager.canPostPromotedNotifications (Android 16); null where there is none. */
+        private val canPromote by lazy {
+            runCatching { NotificationManager::class.java.getMethod("canPostPromotedNotifications") }.getOrNull()
+        }
+
+        /**
+         * Android 16: Live Updates allowed for the app (the user can turn them off). Looked up by
+         * name, so any compile SDK builds it; false where there is no such call.
+         */
+        internal fun liveUpdatesAllowed(context: Context): Boolean = runCatching {
+            canPromote?.invoke(context.getSystemService(NotificationManager::class.java)) as? Boolean
+        }.getOrNull() ?: false
+
+        /**
+         * The server's round flag for a notification. On our blue ([onBrand]): a white disc, so
+         * the shield of a server without a flag still shows; otherwise the shade follows the
+         * system theme, so do the disc and the ring.
+         */
+        internal fun flagBitmap(context: Context, name: String, onBrand: Boolean): Bitmap? {
+            val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            val px = (64 * context.resources.displayMetrics.density).roundToInt()
+            return runCatching {
+                when {
+                    onBrand -> Flags.circleBitmap(context, name, px, 0xFFFFFFFF.toInt(), 0x40FFFFFF)
+                    night -> Flags.circleBitmap(context, name, px, 0x1AFFFFFF, 0x26FFFFFF)
+                    else -> Flags.circleBitmap(context, name, px, 0x14000000, 0x1F000000)
+                }
+            }.getOrNull()
+        }
+
+        /** "2.4М", "140К": the Live Update chip's ↓ (Fmt.speed's number and its unit's letter). */
+        private fun shortSpeed(bytesPerSec: Double): String {
+            val parts = Fmt.speed(bytesPerSec).split(' ')
+            return parts.first() + parts.getOrNull(1)?.take(1).orEmpty()
         }
     }
 }

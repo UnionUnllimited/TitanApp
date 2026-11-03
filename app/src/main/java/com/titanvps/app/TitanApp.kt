@@ -12,6 +12,7 @@ import com.titanvps.app.data.NetworkMonitor
 import com.titanvps.app.data.ServerGroups
 import com.titanvps.app.data.SubscriptionRepository
 import com.titanvps.app.reminders.Reminders
+import com.titanvps.app.vpn.OffNotification
 import com.titanvps.app.vpn.ShortcutActivity
 import com.titanvps.app.vpn.TitanVpnService
 import com.titanvps.app.vpn.VpnState
@@ -56,15 +57,19 @@ class TitanApp : Application() {
         if (isMainProcess()) {
             registerActivityLifecycleCallbacks(foregroundWatcher)
             val scope = MainScope()
-            // Home-screen widget and the Quick Settings tile follow the VPN state, the selected
-            // server and the favourites (the order of ‹ ›).
+            // Home-screen widget, the Quick Settings tile and the notification while off follow
+            // the VPN state, the selected server and the favourites (the order of ‹ ›); the
+            // notification also «Уведомление с сервером» and the key.
             scope.launch {
-                combine(VpnStatus.state, repository.selectedId, settings.favorites) { state, _, _ -> state }
+                combine(
+                    VpnStatus.state, repository.selectedId, settings.favorites, settings.liveNotification, repository.subscription,
+                ) { state, _, _, _, _ -> state }
                     .collect {
                         runCatching { TitanWidget.update(this@TitanApp, it) }
                         runCatching {
                             TileService.requestListeningState(this@TitanApp, ComponentName(this@TitanApp, VpnTileService::class.java))
                         }
+                        runCatching { OffNotification.update(this@TitanApp) }
                     }
             }
             // Напоминания: scheduled again on every start (alarms don't survive a force-stop),
@@ -85,7 +90,11 @@ class TitanApp : Application() {
             // The shortcut screen is invisible and closes at once: not an opening of the app.
             if (activity is ShortcutActivity) return
             if (recreating > 0) { recreating--; return }
-            if (started++ == 0) autoConnectOnOpen()
+            if (started++ == 0) {
+                autoConnectOnOpen()
+                // Swiped away: back with each opening of the app.
+                runCatching { OffNotification.update(this@TitanApp) }
+            }
         }
 
         override fun onActivityStopped(activity: Activity) {
