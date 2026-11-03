@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.CreditCardOff
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WifiOff
@@ -126,8 +127,9 @@ import kotlinx.coroutines.withContext
 
 /**
  * Personal cabinet in the app: the site's limited cabinet (signed in by the subscription's
- * link, no email or Telegram login) shown natively — the subscription, renewal tariffs,
- * payment codes. Only the payment page itself opens (in [PaymentActivity]).
+ * link, no email or Telegram login) shown natively — the subscription (its «Продлить подписку»
+ * goes to Тарифы), renewal tariffs, payment codes. Only the payment page itself opens (in
+ * [PaymentActivity]).
  */
 class CabinetActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -193,6 +195,9 @@ private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, startTab: Int,
     var loading by remember { mutableStateOf(true) }
     var pulling by remember { mutableStateOf(false) }
     var tab by remember { mutableIntStateOf(startTab) }
+    // A tab shows from its top (Продлить подписку is at the bottom of Подписка).
+    val scroll = rememberScrollState()
+    LaunchedEffect(tab) { scroll.animateScrollTo(0) }
     // A payment page was opened: its result is read when the cabinet is back on screen.
     var awaitingPayment by remember { mutableStateOf(false) }
     var recheck by remember { mutableIntStateOf(0) }
@@ -269,7 +274,7 @@ private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, startTab: Int,
             )
         }
         SegmentedTabs(
-            items = listOf(SegmentItem("Подписка", TitanIcons.Crown), SegmentItem("Оплатить", Icons.Filled.CreditCard)),
+            items = listOf(SegmentItem("Подписка", TitanIcons.Crown), SegmentItem("Тарифы", Icons.Filled.Sell)),
             selectedIndex = tab,
             onSelect = { tab = it },
             modifier = Modifier.padding(horizontal = 16.dp).padding(top = 4.dp),
@@ -288,7 +293,7 @@ private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, startTab: Int,
                 },
                 modifier = Modifier.fillMaxSize(),
             ) {
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.fillMaxSize().verticalScroll(scroll), horizontalAlignment = Alignment.CenterHorizontally) {
                     Column(
                         Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -297,8 +302,14 @@ private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, startTab: Int,
                         error?.let { Banner(it, Icons.Filled.Warning, palette.red) }
                         Crossfade(targetState = tab, label = "cabinetTab") { shown ->
                             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                                if (shown == 0) {
+                                if (shown == CabinetActivity.TAB_SUBSCRIPTION) {
                                     SubscriptionPane(d, devices) { id -> copy(context, id) }
+                                    PrimaryButton(
+                                        "Продлить подписку",
+                                        { tab = CabinetActivity.TAB_TARIFFS },
+                                        Modifier.padding(top = 4.dp),
+                                        icon = TitanIcons.Crown,
+                                    )
                                 } else {
                                     PayPane(
                                         d,
