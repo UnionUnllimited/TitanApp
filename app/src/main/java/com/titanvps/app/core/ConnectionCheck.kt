@@ -76,11 +76,12 @@ object ConnectionCheck {
      * the exit address. [warm] false: the latency isn't measured (null).
      */
     suspend fun once(warm: Boolean = true): State = withContext(Dispatchers.IO) {
-        // The connection measured, and when the check began (the newest check's latency stays).
+        // The connection measured, and when the check began (the newest check's latency stays);
+        // counted first, so a probe beginning alongside gives way either way.
         val on = VpnStatus.state.value as? VpnState.Connected
-        val startedAt = LiveLatency.begin()
         checks.incrementAndGet()
         try {
+            val startedAt = LiveLatency.begin()
             val result = check(warm)
             note(result, warm, on, startedAt)
             result
@@ -139,6 +140,8 @@ object ConnectionCheck {
         val lp = VpnStatus.localProxy ?: return@withContext
         if (VpnStatus.state.value != on) return@withContext
         val startedAt = LiveLatency.begin()
+        // A check that began just before this one: its result is the one to keep.
+        if (checking) return@withContext
         val opened = Opened()
         val client = client(lp, opened)
         val ms = try {
