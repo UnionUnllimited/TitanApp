@@ -21,10 +21,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.outlined.Badge
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,6 +37,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -58,10 +63,12 @@ import com.titanvps.app.ui.theme.AccentGradient
 import com.titanvps.app.ui.theme.DangerGradient
 import com.titanvps.app.ui.theme.Titan
 import com.titanvps.app.ui.theme.fixedSp
+import kotlinx.coroutines.flow.first
 
 /**
- * "Подписка" tab: the expiry date, the bypass traffic and a "Личный кабинет" button;
- * renewing, buying GB etc. all happen in the cabinet. Two columns on a tablet.
+ * "Подписка" tab: the expiry date, the bypass traffic with «Добавить ГБ», «Продлить подписку»
+ * and a "Личный кабинет" button; renewing and buying GB happen in the cabinet (its Тарифы).
+ * Two columns on a tablet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,22 +113,20 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onO
         }
     }
     val traffic: @Composable (Modifier) -> Unit = { m ->
+        val left = (info.totalBytes - info.usedBytes).coerceAtLeast(0)
+        // Under a tenth left: the bar orange to red, «Добавить ГБ» orange.
+        val low = left * 10 < info.totalBytes
         TitanCard(m, contentPadding = PaddingValues(16.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Трафик на обходах", color = palette.textSecondary, fontSize = 14.sp)
                 if (info.totalBytes > 0) {
-                    val left = (info.totalBytes - info.usedBytes).coerceAtLeast(0)
                     Text(
                         "${Fmt.bytes(left)} из ${Fmt.bytes(info.totalBytes)}",
                         fontSize = fixedSp(26f),
                         lineHeight = fixedSp(32f),
                         fontWeight = FontWeight.Bold,
                     )
-                    // Under a tenth left: orange to red.
-                    GradientBar(
-                        left.toFloat() / info.totalBytes,
-                        if (left * 10 < info.totalBytes) DangerGradient else AccentGradient,
-                    )
+                    GradientBar(left.toFloat() / info.totalBytes, if (low) DangerGradient else AccentGradient)
                 } else {
                     Text("Безлимит", fontSize = fixedSp(26f), lineHeight = fixedSp(32f), fontWeight = FontWeight.Bold)
                 }
@@ -130,17 +135,45 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onO
                     "Обходы — серверы для мобильного интернета, когда оператор пропускает только " +
                         "разрешённые сайты (белые списки) и обычные серверы не работают. " +
                         "Гигабайты списываются только пока вы подключены к обходу. " +
-                        "На Wi-Fi обходы не нужны и недоступны. Закончились ГБ — докупите в личном кабинете.",
+                        "На Wi-Fi обходы не нужны и недоступны." +
+                        if (info.totalBytes > 0) " Закончились ГБ — нажмите «Добавить ГБ»." else "",
                     Modifier.padding(top = 4.dp),
                     color = palette.textSecondary,
                     fontSize = 12.sp,
                     lineHeight = 16.sp,
                 )
+                if (info.totalBytes > 0) {
+                    // The cabinet's Тарифы.
+                    SecondaryButton(
+                        "Добавить ГБ",
+                        { viewModel.openCabinet(CabinetActivity.TAB_TARIFFS) },
+                        Modifier.padding(top = 4.dp),
+                        icon = Icons.Filled.AddCircle,
+                        tint = if (low) palette.orange else palette.primary,
+                        minHeight = 44.dp,
+                    )
+                }
             }
         }
     }
 
-    PullToRefreshBox(isRefreshing = busy, onRefresh = { viewModel.refreshByHand() }, modifier = Modifier.fillMaxSize()) {
+    // Its own spinner for a pull only; the header's arrow turns for any refresh. It stays until
+    // the refresh is over (one already running stands for the pull's).
+    var pulling by remember { mutableStateOf(false) }
+    LaunchedEffect(pulling) {
+        if (pulling) {
+            viewModel.busy.first { !it }
+            pulling = false
+        }
+    }
+    PullToRefreshBox(
+        isRefreshing = pulling,
+        onRefresh = {
+            pulling = true
+            viewModel.refreshByHand()
+        },
+        modifier = Modifier.fillMaxSize(),
+    ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val wide = maxWidth >= 720.dp
             Column(
@@ -173,7 +206,12 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onO
                         traffic(Modifier)
                     }
 
-                    PrimaryButton("Личный кабинет", { viewModel.openCabinet() }, icon = Icons.Filled.AccountCircle)
+                    PrimaryButton(
+                        "Продлить подписку",
+                        { viewModel.openCabinet(CabinetActivity.TAB_TARIFFS) },
+                        icon = TitanIcons.Crown,
+                    )
+                    SecondaryButton("Личный кабинет", { viewModel.openCabinet() }, icon = Icons.Filled.AccountCircle)
 
                     account?.takeIf { it.devicesEnabled }?.let { acc ->
                         TitanCard {
@@ -197,9 +235,10 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onO
                     TitanCard(contentPadding = PaddingValues(16.dp)) {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text("В личном кабинете", fontWeight = FontWeight.SemiBold)
-                            Feature(Icons.Filled.Autorenew, "Продление подписки")
-                            Feature(Icons.Outlined.PieChart, "Докупка ГБ для обходов")
-                            Feature(Icons.Outlined.Sell, "Коды оплаты")
+                            Feature(Icons.Outlined.CalendarMonth, "Сколько дней осталось")
+                            Feature(Icons.Outlined.PieChart, "Трафик на обходах")
+                            Feature(Icons.Outlined.Badge, "Устройства и ваш ID")
+                            Feature(Icons.Outlined.Sell, "Тарифы и коды на продление")
                         }
                     }
 
