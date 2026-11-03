@@ -43,11 +43,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.WifiOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -69,13 +67,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.DialogProperties
 import com.titanvps.app.TitanApp
 import com.titanvps.app.ui.kit.CircleIconButton
+import com.titanvps.app.ui.kit.DialogButton
 import com.titanvps.app.ui.kit.Haptics
 import com.titanvps.app.ui.kit.PrimaryButton
+import com.titanvps.app.ui.kit.TitanAlertDialog
 import com.titanvps.app.ui.kit.ToastKind
 import com.titanvps.app.ui.kit.Toasts
 import com.titanvps.app.ui.kit.pressable
 import com.titanvps.app.ui.theme.AccentGradient
-import com.titanvps.app.ui.theme.ProvideTitanTextScale
 import com.titanvps.app.ui.theme.Titan
 import com.titanvps.app.ui.theme.TitanTheme
 import com.titanvps.app.ui.theme.isDark
@@ -453,27 +452,23 @@ class PaymentActivity : ComponentActivity() {
     @Composable
     private fun PageDialogView(d: PageDialog) {
         var text by remember(d) { mutableStateOf(d.text) }
-        AlertDialog(
+        TitanAlertDialog(
             onDismissRequest = { answer(d, false, text) },
             properties = DialogProperties(dismissOnClickOutside = false),
-            title = { ProvideTitanTextScale { Text(d.title, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
+            title = { Text(d.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             text = {
-                ProvideTitanTextScale {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (d.message.isNotEmpty()) Text(d.message)
-                        if (d.kind == DialogKind.PROMPT) {
-                            OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), singleLine = true)
-                        }
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (d.message.isNotEmpty()) Text(d.message)
+                    if (d.kind == DialogKind.PROMPT) {
+                        OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), singleLine = true)
                     }
                 }
             },
-            confirmButton = {
-                ProvideTitanTextScale { TextButton(onClick = { answer(d, true, text) }) { Text("OK") } }
-            },
+            confirmButton = { DialogButton("OK", { answer(d, true, text) }, bold = true) },
             dismissButton = if (d.kind == DialogKind.ALERT) {
                 null
             } else {
-                { ProvideTitanTextScale { TextButton(onClick = { answer(d, false, text) }) { Text("Отмена") } } }
+                { DialogButton("Отмена", { answer(d, false, text) }) }
             },
         )
     }

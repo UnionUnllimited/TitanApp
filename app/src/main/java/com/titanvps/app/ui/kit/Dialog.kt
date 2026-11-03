@@ -8,6 +8,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.titanvps.app.ui.theme.ProvideTitanTextScale
 import com.titanvps.app.ui.theme.Titan
 
@@ -23,6 +24,7 @@ internal fun TitanAlertDialog(
     dismissButton: (@Composable () -> Unit)? = null,
     title: (@Composable () -> Unit)? = null,
     text: (@Composable () -> Unit)? = null,
+    properties: DialogProperties = DialogProperties(),
 ) {
     val palette = Titan.palette
     AlertDialog(
@@ -35,20 +37,29 @@ internal fun TitanAlertDialog(
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = palette.textSecondary,
         shape = RoundedCornerShape(24.dp),
+        properties = properties,
     )
 }
 
 /**
  * A dialog's button: the primary colour, red for what can't be undone ([destructive]: Выйти,
- * Сбросить, Удалить), the main action ([bold]) in semibold, as iOS's alerts.
+ * Сбросить, Удалить), the main action ([bold]) in semibold, as iOS's alerts. Off ([enabled]):
+ * faded, as the kit's other controls.
  */
 @Composable
-internal fun DialogButton(text: String, onClick: () -> Unit, destructive: Boolean = false, bold: Boolean = false) {
+internal fun DialogButton(
+    text: String,
+    onClick: () -> Unit,
+    destructive: Boolean = false,
+    bold: Boolean = false,
+    enabled: Boolean = true,
+) {
     val palette = Titan.palette
-    TextButton(onClick = onClick) {
+    val color = if (destructive) palette.red else palette.primary
+    TextButton(onClick = onClick, enabled = enabled) {
         Text(
             text,
-            color = if (destructive) palette.red else palette.primary,
+            color = if (enabled) color else color.copy(alpha = 0.5f),
             fontWeight = if (bold || destructive) FontWeight.SemiBold else FontWeight.Normal,
         )
     }

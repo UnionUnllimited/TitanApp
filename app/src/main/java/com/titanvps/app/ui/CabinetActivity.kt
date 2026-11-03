@@ -55,13 +55,11 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WifiOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -97,6 +95,7 @@ import com.titanvps.app.TitanApp
 import com.titanvps.app.data.CabinetApi
 import com.titanvps.app.data.Fmt
 import com.titanvps.app.ui.kit.CircleIconButton
+import com.titanvps.app.ui.kit.DialogButton
 import com.titanvps.app.ui.kit.GradientBar
 import com.titanvps.app.ui.kit.IconTile
 import com.titanvps.app.ui.kit.PrimaryButton
@@ -104,6 +103,7 @@ import com.titanvps.app.ui.kit.SecondaryButton
 import com.titanvps.app.ui.kit.SegmentItem
 import com.titanvps.app.ui.kit.SegmentedTabs
 import com.titanvps.app.ui.kit.Skeleton
+import com.titanvps.app.ui.kit.TitanAlertDialog
 import com.titanvps.app.ui.kit.TitanCard
 import com.titanvps.app.ui.kit.pressable
 import com.titanvps.app.ui.kit.rememberHaptics
@@ -111,7 +111,6 @@ import com.titanvps.app.ui.theme.AccentGradient
 import com.titanvps.app.ui.theme.DangerGradient
 import com.titanvps.app.ui.theme.GreenGradient
 import com.titanvps.app.ui.theme.HeroInactiveGradient
-import com.titanvps.app.ui.theme.ProvideTitanTextScale
 import com.titanvps.app.ui.theme.Titan
 import com.titanvps.app.ui.theme.TitanTheme
 import com.titanvps.app.ui.theme.WarnGradient
@@ -715,51 +714,45 @@ private fun PayPane(
             minHeight = 46.dp,
         )
         if (codeOpen) {
-            AlertDialog(
+            TitanAlertDialog(
                 onDismissRequest = { if (!busy) codeOpen = false },
-                title = { ProvideTitanTextScale { Text("Код оплаты") } },
+                title = { Text("Код оплаты") },
                 text = {
-                    ProvideTitanTextScale {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                code,
-                                { code = it.take(64) },
-                                Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                placeholder = { Text("Введите код") },
-                                keyboardOptions = KeyboardOptions(
-                                    capitalization = KeyboardCapitalization.Characters,
-                                    autoCorrectEnabled = false,
-                                ),
-                            )
-                            Text(
-                                "Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.",
-                                color = palette.textSecondary,
-                                fontSize = 12.sp,
-                            )
-                        }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            code,
+                            { code = it.take(64) },
+                            Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            placeholder = { Text("Введите код") },
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.Characters,
+                                autoCorrectEnabled = false,
+                            ),
+                        )
+                        Text(
+                            "Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.",
+                            color = palette.textSecondary,
+                            fontSize = 12.sp,
+                        )
                     }
                 },
                 confirmButton = {
-                    ProvideTitanTextScale {
-                        TextButton(
-                            onClick = {
-                                busy = true
-                                onCode(code.trim()) { ok ->
-                                    busy = false
-                                    codeOpen = false
-                                    if (ok) code = ""
-                                }
-                            },
-                            enabled = code.isNotBlank() && !busy,
-                        ) { Text("Применить") }
-                    }
+                    DialogButton(
+                        "Применить",
+                        {
+                            busy = true
+                            onCode(code.trim()) { ok ->
+                                busy = false
+                                codeOpen = false
+                                if (ok) code = ""
+                            }
+                        },
+                        bold = true,
+                        enabled = code.isNotBlank() && !busy,
+                    )
                 },
-                dismissButton = {
-                    ProvideTitanTextScale {
-                        TextButton(onClick = { codeOpen = false }, enabled = !busy) { Text("Отмена") }
-                    }
-                },
+                dismissButton = { DialogButton("Отмена", { codeOpen = false }, enabled = !busy) },
             )
         }
     }
