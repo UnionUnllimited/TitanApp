@@ -9,15 +9,15 @@ import androidx.compose.ui.unit.dp
 
 /** Crown from the mockup (Material has none). */
 internal object TitanIcons {
-    val CrownOutlined: ImageVector by lazy { crown(filled = false) }
-    val Crown: ImageVector by lazy { crown(filled = true) }
+    /** Filled, as the iPhone's tab bar draws it in either state. */
+    val Crown: ImageVector by lazy { crown() }
 
-    private fun crown(filled: Boolean) = ImageVector.Builder(
-        name = if (filled) "Crown" else "CrownOutlined",
+    private fun crown() = ImageVector.Builder(
+        name = "Crown",
         defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
     ).apply {
         path(
-            fill = if (filled) SolidColor(Color.Black) else null,
+            fill = SolidColor(Color.Black),
             stroke = SolidColor(Color.Black),
             strokeLineWidth = 1.8f,
             strokeLineJoin = StrokeJoin.Round,
