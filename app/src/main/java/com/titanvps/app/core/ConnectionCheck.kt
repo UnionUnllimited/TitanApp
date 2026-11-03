@@ -1,6 +1,8 @@
 package com.titanvps.app.core
 
 import com.titanvps.app.data.UserAgent
+import com.titanvps.app.vpn.LocalProxy
+import com.titanvps.app.vpn.VpnState
 import com.titanvps.app.vpn.VpnStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -27,7 +29,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * The latency is measured warm: the first request opens the connection (the proxy's
  * handshake with the server, DNS, Google's TLS), which takes a fresh connection's time, not
  * the latency, so its time is never shown. The next ones on the same connection are one
- * round trip each: phone → server → Google and back.
+ * round trip each: phone → server → Google and back. Each check's latency also goes to the
+ * VPN notification ([LiveLatency]), which measures one of its own now and then ([probe]).
  */
 object ConnectionCheck {
 
@@ -62,29 +65,36 @@ object ConnectionCheck {
         return samples.sorted()[samples.size / 2]
     }
 
+    /** Checks under way ([once]): the notification's [probe] doesn't run next to one. */
+    private val checks = AtomicInteger()
+
+    /** Проверить соединение is under way. */
+    val checking: Boolean get() = checks.get() > 0
+
     /**
      * One check: Google's generate_204 (it works, then its latency), Cloudflare's trace for
      * the exit address. [warm] false: the latency isn't measured (null).
      */
     suspend fun once(warm: Boolean = true): State = withContext(Dispatchers.IO) {
-        val lp = VpnStatus.localProxy ?: return@withContext State.Failed("VPN не подключён")
-        val opened = Opened()
-        // A new client each time: its own connections, opened by the first requests and
-        // reused by the samples (keep-alive or HTTP/2).
-        val client = OkHttpClient.Builder()
-            .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", lp.port)))
-            .proxyAuthenticator { _, response ->
-                // Asked once; a second 407 means the password is wrong: give up.
-                if (response.request.header("Proxy-Authorization") != null) null
-                else response.request.newBuilder().header("Proxy-Authorization", Credentials.basic(lp.user, lp.password)).build()
-            }
-            .eventListener(opened)
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .callTimeout(10, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(false)
-            .build()
+        // The connection measured, and when the check began (the newest check's latency stays).
+        val on = VpnStatus.state.value as? VpnState.Connected
+        val startedAt = LiveLatency.begin()
+        checks.incrementAndGet()
         try {
-            coroutineScope {
+            val result = check(warm)
+            note(result, warm, on, startedAt)
+            result
+        } finally {
+            checks.decrementAndGet()
+        }
+    }
+
+    private suspend fun check(warm: Boolean): State {
+        val lp = VpnStatus.localProxy ?: return State.Failed("VPN не подключён")
+        val opened = Opened()
+        val client = client(lp, opened)
+        try {
+            return coroutineScope {
                 val exit = async { runCatching { trace(client) } }
                 val head = runCatching { head(client) }
                 val trace = exit.await().getOrNull()
@@ -99,9 +109,66 @@ object ConnectionCheck {
                 result
             }
         } finally {
-            client.connectionPool.evictAll()
-            client.dispatcher.executorService.shutdown()
+            close(client)
         }
+    }
+
+    /**
+     * The notification's latency follows the check ([LiveLatency]): its number, or none after a
+     * failure or a measurement without one (only Cloudflare answered, no warm answer); a check
+     * that didn't measure ([warm] false: a reconnect's within the minute) leaves it. Only while
+     * the VPN is still up as when it began ([on]): else it measured a switch.
+     */
+    private fun note(result: State, warm: Boolean, on: VpnState.Connected?, startedAt: Long) {
+        if (on == null || VpnStatus.state.value != on) return
+        when {
+            result is State.Failed -> LiveLatency.record(startedAt, on.serverName, null)
+            result is State.Ok && warm -> LiveLatency.record(startedAt, on.serverName, result.ms)
+        }
+    }
+
+    /**
+     * The VPN notification's own latency on [on] (TitanVpnService, at most once a minute while
+     * the screen is on): a new connection through the tunnel, its first request (the proxy's
+     * handshake, DNS, Google's TLS: a few KB) within [PROBE_OPEN_MS] and not timed, then the
+     * samples as a check takes them (a few hundred bytes each); no Cloudflare. Recorded in
+     * [LiveLatency], none when it couldn't be measured, unless a check began meanwhile (its
+     * result is the newer one) or the VPN is no longer up on [on].
+     */
+    suspend fun probe(on: VpnState.Connected): Unit = withContext(Dispatchers.IO) {
+        val lp = VpnStatus.localProxy ?: return@withContext
+        if (VpnStatus.state.value != on) return@withContext
+        val startedAt = LiveLatency.begin()
+        val opened = Opened()
+        val client = client(lp, opened)
+        val ms = try {
+            runCatching { head(client, PROBE_OPEN_MS) }.getOrNull()?.let { latency(client, opened) }
+        } finally {
+            close(client)
+        }
+        if (VpnStatus.state.value == on) LiveLatency.record(startedAt, on.serverName, ms, probe = true)
+    }
+
+    /**
+     * A new client each time: its own connections, opened by the first requests and reused by
+     * the samples (keep-alive or HTTP/2), through the core's local proxy.
+     */
+    private fun client(lp: LocalProxy, opened: Opened): OkHttpClient = OkHttpClient.Builder()
+        .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", lp.port)))
+        .proxyAuthenticator { _, response ->
+            // Asked once; a second 407 means the password is wrong: give up.
+            if (response.request.header("Proxy-Authorization") != null) null
+            else response.request.newBuilder().header("Proxy-Authorization", Credentials.basic(lp.user, lp.password)).build()
+        }
+        .eventListener(opened)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .build()
+
+    private fun close(client: OkHttpClient) {
+        client.connectionPool.evictAll()
+        client.dispatcher.executorService.shutdown()
     }
 
     /** ip= and loc= of a Cloudflare trace (one key=value a line); loc upper case. */
@@ -189,6 +256,8 @@ object ConnectionCheck {
     private const val SAMPLES = 3
     /** Each timed request's wait; one without an answer by then counts as this long. */
     private const val SAMPLE_TIMEOUT_MS = 1_500L
+    /** The probe's first request (a new connection through the tunnel) has this long. */
+    private const val PROBE_OPEN_MS = 5_000L
 
     /** Google's: routed through the server by the panel (Russian sites go direct). */
     private const val PROBE_URL = "https://www.gstatic.com/generate_204"

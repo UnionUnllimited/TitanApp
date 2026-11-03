@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Asks [PingService] (separate process) for real delays through each server. */
 object PingClient {
@@ -25,6 +26,11 @@ object PingClient {
         /** Batch finished; [error] is set when nothing answered. */
         data class Done(val error: String?) : Event
     }
+
+    /** Pings under way (Главная's, the bypass watcher's): the VPN notification's probe waits. */
+    private val running = AtomicInteger()
+
+    val busy: Boolean get() = running.get() > 0
 
     /**
      * Measures [targets] in that order. [all] is every server of the subscription: the
@@ -66,6 +72,10 @@ object PingClient {
                 .putExtra(PingService.EXTRA_FILE, file.absolutePath)
                 .putExtra(PingService.EXTRA_RECEIVER, receiver)
         )
-        awaitClose { file.delete() }
+        running.incrementAndGet()
+        awaitClose {
+            running.decrementAndGet()
+            file.delete()
+        }
     }
 }
