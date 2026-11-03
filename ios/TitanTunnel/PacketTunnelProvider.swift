@@ -97,6 +97,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    // MARK: Sleep
+
+    /// The device going to sleep: the burst observatory's rounds stop (titan sleep). ~60 subjects
+    /// at 5m × 5 are a probe every ~5 s, each a cold handshake on a connection of its own, and
+    /// with the phone asleep they kept the cellular radio from going idle. The balancers keep
+    /// their results, which don't age meanwhile; a restart's first check still probes (its new
+    /// Xray has none). Nothing else changes: the tunnel keeps forwarding.
+    override func sleep(completionHandler: @escaping () -> Void) {
+        let reply = TitanInvoke("{\"method\":\"sleep\"}")
+        log.info("sleep: \(reply, privacy: .public)")
+        completionHandler()
+    }
+
+    /// The device woke: the rounds go on at once, after 5 min or more asleep with a wake round
+    /// first (every subject once, 5-30 s after the wake, 4 at a time), so the balancers choose
+    /// from what the network is now.
+    override func wake() {
+        let reply = TitanInvoke("{\"method\":\"wake\"}")
+        log.info("wake: \(reply, privacy: .public)")
+    }
+
     // MARK: Network changes
 
     /// What runs now, to start again on a new network.

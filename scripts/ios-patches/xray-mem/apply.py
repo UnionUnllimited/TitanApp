@@ -49,6 +49,11 @@ Transports and the observatory (the *_mem.go files, copied in as titan_mem.go):
   each start before); the first check at a start 12 at once, starting in its own order: the
   subjects' groups (subjectSelector prefixes) taken in turn, each shuffled, so every group
   is in the first 12. Its probes' context is marked as theirs (above).
+- Battery: while the device sleeps (titan sleep / wake, from the tunnel's sleep and wake:
+  burst.TitanSleep / TitanWake) the observatory's rounds probe nothing (~60 subjects at 5m x 5, a
+  cold handshake every ~5 s, kept the cellular radio up); a first check still runs; the results stay
+  and don't age then (validity counts awake time); on wake the schedule goes on at once, after 5 min
+  or more asleep with a wake round (every subject once, 5-30 s after it, 4 at once).
 Every anchor must be found: a different Xray-core stops the build.
 """
 import pathlib, re, shutil, sys
@@ -146,6 +151,31 @@ changes = {
          "\t\tclient := newPingClient(\n"
          "\t\t\t// Titan patch: the probes' flows marked as theirs (titan_mem.go).\n"
          "\t\t\ttitanProbeContext(h.ctx),\n"),
+        # The device's sleep (titan_mem.go): a round under way stops, the ticks' rounds do nothing
+        # (titanCheck), a wake is a tick (with a wake round after a long sleep).
+        ("\t\tcase <-ctx.Done():\n\t\t\tfor _, timer := range timers {\n\t\t\t\ttimer.Stop()\n\t\t\t}\n\t\t\treturn\n\t\t}\n",
+         "\t\tcase <-slots.titanAsleep(): // Titan patch: the device went to sleep (titan_mem.go).\n"
+         "\t\t\tfor _, timer := range timers {\n\t\t\t\ttimer.Stop()\n\t\t\t}\n\t\t\treturn\n"
+         "\t\tcase <-ctx.Done():\n\t\t\tfor _, timer := range timers {\n\t\t\t\ttimer.Stop()\n\t\t\t}\n\t\t\treturn\n\t\t}\n"),
+        ("\t\t\tselect {\n\t\t\tcase <-ticker.C:\n\t\t\t\tcontinue\n\t\t\tcase <-h.ctx.Done():\n\t\t\t\treturn\n\t\t\t}\n",
+         "\t\t\t// Titan patch: a wake is a tick too, after a long sleep with a wake round (titan_mem.go).\n"
+         "\t\t\tif !h.titanWait(ticker, selector) {\n\t\t\t\treturn\n\t\t\t}\n"),
+    ],
+    # The results don't age while the device sleeps (titan_mem.go titanAge): a night asleep left
+    # none valid (interval × sampling × 2), every subject not alive.
+    "app/observatory/burst/healthping_result.go": [
+        ("type pingRTT struct {\n\ttime  time.Time\n\tvalue time.Duration\n}\n",
+         "type pingRTT struct {\n\ttime  time.Time\n\tvalue time.Duration\n"
+         "\t// Titan patch: the device's sleep so far when it was measured (titan_mem.go).\n"
+         "\ttitanSlept time.Duration\n}\n"),
+        ("\th.rtts[h.idx].time = now\n\th.rtts[h.idx].value = d\n",
+         "\th.rtts[h.idx].time = now\n\th.rtts[h.idx].value = d\n"
+         "\th.rtts[h.idx].titanSlept = titanSlept() // Titan patch\n"),
+        ("\tvalidRTTs := make([]time.Duration, 0)\n\tfor _, rtt := range h.rtts {\n\t\tswitch {\n"
+         "\t\tcase rtt.value == rttUntested || time.Since(rtt.time) > h.validity:\n",
+         "\tvalidRTTs := make([]time.Duration, 0)\n\tslept := titanSlept() // Titan patch\n"
+         "\tfor _, rtt := range h.rtts {\n\t\tswitch {\n"
+         "\t\tcase rtt.value == rttUntested || titanAge(rtt, slept) > h.validity: // Titan patch: titanAge\n"),
     ],
     # uTLS keeps the ClientHello's key share private keys in the UConn's handshake state after the
     # handshake (u_handshake_client.go toPublic13): the ML-KEM-768 decapsulation key, ~8 KiB, on

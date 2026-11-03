@@ -47,8 +47,8 @@ PY
 "$ROOT/scripts/ios-patches/xray-tfo/vendor.sh" "$WORK"
 # Xray within the tunnel's memory: the TUN's gVisor stack (smaller TCP buffers, UDP flows
 # ended with the stack), the transports (smaller windows, pools closed on a restart) and the
-# observatory (a few probes at once). iOS only (xray-tfo is Windows' too), on the copy
-# vendor.sh just made.
+# observatory (a few probes at once, none while the device sleeps). iOS only (xray-tfo is
+# Windows' too), on the copy vendor.sh just made.
 XRAY="$(dirname "$WORK")/Xray-core"
 MEM="$ROOT/scripts/ios-patches/xray-mem"
 python3 "$MEM/apply.py" "$XRAY"
@@ -63,11 +63,12 @@ if [ -f "$XRAY/transport/internet/titan_mem.go" ]; then
   "$MEM/vendor_quic.sh" "$WORK"
   # titan_probes_test.go: what the observatory's probes measure on the pools (XHTTP, gRPC,
   # Hysteria together: package internet_test).
-  TESTS="app/observatory/burst/titan_pacing_test.go transport/internet/splithttp/titan_h2_test.go
+  TESTS="app/observatory/burst/titan_pacing_test.go app/observatory/burst/titan_sleep_test.go
+    transport/internet/splithttp/titan_h2_test.go
     transport/internet/grpc/titan_grpc_test.go transport/internet/hysteria/titan_quic_test.go
     transport/internet/titan_probes_test.go"
   for t in $TESTS; do cp "$MEM/$(basename "$t")" "$XRAY/$t"; done
-  (cd "$XRAY" && go test -count=1 -v -run 'TestTitan(Pacing|H2|GRPC|QUIC|Probe)' \
+  (cd "$XRAY" && go test -count=1 -v -run 'TestTitan(Pacing|Sleep|H2|GRPC|QUIC|Probe)' \
     ./app/observatory/burst/ ./transport/internet/splithttp/ ./transport/internet/grpc/ ./transport/internet/hysteria/ \
     ./transport/internet/)
   for t in $TESTS; do rm "$XRAY/$t"; done

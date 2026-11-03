@@ -58,6 +58,8 @@ type titanGate struct {
 	ready []chan struct{} // closed: that turn may start
 	mu    sync.Mutex
 	next  int // the next turn to open
+	// A round's: closed when the device goes to sleep (titanSleep). A first check's: nil.
+	asleep chan struct{}
 }
 
 // titanCheck: the order and the gate of a check, and what to call when it ends. A first
@@ -67,7 +69,12 @@ func (h *HealthPing) titanCheck(tags []string, duration time.Duration) ([]string
 		return tags, nil, func() {}
 	}
 	if duration > 0 {
-		return tags, &titanGate{slots: h.titanSlots}, func() {}
+		// A round: none while the device sleeps (it stops a round under way too: doCheck).
+		asleep := titanSleepCh()
+		if titanClosed(asleep) {
+			return nil, nil, func() {}
+		}
+		return tags, &titanGate{slots: h.titanSlots, asleep: asleep}, func() {}
 	}
 	tags = titanOrder(tags, h.titanSelectors)
 	g := &titanGate{turn: make(map[string]int, len(tags)), ready: make([]chan struct{}, len(tags))}
@@ -141,10 +148,20 @@ func (h *HealthPing) titanSlot(ctx context.Context, g *titanGate, tag string) bo
 			return false
 		}
 	}
+	if titanClosed(g.asleep) {
+		return false
+	}
 	select {
 	case g.slots <- struct{}{}:
+		// Asleep while it waited: no probe.
+		if titanClosed(g.asleep) {
+			<-g.slots
+			return false
+		}
 		return true
 	case <-ctx.Done():
+		return false
+	case <-g.asleep:
 		return false
 	}
 }
@@ -164,4 +181,178 @@ func (h *HealthPing) titanFree(g *titanGate) {
 		return
 	}
 	<-g.slots
+}
+
+// titanAsleep is closed when the device goes to sleep, for a round (nil for a first check, and
+// without the patch's slots: never).
+func (g *titanGate) titanAsleep() <-chan struct{} {
+	if g == nil {
+		return nil
+	}
+	return g.asleep
+}
+
+// The device's sleep (TitanSleep / TitanWake: titan's sleep and wake, from the tunnel's
+// NEPacketTunnelProvider sleep and wake). The rounds' ~60 subjects at 5m × 5 are a probe every
+// ~5 s, each a cold handshake on a connection of its own: with the phone asleep they kept the
+// cellular radio from ever going idle. While it sleeps the rounds probe nothing (a round under
+// way stops, the next ticks' do nothing); a first check (a new instance: a restart) still runs, the
+// balancers have no results without it. The results the balancers choose from stay, and don't age
+// while it sleeps (titanAge): validity (interval × sampling × 2) counts awake time only, so a
+// night asleep doesn't leave every subject without results (not alive: no qualified outbound).
+var titanSleep = struct {
+	sync.Mutex
+	asleep  bool
+	sleepCh chan struct{} // closed when the device goes to sleep; a new one when it wakes
+	wakeCh  chan struct{} // closed when it wakes; a new one then
+	since   time.Time     // sleep's start, the wall clock's (Apple's monotonic clock stops in sleep)
+	away    time.Duration // the last sleep, wall clock
+	// Read for every result (titanAge), so atomic: the monotonic time asleep before this sleep,
+	// and this sleep's start (since titanEpoch, ns; 0 while awake).
+	slept   atomic.Int64
+	sleptAt atomic.Int64
+}{sleepCh: make(chan struct{}), wakeCh: make(chan struct{})}
+
+// The monotonic clock's origin for titanSleep's atomics.
+var titanEpoch = time.Now()
+
+func titanMono() int64 { return max(int64(time.Since(titanEpoch)), 1) }
+
+// After a sleep this long (the wall clock's) or longer, a wake round (titanWakeRound): every
+// subject once, starting titanWakeDelay after the wake and within titanWakeSpread, a few at
+// once (the rounds' slots). Shorter, the schedule just goes on (a round right away). The panel's
+// interval (5 min): each subject has missed a probe on average by then. The wake round's start
+// waits for the network to be back (a failed probe counts against its subject). Variables for
+// the tests.
+var (
+	titanWakeAfter  = 5 * time.Minute
+	titanWakeDelay  = 5 * time.Second
+	titanWakeSpread = 25 * time.Second
+)
+
+// Wake rounds started (for the tests).
+var titanWakeRounds atomic.Int32
+
+// TitanSleep: the device goes to sleep; the rounds stop. Once until TitanWake.
+func TitanSleep() bool {
+	s := &titanSleep
+	s.Lock()
+	defer s.Unlock()
+	if s.asleep {
+		return false
+	}
+	s.asleep = true
+	s.since = time.Now().Round(0)
+	s.sleptAt.Store(titanMono())
+	close(s.sleepCh)
+	return true
+}
+
+// TitanWake: the device woke; the rounds go on (each scheduler a round at once, and after
+// titanWakeAfter asleep a wake round first). It returns how long it slept (wall clock), 0 if
+// it wasn't asleep.
+func TitanWake() time.Duration {
+	s := &titanSleep
+	s.Lock()
+	defer s.Unlock()
+	if !s.asleep {
+		return 0
+	}
+	s.asleep = false
+	s.slept.Add(titanMono() - s.sleptAt.Load())
+	s.sleptAt.Store(0)
+	s.away = max(time.Since(s.since), 0)
+	s.sleepCh = make(chan struct{})
+	close(s.wakeCh)
+	s.wakeCh = make(chan struct{})
+	return s.away
+}
+
+// TitanAsleep says the device sleeps now (TitanSleep, no TitanWake since).
+func TitanAsleep() bool {
+	titanSleep.Lock()
+	defer titanSleep.Unlock()
+	return titanSleep.asleep
+}
+
+func titanSleepCh() chan struct{} {
+	titanSleep.Lock()
+	defer titanSleep.Unlock()
+	return titanSleep.sleepCh
+}
+
+func titanClosed(ch chan struct{}) bool {
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+// titanSlept is the monotonic time the device has slept so far (with a sleep under way). The
+// wake's Add comes before its Store(0): read in between, a sleep counts twice for a moment (results
+// look younger, never older).
+func titanSlept() time.Duration {
+	s := &titanSleep
+	slept := s.slept.Load()
+	if at := s.sleptAt.Load(); at > 0 {
+		slept += titanMono() - at
+	}
+	return time.Duration(slept)
+}
+
+// titanAge is r's age for its validity (healthping_result.go getStatistics, slept titanSlept()
+// once a call): the time since it was measured less the device's sleep since (none of it counts).
+func titanAge(r *pingRTT, slept time.Duration) time.Duration {
+	return time.Since(r.time) - (slept - r.titanSlept)
+}
+
+// titanWait waits for the scheduler's next tick (StartScheduler): true then (its round), false
+// once h stops. A wake is a tick too: the round the sleep stopped is gone, the schedule goes on
+// at once; after titanWakeAfter or more asleep, with a wake round first.
+func (h *HealthPing) titanWait(ticker *time.Ticker, selector func() ([]string, error)) bool {
+	titanSleep.Lock()
+	woke := titanSleep.wakeCh
+	titanSleep.Unlock()
+	select {
+	case <-ticker.C:
+		return true
+	case <-h.ctx.Done():
+		return false
+	case <-woke:
+		titanSleep.Lock()
+		away := titanSleep.away
+		titanSleep.Unlock()
+		if away >= titanWakeAfter {
+			go h.titanWakeRound(selector)
+		}
+		return true
+	}
+}
+
+// titanWakeRound: every subject once, titanWakeDelay after the wake, spread over titanWakeSpread,
+// at most titanProbesAtOnce at once (a round's slots), so the balancers choose from what the
+// network is now, not from before the sleep. A round of its own (the schedule's next one doesn't
+// cancel it); a sleep stops it, as it does a round.
+func (h *HealthPing) titanWakeRound(selector func() ([]string, error)) {
+	titanWakeRounds.Add(1)
+	asleep := titanSleepCh()
+	t := time.NewTimer(titanWakeDelay)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-asleep:
+		return
+	case <-h.ctx.Done():
+		return
+	}
+	tags, err := selector()
+	if err != nil {
+		return
+	}
+	h.doCheck(h.ctx, tags, titanWakeSpread, 1)
 }

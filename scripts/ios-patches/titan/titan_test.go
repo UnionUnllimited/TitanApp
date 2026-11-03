@@ -214,3 +214,21 @@ func TestCloseTransports(t *testing.T) {
 		t.Fatalf("closed %v", n)
 	}
 }
+
+// sleep and wake (the tunnel's NEPacketTunnelProvider sleep and wake): the burst observatory paused
+// once, then woken with the sleep's length; a wake while awake and a second sleep do nothing.
+func TestSleepWake(t *testing.T) {
+	if s := call(t, map[string]any{"method": "wake"})["slept"].(float64); s != 0 {
+		t.Fatalf("awake, wake: slept %v", s)
+	}
+	if p := call(t, map[string]any{"method": "sleep"})["paused"].(bool); !p {
+		t.Fatal("sleep: not paused")
+	}
+	if p := call(t, map[string]any{"method": "sleep"})["paused"].(bool); p {
+		t.Fatal("sleep twice: paused again")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if s := call(t, map[string]any{"method": "wake"})["slept"].(float64); s < 0.1 || s > 5 {
+		t.Fatalf("wake: slept %v s, want 0.1", s)
+	}
+}

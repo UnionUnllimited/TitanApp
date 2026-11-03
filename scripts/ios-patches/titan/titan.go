@@ -14,12 +14,16 @@
 //	{"method": "freeMemory"}                                           -> {}
 //	{"method": "setMemoryLimit", "limit": n, "footprint": f}           -> {"goLimit": n, "nonGo": m, "why": w, ...}
 //	{"method": "closeTransports"}                                      -> {"closed": n}
+//	{"method": "sleep"}                                                -> {"paused": b}
+//	{"method": "wake"}                                                 -> {"slept": s}
 //
 // tfoStats is what Xray's TCP Fast Open dials in this process did, by the kernel's own
 // record (the xray-tfo patch: internet.TitanTFOStats). memStats is the Go runtime's memory
 // and freeMemory gives what it can back to the OS at once; setMemoryLimit sets Go's soft
 // limit for the extension's limit (bytes) and what Go needs; closeTransports closes the connections Xray's
-// transports keep pooled, once no Xray runs (the xray-mem patch). All in memory.go.
+// transports keep pooled, once no Xray runs (the xray-mem patch). All in memory.go. sleep and wake
+// stop the burst observatory's probes while the device sleeps and start them again when it wakes
+// (sleep.go).
 //
 // Errors come back as {"error": "..."}.
 package titan
@@ -91,6 +95,10 @@ func Invoke(requestJSON string) string {
 		return setMemoryLimit(req.Limit, req.Footprint)
 	case "closeTransports":
 		return closeTransports()
+	case "sleep":
+		return sleep()
+	case "wake":
+		return wake()
 	}
 	return answer(nil, errors.New("unknown method "+req.Method))
 }
