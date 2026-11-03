@@ -12,6 +12,7 @@ import okhttp3.EventListener
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
@@ -52,12 +53,13 @@ object ConnectionCheck {
         else -> Latency.SLOW
     }
 
-    /** The middle one (of an even count, the mean of the two middle ones); null without any. */
+    /**
+     * The middle one; of an even count the upper of the two (as iOS: a slow answer isn't hidden
+     * by a quick one). Null without any.
+     */
     fun median(samples: List<Long>): Long? {
         if (samples.isEmpty()) return null
-        val sorted = samples.sorted()
-        val mid = sorted.size / 2
-        return if (sorted.size % 2 == 1) sorted[mid] else (sorted[mid - 1] + sorted[mid]) / 2
+        return samples.sorted()[samples.size / 2]
     }
 
     /**
@@ -132,21 +134,28 @@ object ConnectionCheck {
     }
 
     /**
-     * [SAMPLES] more HEADs on the connection the first one opened, within [SAMPLE_BUDGET_MS]
-     * in all: their median, or null with fewer than two warm answers (quietly, no number).
-     * A few hundred bytes each.
+     * Up to [SAMPLES] more HEADs on the connection the first one opened, one after another, as
+     * iOS: one without an answer within [SAMPLE_TIMEOUT_MS] counts as that long (slow) and ends
+     * the measurement, as does one that failed or needed a new connection (the warm one is
+     * gone). Their [median]; null without any (quietly, no number). A few hundred bytes each.
      */
     private fun latency(client: OkHttpClient, opened: Opened): Long? {
-        val deadline = System.nanoTime() + SAMPLE_BUDGET_MS * 1_000_000
         val samples = ArrayList<Long>(SAMPLES)
-        repeat(SAMPLES) {
-            val left = (deadline - System.nanoTime()) / 1_000_000
-            if (left <= 0) return@repeat
+        while (samples.size < SAMPLES) {
             val before = opened.count.get()
-            val ms = runCatching { head(client, left) }.getOrNull() ?: return@repeat
-            if (opened.count.get() == before) samples += ms
+            val ms = try {
+                head(client, SAMPLE_TIMEOUT_MS)
+            } catch (e: InterruptedIOException) {
+                // No answer in time: slow, not a quick one left out.
+                samples += SAMPLE_TIMEOUT_MS
+                break
+            } catch (e: Exception) {
+                break
+            }
+            if (opened.count.get() != before) break
+            samples += ms
         }
-        return if (samples.size >= 2) median(samples) else null
+        return median(samples)
     }
 
     /** HEAD of generate_204 (204 or any 2xx): its time in ms. [timeoutMs]: else the client's. */
@@ -178,7 +187,8 @@ object ConnectionCheck {
 
     /** Requests timed after the one that opens the connection. */
     private const val SAMPLES = 3
-    private const val SAMPLE_BUDGET_MS = 4_000L
+    /** Each timed request's wait; one without an answer by then counts as this long. */
+    private const val SAMPLE_TIMEOUT_MS = 1_500L
 
     /** Google's: routed through the server by the panel (Russian sites go direct). */
     private const val PROBE_URL = "https://www.gstatic.com/generate_204"

@@ -38,9 +38,18 @@ class ConnectionCheckTest {
     fun medianOfTheSamples() {
         // One slow answer among warm ones doesn't move it.
         assertEquals(64L, ConnectionCheck.median(listOf(1575, 64, 61)))
-        assertEquals(70L, ConnectionCheck.median(listOf(80, 60)))
+        // Of two, the upper one (as iOS): a slow answer isn't hidden by a quick one.
+        assertEquals(80L, ConnectionCheck.median(listOf(80, 60)))
         assertEquals(42L, ConnectionCheck.median(listOf(42)))
         assertNull(ConnectionCheck.median(emptyList()))
+    }
+
+    @Test
+    fun aTimeoutIsSlowNotLeftOut() {
+        // [80, no answer within 1.5 s]: sampling stops there, the timeout counts as 1500 ms.
+        val ms = ConnectionCheck.median(listOf(80, 1500))!!
+        assertEquals(1500L, ms)
+        assertEquals(ConnectionCheck.Latency.SLOW, ConnectionCheck.latencyOf(ms))
     }
 
     @Test
