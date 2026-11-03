@@ -1,6 +1,7 @@
 package com.titanvps.app.vpn
 
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -23,37 +24,51 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * The VPN notification while the VPN is off (iOS: the Live Activity that stays, «Выключено»):
- * the picked server with its flag, «Выключено» and ‹ Включить ›, in the VPN notification's
- * own channel. ‹ › move the pick (WidgetActionReceiver, as the widget's), «Включить» turns the
- * VPN on there. With «Уведомление с сервером» on, a key and notifications allowed. Shown a
- * moment after the VPN settles off, so it doesn't flash next to the service's own while that
- * stops, nor at a start of the process that brings the VPN back; gone at once when it comes
- * on. Swiped away (Android 14+ lets users): back with the next opening of the app or change
- * of the VPN. TitanApp follows the VPN, the pick and the setting with [update].
+ * The notification while the VPN is off (iOS: the Live Activity that stays, «Выключено»): the
+ * picked server with its flag, «Выключено» and ‹ Включить ›. A channel of its own («VPN
+ * выключен»): one a user silences or turns off here leaves the VPN's own as it is, and an app
+ * can't raise a channel again. ‹ › move the pick (WidgetActionReceiver, as the widget's),
+ * «Включить» turns the VPN on there. With «Уведомление с сервером» on, a key and notifications
+ * allowed.
+ *
+ * Never next to the service's own: it goes once a start is asked for ([starting]) or that one
+ * is up ([serviceShown]), and comes a moment after the VPN went off with the service's gone
+ * ([serviceGone]). Swiped away (Android 14+ lets users): it stays away, also over a restart of
+ * the process, until the app is opened ([opened]) or the VPN changes. TitanApp follows the VPN,
+ * the pick and the setting with [update].
  */
 internal object OffNotification {
 
     /** «Включить», to [WidgetActionReceiver]. */
     const val ACTION_ON = "com.titanvps.app.notification.ON"
+    /** Swiped away (its delete intent), to [WidgetActionReceiver]. */
+    const val ACTION_DISMISSED = "com.titanvps.app.notification.OFF_DISMISSED"
 
     /** 1 the VPN's, 2 the mobile network's alerts, 3 an update, 4 the way back, 10 / 11 reminders. */
     private const val ID = 5
+    private const val CHANNEL_ID = "vpn_off"
     /** Off this long before it is shown. */
     private const val SETTLE_MS = 500L
     /** A start asked for with the VPN off ([starting]): «Выключено» waits this long for it. */
     private const val START_GRACE_MS = 5_000L
+    /** In KeepAlive's runtime flags: swiped away, until the app is opened or the VPN changes. */
+    private const val KEY_DISMISSED = "off_notification_dismissed"
     private const val REQUEST_OPEN = 20
     private const val REQUEST_ON = 21
     private const val REQUEST_PREV = 22
     private const val REQUEST_NEXT = 23
+    private const val REQUEST_DISMISSED = 24
 
     private val scope = MainScope()
     private var pending: Job? = null
-    /** When a start was asked for with the VPN off (elapsedRealtime); 0: none, or it got under way. */
+    /** When a start was asked for with the VPN off (elapsedRealtime); 0: none, or it is over. */
     private var startAskedAt = 0L
-    /** Shown since (its time, steady so a redraw doesn't move it); 0: not shown by this process. */
+    /** Shown since (its time, steady so a redraw doesn't move it); 0: not shown. */
     private var shownSince = 0L
+    /** The service's own notification is up. */
+    private var serviceUp = false
+    /** Its channel is set up in this process. */
+    @Volatile private var channelReady = false
     /**
      * «Включить» found no VPN permission (WidgetActionReceiver): it opens the launcher shortcut's
      * screen now, which asks for it (a broadcast can't open a screen from a notification).
@@ -63,29 +78,91 @@ internal object OffNotification {
 
     /**
      * Follows the VPN, the pick, the setting, the key and notifications being allowed: shown a
-     * moment after the VPN goes off (at once while it is shown: another pick), gone at once
-     * while it is on or on its way.
+     * moment after the VPN goes off (at once while it is shown: another pick; [atOnce]: nothing
+     * is stopping, after a reboot), gone at once while it is on or on its way.
      */
     @Synchronized
-    fun update(context: Context) {
-        runCatching { plan(TitanApp.get(context)) }.onFailure { Log.w("Titan", "off notification", it) }
+    fun update(context: Context, atOnce: Boolean = false) {
+        runCatching { plan(TitanApp.get(context), atOnce) }.onFailure { Log.w("Titan", "off notification", it) }
     }
 
-    private fun plan(app: TitanApp) {
+    /** The app is opened: one swiped away comes back. */
+    @Synchronized
+    fun opened(context: Context) {
+        runCatching {
+            val app = TitanApp.get(context)
+            setDismissed(app, false)
+            plan(app, atOnce = false)
+        }.onFailure { Log.w("Titan", "off notification", it) }
+    }
+
+    /** Swiped away. */
+    @Synchronized
+    fun dismissed(context: Context) {
+        runCatching {
+            pending?.cancel()
+            pending = null
+            shownSince = 0L
+            // Only the one saying «Выключено»: the VPN on since changes things anyway.
+            if (isOff(VpnStatus.state.value)) setDismissed(context, true)
+        }.onFailure { Log.w("Titan", "off notification", it) }
+    }
+
+    /**
+     * A start is asked for (TitanVpnService.start, revive): with the VPN off «Выключено» goes now,
+     * and comes back only if the start doesn't get under way.
+     */
+    @Synchronized
+    fun starting(context: Context) {
+        runCatching {
+            if (!isOff(VpnStatus.state.value)) return@runCatching
+            val app = TitanApp.get(context)
+            startAskedAt = SystemClock.elapsedRealtime()
+            setDismissed(app, false)
+            cancel(app)
+            plan(app, atOnce = false)
+        }.onFailure { Log.w("Titan", "off notification", it) }
+    }
+
+    /** The service's notification is up (showStatus): this one goes. */
+    @Synchronized
+    fun serviceShown(context: Context) {
+        runCatching {
+            serviceUp = true
+            pending?.cancel()
+            pending = null
+            cancel(TitanApp.get(context))
+        }.onFailure { Log.w("Titan", "off notification", it) }
+    }
+
+    /** The service's notification has gone (off, or nothing came on): the start asked for is over. */
+    @Synchronized
+    fun serviceGone(context: Context) {
+        runCatching {
+            serviceUp = false
+            startAskedAt = 0L
+            plan(TitanApp.get(context), atOnce = false)
+        }.onFailure { Log.w("Titan", "off notification", it) }
+    }
+
+    private fun plan(app: TitanApp, atOnce: Boolean) {
         pending?.cancel()
         pending = null
-        val state = VpnStatus.state.value
-        if (!isOff(state)) {
-            // On, or on its way: a start asked for got under way.
+        if (!isOff(VpnStatus.state.value)) {
+            // On, or on its way: a start asked for got under way; one swiped away may come
+            // back after it.
             startAskedAt = 0L
             needsConsent = false
+            setDismissed(app, false)
             cancel(app)
             return
         }
-        // An error ends the start asked for.
-        if (state is VpnState.Error) startAskedAt = 0L
-        if (!allowed(app)) {
+        if (serviceUp || !allowed(app)) {
             cancel(app)
+            return
+        }
+        if (atOnce && graceLeft() <= 0) {
+            show(app)
             return
         }
         val wait = if (shownSince != 0L) 0L else SETTLE_MS
@@ -101,15 +178,9 @@ internal object OffNotification {
         }
     }
 
-    /** A start is asked for (TitanVpnService.start, revive): «Выключено» waits for it. */
-    @Synchronized
-    fun starting() {
-        if (isOff(VpnStatus.state.value)) startAskedAt = SystemClock.elapsedRealtime()
-    }
-
     @Synchronized
     private fun graceLeft(): Long {
-        if (startAskedAt == 0L || VpnStatus.state.value != VpnState.Disconnected) return 0L
+        if (startAskedAt == 0L || !isOff(VpnStatus.state.value)) return 0L
         val left = startAskedAt + START_GRACE_MS - SystemClock.elapsedRealtime()
         if (left <= 0) startAskedAt = 0L
         return left
@@ -118,13 +189,18 @@ internal object OffNotification {
     @Synchronized
     private fun show(app: TitanApp) {
         val server = app.repository.selectedServer()
-        if (!isOff(VpnStatus.state.value) || server == null || !allowed(app)) {
+        if (!isOff(VpnStatus.state.value) || serviceUp || server == null || !allowed(app)) {
             cancel(app)
             return
         }
-        TitanVpnService.ensureChannel(app)
-        if (shownSince == 0L) shownSince = System.currentTimeMillis()
-        app.getSystemService(NotificationManager::class.java).notify(ID, build(app, server))
+        ensureChannel(app)
+        val nm = app.getSystemService(NotificationManager::class.java)
+        if (shownSince == 0L) {
+            // Still up from before this process: its time stays, so it doesn't move.
+            shownSince = runCatching { nm.activeNotifications.firstOrNull { it.id == ID }?.notification?.`when` }
+                .getOrNull()?.takeIf { it > 0 } ?: System.currentTimeMillis()
+        }
+        nm.notify(ID, build(app, server))
     }
 
     /** Also one a previous process left. */
@@ -136,8 +212,32 @@ internal object OffNotification {
     private fun isOff(state: VpnState) = state is VpnState.Disconnected || state is VpnState.Error
 
     private fun allowed(app: TitanApp): Boolean =
-        app.settings.liveNotification.value && app.repository.subscription.value != null &&
+        app.settings.liveNotification.value && app.repository.subscription.value != null && !isDismissed(app) &&
             NotificationManagerCompat.from(app).areNotificationsEnabled()
+
+    private fun isDismissed(context: Context) = KeepAlive.prefs(context).getBoolean(KEY_DISMISSED, false)
+
+    private fun setDismissed(context: Context, on: Boolean) {
+        if (isDismissed(context) != on) KeepAlive.prefs(context).edit().putBoolean(KEY_DISMISSED, on).apply()
+    }
+
+    /**
+     * Default importance (in the main section, on the lock screen) without sound, vibration or
+     * badge, as the VPN's own; once per process.
+     */
+    private fun ensureChannel(context: Context) {
+        if (channelReady) return
+        runCatching {
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, context.getString(R.string.notification_off_channel), NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    setSound(null, null)
+                    enableVibration(false)
+                    setShowBadge(false)
+                }
+            )
+            channelReady = true
+        }
+    }
 
     private fun build(app: TitanApp, server: Server): Notification {
         val all = app.repository.subscription.value?.servers.orEmpty()
@@ -158,8 +258,9 @@ internal object OffNotification {
         } else {
             receiver(app, REQUEST_ON, ACTION_ON)
         }
-        val builder = NotificationCompat.Builder(app, TitanVpnService.CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_shield)
+        val builder = NotificationCompat.Builder(app, CHANNEL_ID)
+            // ⏻, not the shield: nothing is protected now.
+            .setSmallIcon(R.drawable.ic_power)
             .setContentTitle(Flags.nameWithoutFlag(server.name))
             .setContentText(app.getString(R.string.notification_status_off))
             .setOngoing(true)
@@ -171,6 +272,7 @@ internal object OffNotification {
             .setWhen(shownSince)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(open)
+            .setDeleteIntent(receiver(app, REQUEST_DISMISSED, ACTION_DISMISSED))
         TitanVpnService.flagBitmap(app, server.name, onBrand = false)?.let { builder.setLargeIcon(it) }
         if (steps) builder.addAction(0, app.getString(R.string.action_prev), receiver(app, REQUEST_PREV, TitanWidget.ACTION_PREV))
         builder.addAction(0, app.getString(R.string.action_connect), on)

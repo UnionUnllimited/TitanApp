@@ -141,8 +141,9 @@ internal fun RemindersRow() {
 
 /**
  * «Уведомление с сервером» (iOS: Live Activity / Dynamic Island): the VPN notification with the
- * server, ‹ › and the numbers, and one while the VPN is off. A hint when Android hides it: the
- * app's notifications or its channel turned off, or (Android 16) its Live Updates.
+ * server, ‹ › and the numbers, and one while the VPN is off. A hint when Android hides it or
+ * keeps it down: the app's notifications or its channel turned off, the channel silenced, or
+ * (Android 16) its Live Updates off.
  */
 @Composable
 internal fun LiveNotificationRow() {
@@ -182,12 +183,14 @@ internal fun LiveNotificationRow() {
 private enum class NotificationBlock(val text: String) {
     APP("Уведомления Titan VPS выключены в настройках Android"),
     CHANNEL("Уведомление «VPN-подключение» выключено в настройках Android"),
+    SILENCED("Уведомление «VPN-подключение» стоит «Без звука» в настройках Android и уходит вниз шторки"),
     LIVE_UPDATES("Live Updates для Titan VPS выключены в настройках Android"),
 }
 
 private fun notificationBlock(context: Context): NotificationBlock? = when {
     !notificationsEnabled(context) -> NotificationBlock.APP
     TitanVpnService.channelBlocked(context) -> NotificationBlock.CHANNEL
+    TitanVpnService.channelSilenced(context) -> NotificationBlock.SILENCED
     Build.VERSION.SDK_INT >= 36 && !TitanVpnService.liveUpdatesAllowed(context) -> NotificationBlock.LIVE_UPDATES
     else -> null
 }
@@ -254,7 +257,7 @@ private fun openNotificationSettings(context: Context) {
 private fun openNotificationSettings(context: Context, block: NotificationBlock) {
     val intent = when (block) {
         NotificationBlock.APP -> null
-        NotificationBlock.CHANNEL -> Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+        NotificationBlock.CHANNEL, NotificationBlock.SILENCED -> Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
             .putExtra(Settings.EXTRA_CHANNEL_ID, TitanVpnService.CHANNEL_ID)
         // Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS (Android 16), by its value.
         NotificationBlock.LIVE_UPDATES -> Intent("android.settings.APP_NOTIFICATION_PROMOTION_SETTINGS")

@@ -9,7 +9,8 @@ import android.os.SystemClock
  * fresh connection's time, the proxy's handshake included). A failed check, or one that
  * measured and got no number, leaves none; a check that didn't measure leaves it as it is.
  * Shown only on the same server, at most [MAX_AGE_MS] old and under [ConnectionCheck.SLOW_MS].
- * Times are elapsedRealtime.
+ * Each core start and the VPN going off forget it ([clear]): another network, or a new
+ * connection, isn't what it measured. Times are elapsedRealtime.
  */
 object LiveLatency {
 
@@ -24,6 +25,9 @@ object LiveLatency {
      */
     fun record(startedAt: Long, server: String, ms: Long?, probe: Boolean = false) =
         book.record(startedAt, server, ms, SystemClock.elapsedRealtime(), probe)
+
+    /** None any more; measurements begun before this are dropped too. */
+    fun clear() = book.clear(SystemClock.elapsedRealtime())
 
     /** The number to show on [server] at [now]; null: none. */
     fun shown(server: String, now: Long): Long? = book.shown(server, now)
@@ -53,6 +57,12 @@ object LiveLatency {
             if (startedAt < newest || (probe && startedAt != lastStart)) return
             newest = startedAt
             value = ms?.let { Value(server, it, now, startedAt) }
+        }
+
+        @Synchronized
+        fun clear(now: Long) {
+            value = null
+            newest = begin(now)
         }
 
         @Synchronized

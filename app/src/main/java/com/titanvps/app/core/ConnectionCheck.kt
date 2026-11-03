@@ -73,9 +73,10 @@ object ConnectionCheck {
 
     /**
      * One check: Google's generate_204 (it works, then its latency), Cloudflare's trace for
-     * the exit address. [warm] false: the latency isn't measured (null).
+     * the exit address. [warm] false: the latency isn't measured (null). [lastTry] false: a
+     * failure is tried again, so it doesn't clear the notification's latency yet.
      */
-    suspend fun once(warm: Boolean = true): State = withContext(Dispatchers.IO) {
+    suspend fun once(warm: Boolean = true, lastTry: Boolean = true): State = withContext(Dispatchers.IO) {
         // The connection measured, and when the check began (the newest check's latency stays);
         // counted first, so a probe beginning alongside gives way either way.
         val on = VpnStatus.state.value as? VpnState.Connected
@@ -83,7 +84,7 @@ object ConnectionCheck {
         try {
             val startedAt = LiveLatency.begin()
             val result = check(warm)
-            note(result, warm, on, startedAt)
+            if (result !is State.Failed || lastTry) note(result, warm, on, startedAt)
             result
         } finally {
             checks.decrementAndGet()
@@ -203,29 +204,52 @@ object ConnectionCheck {
         }
     }
 
+    /** What one timed request on the warm connection gave. */
+    internal sealed interface Answer {
+        data class Ms(val ms: Long) : Answer
+        /** No answer within [SAMPLE_TIMEOUT_MS]. */
+        data object TimedOut : Answer
+        /** Failed, or needed a new connection: the warm one is gone. */
+        data object Lost : Answer
+    }
+
     /**
      * Up to [SAMPLES] more HEADs on the connection the first one opened, one after another, as
-     * iOS: one without an answer within [SAMPLE_TIMEOUT_MS] counts as that long (slow) and ends
-     * the measurement, as does one that failed or needed a new connection (the warm one is
-     * gone). Their [median]; null without any (quietly, no number). A few hundred bytes each.
+     * iOS ([warmLatency]). A few hundred bytes each.
      */
-    private fun latency(client: OkHttpClient, opened: Opened): Long? {
-        val samples = ArrayList<Long>(SAMPLES)
-        while (samples.size < SAMPLES) {
-            val before = opened.count.get()
-            val ms = try {
-                head(client, SAMPLE_TIMEOUT_MS)
-            } catch (e: InterruptedIOException) {
-                // No answer in time: slow, not a quick one left out.
-                samples += SAMPLE_TIMEOUT_MS
-                break
-            } catch (e: Exception) {
-                break
-            }
-            if (opened.count.get() != before) break
-            samples += ms
+    private fun latency(client: OkHttpClient, opened: Opened): Long? = warmLatency {
+        val before = opened.count.get()
+        val answer = try {
+            Answer.Ms(head(client, SAMPLE_TIMEOUT_MS))
+        } catch (e: InterruptedIOException) {
+            Answer.TimedOut
+        } catch (e: Exception) {
+            Answer.Lost
         }
-        return median(samples)
+        answered(answer, newConnection = opened.count.get() != before)
+    }
+
+    /** A request that needed a new connection isn't warm, answered in time or not. */
+    internal fun answered(answer: Answer, newConnection: Boolean): Answer = if (newConnection) Answer.Lost else answer
+
+    /**
+     * The timed requests ([ask] makes one), as iOS: one without an answer counts as
+     * [SAMPLE_TIMEOUT_MS] (slow, not a quick one left out) and ends the measurement, so does a
+     * lost connection. Their [median]; null without any (quietly, no number).
+     */
+    internal fun warmLatency(ask: () -> Answer): Long? {
+        val times = ArrayList<Long>(SAMPLES)
+        while (times.size < SAMPLES) {
+            when (val answer = ask()) {
+                is Answer.Ms -> times += answer.ms
+                Answer.TimedOut -> {
+                    times += SAMPLE_TIMEOUT_MS
+                    break
+                }
+                Answer.Lost -> break
+            }
+        }
+        return median(times)
     }
 
     /** HEAD of generate_204 (204 or any 2xx): its time in ms. [timeoutMs]: else the client's. */
@@ -258,7 +282,7 @@ object ConnectionCheck {
     /** Requests timed after the one that opens the connection. */
     private const val SAMPLES = 3
     /** Each timed request's wait; one without an answer by then counts as this long. */
-    private const val SAMPLE_TIMEOUT_MS = 1_500L
+    const val SAMPLE_TIMEOUT_MS = 1_500L
     /** The probe's first request (a new connection through the tunnel) has this long. */
     private const val PROBE_OPEN_MS = 5_000L
 

@@ -17,7 +17,8 @@ import com.titanvps.app.reminders.Reminders
 class AutoConnectReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         runCatching { Reminders.reschedule(context) }
-        if (!turnOn(context, intent)) OffNotification.update(context)
+        // At once: nothing is stopping, and the process may go when this returns.
+        if (!turnOn(context, intent)) OffNotification.update(context, atOnce = true)
     }
 
     /** False when the VPN isn't on, nor coming on. */

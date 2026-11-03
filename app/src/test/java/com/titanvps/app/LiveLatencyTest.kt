@@ -63,6 +63,24 @@ class LiveLatencyTest {
     }
 
     @Test
+    fun aNewCoreForgetsItAndWhatWasUnderWay() {
+        val book = LiveLatency.Book()
+        book.record(book.begin(1_000), fi, 45, now = 1_000)
+        val check = book.begin(2_000)
+        val probe = book.begin(2_500)
+        // Wi‑Fi → LTE: the core starts again.
+        book.clear(3_000)
+        assertNull(book.shown(fi, 3_000))
+        // Both measured the old network: dropped.
+        book.record(check, fi, 50, now = 3_500)
+        book.record(probe, fi, 55, now = 3_600, probe = true)
+        assertNull(book.shown(fi, 3_600))
+        assertTrue(book.due(fi, 3_600))
+        book.record(book.begin(4_000), fi, 90, now = 4_500)
+        assertEquals(90L, book.shown(fi, 4_500))
+    }
+
+    @Test
     fun shownOnTheSameServerFreshAndCalm() {
         val book = LiveLatency.Book()
         book.record(book.begin(1_000), fi, 299, now = 1_000)

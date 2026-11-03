@@ -28,6 +28,7 @@ import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.titanvps.app.MainActivity
@@ -169,7 +170,7 @@ class TitanVpnService : VpnService() {
                                 switchToBypass(best, auto = false)
                             }
                             // Nothing to switch to and nothing on: no "Подключение…" left behind.
-                            tun == null -> { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+                            tun == null -> { dropForeground(); stopSelf() }
                         }
                         false
                     }
@@ -368,7 +369,7 @@ class TitanVpnService : VpnService() {
         KeepAlive.setWanted(this, false)
         stopVpn()
         VpnStatus.set(VpnState.Error(message))
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        dropForeground()
         stopSelf()
     }
 
@@ -435,6 +436,8 @@ class TitanVpnService : VpnService() {
         // The way back's checks belong to one bypass: kept over its restarts only.
         if (returnFor != server.id) stopReturnWatch()
         launchedAt = SystemClock.elapsedRealtime()
+        // The notification's latency was another core's: another network, server or connection.
+        LiveLatency.clear()
         // Resolver for "direct" traffic: the carrier's/router's own DNS (like Happ), since
         // foreign resolvers such as 1.1.1.1 are often blocked on Russian mobile networks.
         val dns = underlyingDnsServer(network)
@@ -730,7 +733,7 @@ class TitanVpnService : VpnService() {
             off?.join()
             withContext(Dispatchers.Main) {
                 if (tun != null || KeepAlive.wanted(this@TitanVpnService)) return@withContext
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                dropForeground()
                 stopSelf(startId)
             }
         }
@@ -1124,6 +1127,7 @@ class TitanVpnService : VpnService() {
         postedAt = 0L
         // The notification's numbers go with it: nothing redraws it after the stop.
         stopTicking()
+        LiveLatency.clear()
         VpnStatus.set(VpnState.Disconnected)
     }
 
@@ -1139,6 +1143,9 @@ class TitanVpnService : VpnService() {
         if (tun != null) stopVpn() else unwatchNetwork()
         stopTicking()
         runCatching { unregisterReceiver(screenReceiver) }
+        // Our notification goes with the service: the off state's may come.
+        foreground = false
+        OffNotification.serviceGone(this)
         scope.cancel()
         super.onDestroy()
     }
@@ -1159,6 +1166,11 @@ class TitanVpnService : VpnService() {
     @Volatile private var postedAt = 0L
     /** startForeground went through: the notification is the service's, a look may redraw it. */
     @Volatile private var foreground = false
+    /**
+     * Android shows the notification: the app's notifications and its channel are on. Read with
+     * each status and when the screen comes on; hidden, it gets no looks and no probe.
+     */
+    @Volatile private var visible = true
 
     private var iconKey: String? = null
     private var icon: Bitmap? = null
@@ -1183,6 +1195,7 @@ class TitanVpnService : VpnService() {
                 // The numbers at once, then every 2 s.
                 Intent.ACTION_SCREEN_ON -> {
                     screenOn = true
+                    visible = shownByAndroid(this@TitanVpnService)
                     startTicking()
                 }
                 // Nobody sees them: no looks, no probe.
@@ -1215,9 +1228,8 @@ class TitanVpnService : VpnService() {
             meterSince = since
             meter = runCatching { TrafficMeter.totals() }.getOrNull()?.let { TrafficMeter.Session(it) }
         }
-        // Coming on with the VPN still off (a sticky restart): the off state's notification waits.
-        if (s == Status.CONNECTING) OffNotification.starting()
         ensureChannel(this)
+        visible = shownByAndroid(this)
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         runCatching {
             val content = content()
@@ -1227,9 +1239,24 @@ class TitanVpnService : VpnService() {
             .onSuccess {
                 foreground = true
                 shown = it
+                // Ours is up: «Выключено» never stands next to «Подключаемся…».
+                OffNotification.serviceShown(this)
             }
-            .onFailure { Log.w("Titan", "foreground", it) }
+            .onFailure {
+                foreground = false
+                Log.w("Titan", "foreground", it)
+            }
         if (s == Status.CONNECTED) startTicking()
+    }
+
+    /**
+     * The notification goes with the service's foreground (the VPN is off): the off state's may
+     * come ([OffNotification]).
+     */
+    private fun dropForeground() {
+        foreground = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        OffNotification.serviceGone(this)
     }
 
     /**
@@ -1397,9 +1424,9 @@ class TitanVpnService : VpnService() {
         }
     }
 
-    /** Worth a look: the VPN on, the screen on, the numbers shown. Under the monitor. */
+    /** Worth a look: the VPN on, the screen on, the numbers shown and Android showing them. Under the monitor. */
     private fun ticks(): Boolean =
-        tun != null && screenOn && TitanApp.get(this).settings.liveNotification.value
+        tun != null && screenOn && visible && TitanApp.get(this).settings.liveNotification.value
 
     @Synchronized
     private fun stopTicking() {
@@ -1499,7 +1526,7 @@ class TitanVpnService : VpnService() {
         private const val ALERT_ID = 2
         /** «Ограничения сняты» and the offers to go back from a bypass. */
         private const val RETURN_ID = 4
-        /** The VPN notification's channel, the off state's too ([OffNotification], ID 5). */
+        /** The VPN notification's channel; the off state's has its own ([OffNotification]). */
         internal const val CHANNEL_ID = "vpn_ongoing"
         /** Never to be used again: a channel created under a deleted id gets its old settings back. */
         private val OLD_CHANNEL_IDS = arrayOf("vpn", "vpn_status")
@@ -1520,6 +1547,8 @@ class TitanVpnService : VpnService() {
         private const val SPENT_MIN = 1_048_576L
         /** The Live Update's chip shows ↓ from this speed (bytes a second), else the latency. */
         private const val CHIP_SPEED_MIN = 10 * 1024.0
+        /** The flag's size in the notification (it shows at about 48 dp). */
+        private const val FLAG_DP = 40
         private const val MTU = 1500
         /** A new network settles (DHCP, DNS) before the core restarts on it. */
         private const val NETWORK_SETTLE_MS = 1_500L
@@ -1576,8 +1605,8 @@ class TitanVpnService : VpnService() {
 
         /** Connects, or switches to the selected server if already on. */
         fun start(context: Context) {
-            // «Выключено» waits for it (OffNotification).
-            OffNotification.starting()
+            // «Выключено» goes, and waits for it (OffNotification).
+            OffNotification.starting(context)
             ContextCompat.startForegroundService(
                 context, Intent(context, TitanVpnService::class.java).setAction(ACTION_START)
             )
@@ -1585,7 +1614,7 @@ class TitanVpnService : VpnService() {
 
         /** Keep-alive brings the VPN back (boot, app update): like [start], with retries. */
         internal fun revive(context: Context) {
-            OffNotification.starting()
+            OffNotification.starting(context)
             ContextCompat.startForegroundService(
                 context, Intent(context, TitanVpnService::class.java).setAction(ACTION_START).putExtra(EXTRA_REVIVE, true)
             )
@@ -1620,14 +1649,14 @@ class TitanVpnService : VpnService() {
         @Volatile private var channelReady = false
 
         /**
-         * The VPN notification's channel, also the off state's: default importance (the main
-         * section, not "Silent") without sound, vibration or badge. Earlier channels: "vpn" was
-         * of low importance ("Silent", at the bottom), and either may have been lowered since,
-         * by hand or by Android. A channel's importance can't be raised and a deleted one comes
-         * back as it was, hence a new id. Not while it holds our foreground notification
-         * (Android refuses), which only the new one does: tried again then.
+         * The VPN notification's channel: default importance (the main section, not "Silent")
+         * without sound, vibration or badge. Earlier channels: "vpn" was of low importance
+         * ("Silent", at the bottom), and either may have been lowered since, by hand or by
+         * Android. A channel's importance can't be raised and a deleted one comes back as it
+         * was, hence a new id. Not while it holds our foreground notification (Android
+         * refuses), which only the new one does: tried again then.
          */
-        internal fun ensureChannel(context: Context) {
+        private fun ensureChannel(context: Context) {
             if (channelReady) return
             val nm = context.getSystemService(NotificationManager::class.java) ?: return
             var ready = true
@@ -1644,11 +1673,25 @@ class TitanVpnService : VpnService() {
             channelReady = ready
         }
 
+        /** The VPN notification's channel's importance as set in Android; null before it exists. */
+        private fun channelImportance(context: Context): Int? = runCatching {
+            context.getSystemService(NotificationManager::class.java)?.getNotificationChannel(CHANNEL_ID)?.importance
+        }.getOrNull()
+
         /** The VPN notification's channel is turned off in Android's settings. */
-        internal fun channelBlocked(context: Context): Boolean = runCatching {
-            context.getSystemService(NotificationManager::class.java)?.getNotificationChannel(CHANNEL_ID)?.importance ==
-                NotificationManager.IMPORTANCE_NONE
-        }.getOrDefault(false)
+        internal fun channelBlocked(context: Context): Boolean = channelImportance(context) == NotificationManager.IMPORTANCE_NONE
+
+        /**
+         * Its channel set to «Без звука» (or lower) by hand: the notification sits at the bottom
+         * of the shade, and an app can't raise it again.
+         */
+        internal fun channelSilenced(context: Context): Boolean =
+            channelImportance(context)?.let { it > NotificationManager.IMPORTANCE_NONE && it < NotificationManager.IMPORTANCE_DEFAULT } == true
+
+        /** Android shows the app's notifications, this channel's included. */
+        private fun shownByAndroid(context: Context): Boolean = runCatching {
+            NotificationManagerCompat.from(context).areNotificationsEnabled() && !channelBlocked(context)
+        }.getOrDefault(true)
 
         /** NotificationManager.canPostPromotedNotifications (Android 16); null where there is none. */
         private val canPromote by lazy {
@@ -1670,7 +1713,8 @@ class TitanVpnService : VpnService() {
          */
         internal fun flagBitmap(context: Context, name: String, onBrand: Boolean): Bitmap? {
             val night = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-            val px = (64 * context.resources.displayMetrics.density).roundToInt()
+            // Small: it goes out with every redraw of the numbers.
+            val px = (FLAG_DP * context.resources.displayMetrics.density).roundToInt()
             return runCatching {
                 when {
                     onBrand -> Flags.circleBitmap(context, name, px, 0xFFFFFFFF.toInt(), 0x40FFFFFF)
