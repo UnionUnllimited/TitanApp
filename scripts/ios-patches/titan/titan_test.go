@@ -134,7 +134,7 @@ func TestMemStats(t *testing.T) {
 	}
 }
 
-// The soft limit: the extension's limit less the rest (at least 12 MiB) and 8 MiB, at least
+// The soft limit: the extension's limit less the rest (at least 4 MiB) and 11 MiB, at least
 // 24 MiB, while Go needs no more (this test's heap is small); memStats reports it.
 func TestMemoryLimit(t *testing.T) {
 	defer debug.SetMemoryLimit(math.MaxInt64)
@@ -145,14 +145,17 @@ func TestMemoryLimit(t *testing.T) {
 		limit, rest, want int64
 		exact             bool
 	}{
-		{50 << 20, 10 << 20, 30 << 20, true}, // the rest under 12 MiB counts as 12
-		{50 << 20, 16 << 20, 26 << 20, false},
+		{50 << 20, 2 << 20, 35 << 20, true},   // the rest under 4 MiB counts as 4
+		{50 << 20, 10 << 20, 29 << 20, false}, // the rest read as it is: Go's moves meanwhile
+		{50 << 20, 14 << 20, 25 << 20, false},
 		{30 << 20, 10 << 20, 24 << 20, true}, // never under 24 MiB
 	} {
 		r := call(t, map[string]any{"method": "setMemoryLimit", "limit": c.limit, "footprint": goRetained + c.rest})
 		got := int64(r["goLimit"].(float64))
-		if c.exact && got != c.want || !c.exact && math.Abs(float64(got-c.want)) > 1<<20 {
-			t.Fatalf("limit %d, rest %d: %d, want %d", c.limit>>20, c.rest>>20, got, c.want)
+		// A heap that needs more than the case's fit (a -race build's) raises it, to its need.
+		raised := r["why"] == "need" && got > c.want && got <= int64(r["need"].(float64))
+		if !raised && (c.exact && got != c.want || !c.exact && math.Abs(float64(got-c.want)) > 1<<20) {
+			t.Fatalf("limit %d, rest %d: %d (%v), want %d", c.limit>>20, c.rest>>20, got, r["why"], c.want)
 		}
 		if l := int64(call(t, map[string]any{"method": "memStats"})["limit"].(float64)); l != got {
 			t.Fatalf("memStats limit %d, set %d", l, got)
@@ -165,8 +168,9 @@ func TestMemoryLimit(t *testing.T) {
 }
 
 // What Go needs raises the limit up to 2 MiB over the watchdog's threshold (limit − the
-// rest − 3 MiB: Go at it puts the footprint over the threshold), a busy GC to it; never
-// under 24 MiB.
+// rest − 6 MiB: Go at it puts the footprint over the threshold), a busy GC to it; never
+// under 24 MiB. The rest as the phone's journal has it (2.2-3.1 MiB) counts as 4 for "fit",
+// as it is for the ceiling (1 MiB at least).
 func TestGoLimitFor(t *testing.T) {
 	const mib = 1 << 20
 	// Go with this live heap and 7 MiB besides objects and free pages, GOGC 10.
@@ -180,19 +184,24 @@ func TestGoLimitFor(t *testing.T) {
 		want, need        int64
 		why               string
 	}{
-		{50, 18, 10, false, 30, 28, "fit"},  // needs 18 + 7 + 3
-		{50, 22, 12, false, 32, 32, "need"}, // over 30: raised to it
-		{50, 24, 12, false, 34, 34, "need"}, // over the watchdog's line (33)
-		{50, 26, 12, false, 35, 36, "need"}, // up to 50 − 12 − 3 at most
-		{50, 18, 12, true, 35, 28, "gc"},    // the GC busy: to that
-		{50, 26, 14, true, 33, 36, "gc"},    // less as the rest grows
+		{50, 18, 3, false, 35, 28, "fit"},  // needs 18 + 7 + 3
+		{50, 24, 3, false, 35, 34, "fit"},  // the field's Go after a restart: 30-35 MiB
+		{50, 30, 3, false, 40, 40, "need"}, // over 35: raised to it
+		{50, 27, 6, false, 37, 37, "need"}, // over the watchdog's line (50 − 6 − 8)
+		{50, 30, 8, false, 36, 40, "need"}, // up to 50 − 8 − 6 at most
+		{50, 40, 2, false, 42, 51, "need"}, // up to 50 − 2 − 6: the rest as it is, not 4
+		{50, 18, 3, true, 41, 28, "gc"},    // the GC busy: to that
+		{50, 18, 2, true, 42, 28, "gc"},
+		{50, 18, 0, true, 43, 28, "gc"},    // a rest read as none counts as 1 MiB
+		{50, 18, 10, false, 29, 28, "fit"}, // less as the rest grows
+		{50, 26, 12, true, 32, 36, "gc"},
 		{30, 18, 10, false, 24, 28, "min"},
 		{30, 18, 10, true, 24, 28, "min"},
 	} {
 		m := go_(c.live)
 		retained := m["total"] - m["released"]
 		got, nonGo, need, why := goLimitFor(int64(c.limit*mib), int64(retained+c.rest*mib), m, c.busy)
-		if got != c.want*mib || need != c.need*mib || why != c.why || nonGo != int64(max(c.rest, 12)*mib) {
+		if got != c.want*mib || need != c.need*mib || why != c.why || nonGo != int64(max(c.rest, 4)*mib) {
 			t.Fatalf("limit %d, live %d, rest %d, busy %v: %d MiB (%s, need %d, rest %d), want %d (%s, need %d)",
 				c.limit, c.live, c.rest, c.busy, got/mib, why, need/mib, nonGo/mib, c.want, c.why, c.need)
 		}
@@ -203,5 +212,23 @@ func TestGoLimitFor(t *testing.T) {
 func TestCloseTransports(t *testing.T) {
 	if n, ok := call(t, map[string]any{"method": "closeTransports"})["closed"].(float64); !ok || n != 0 {
 		t.Fatalf("closed %v", n)
+	}
+}
+
+// sleep and wake (the tunnel's NEPacketTunnelProvider sleep and wake): the burst observatory paused
+// once, then woken with the sleep's length; a wake while awake and a second sleep do nothing.
+func TestSleepWake(t *testing.T) {
+	if s := call(t, map[string]any{"method": "wake"})["slept"].(float64); s != 0 {
+		t.Fatalf("awake, wake: slept %v", s)
+	}
+	if p := call(t, map[string]any{"method": "sleep"})["paused"].(bool); !p {
+		t.Fatal("sleep: not paused")
+	}
+	if p := call(t, map[string]any{"method": "sleep"})["paused"].(bool); p {
+		t.Fatal("sleep twice: paused again")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if s := call(t, map[string]any{"method": "wake"})["slept"].(float64); s < 0.1 || s > 5 {
+		t.Fatalf("wake: slept %v s, want 0.1", s)
 	}
 }

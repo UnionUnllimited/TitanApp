@@ -81,22 +81,48 @@ func freeMemory() string {
 // anyway). The limit follows the extension's own limit instead: what remains of it after what
 // isn't Go's and a margin. It only makes the GC work harder near it; what is live stays.
 const (
-	// What isn't Go's at the least: the Go binary's rebased data (~6 MiB), Swift,
-	// NetworkExtension and its frameworks, malloc (11-15 MiB in all).
-	minNonGo = 12 << 20
+	// What isn't Go's at the least, as the footprint counts it next to Go's total − released
+	// (what the soft limit counts): the journal's restarts on the phone (24.10, Go's before and
+	// after with the footprint) put it at 2.2-3.1 MiB in all 8 readings, the footprint at Go's
+	// 30.2-38.9 MiB. Go's total − released has ~3.8 MiB that is mapped and never touched (a
+	// trivial Go 1.27 program: 5.1 MiB retained, 1.25 resident), so the rest of the extension
+	// (the Go binary's data, Swift, NetworkExtension, malloc) is more like 6-7 MiB, but this is
+	// the sum that predicts the footprint from Go's limit. 12 MiB here before (an estimate that
+	// was never measured on the phone) kept the limit 8-9 MiB under what was meant: at 35 MiB
+	// with the footprint at 38-41, the GC worked against it for the minutes between restarts.
+	// For "fit" only (a rest misread too low doesn't raise it); the ceiling takes the rest as
+	// measured (minRest).
+	minNonGo = 4 << 20
+	// The rest as the ceiling takes it, at the least (a misreading that would put Go's footprint
+	// over the extension's limit).
+	minRest = 1 << 20
 	// Overshoot past a soft limit and a restart's start: Go at this limit leaves the
-	// footprint 3 MiB below the tunnel's watchdog (5 MiB under the extension's limit).
-	limitMargin = 8 << 20
-	// The watchdog's threshold under the extension's limit (PacketTunnelProvider).
-	watchdogMargin = 5 << 20
-	// The highest the limit goes is this far over the watchdog's threshold. Go keeps what it
-	// holds under its soft limit by the pacer's headroom (1 MiB or 3% of it: about 1 MiB
-	// here), so a limit right at the threshold kept the footprint just under it: Go needing
-	// more had the GC run nonstop while the watchdog saw nothing. Bench (the rest 12 of 50,
-	// 25.5 MiB live, GOGC 10, FreeOSMemory every second): limit 33 (the threshold) 0.92 cores
-	// of GC, the footprint 44.7 for good; 34 0.06, 35 0.03 with it at 45.5-46.5. At 35 the GC
-	// is busy from ~27.5 MiB live, with the footprint at 47, over the threshold: the watchdog
-	// decides, and the kill is still 3 MiB away.
+	// footprint 3 MiB below the tunnel's watchdog (8 MiB under the extension's limit).
+	limitMargin = 11 << 20
+	// The watchdog's restart line under the extension's limit (PacketTunnelProvider lineUnder:
+	// 42 MiB of 50, one new stalled QUIC stream's +7.5 MiB of heap under the kill). 6 before
+	// (44: that stream from there was a kill unless the restart at 47 got in first), 5 before that.
+	watchdogMargin = 8 << 20
+	// The highest the limit goes is this far over the watchdog's threshold for Go (the limit − the
+	// rest as measured − watchdogMargin: Go there puts the footprint on the line). Go keeps what it
+	// holds under its soft limit by the pacer's headroom (1 MiB or 3% of it: about 1 MiB here), so a
+	// limit right at the threshold kept the footprint just under it: Go needing more had the GC run
+	// nonstop while the watchdog saw nothing. Bench with the 5 MiB line then (45 of 50; the rest 12,
+	// 25.5 MiB live, GOGC 10, FreeOSMemory every second): limit 33 (the threshold then) 0.92 cores of
+	// GC, the footprint 44.7 for good, just under that line; 34 0.06, 35 0.03 with it at 45.5-46.5.
+	// The rest as measured, not minNonGo's 4: with the field's 2.2-3.1 MiB a ceiling from 4 left Go
+	// held there with the footprint under the line, the very state this is for. Bench (Go 1.27, 4
+	// procs, 20 MiB/s, GOGC 10, FreeOSMemory every second, live heap as /gc/heap/live reads it) with
+	// the 6 MiB line then (44): limit 42 (50 − 4 − 4), 30.0 MiB live: the GC at 0.58 cores, the
+	// footprint at most 43.55 / 43.85 with a rest of 2.2 / 2.5, never at 44; 50 − 2.5 − 4 = 43.5: 30.0
+	// MiB live 0.05 cores, the footprint 44.6, all samples over 44, the GC busy only from 31.2 MiB
+	// live (0.45 cores, 45.05). With this 8 MiB line (42): limit 40 (50 − 4 − 6), 27.9 MiB live: 0.28
+	// cores, the footprint at most 41.33 / 41.63, never at 42; 50 − 2.5 − 6 = 41.5: 27.9 MiB live 0.05
+	// cores, the footprint 42.6 (at most 42.9), all samples over 42; 28.5 0.13 cores, 42.8; the GC
+	// busy from 29.2 MiB live (0.35 cores, 43.0; 30.0: 0.63, 43.7). The watchdog decides then; the
+	// footprint there is limit − watchdogMargin + aboveLine − the pacer's headroom whatever the rest:
+	// 42.6-43.7, one stalled new QUIC stream (+7.5) from the kill once a restart is held back (only
+	// the one at 47 MiB is in its way then).
 	aboveLine = 2 << 20
 	// The lowest limit in any case (a 30 MB extension, much outside Go).
 	minGoLimit = 24 << 20
@@ -166,15 +192,17 @@ func goNeed(m map[string]uint64) int64 {
 }
 
 // goLimitFor: Go's soft limit for the extension's limit and footprint now and Go's metrics.
-// limit − max(footprint − Go's, 12 MiB) − 8 MiB ("fit"), raised to what Go needs ("need"),
-// at most to 2 MiB over the watchdog's threshold (limit − what isn't Go's − 3 MiB), and to
-// that when the GC has been busy ("gc"); 24 MiB at least ("min").
+// limit − max(footprint − Go's, 4 MiB) − 11 MiB ("fit"), raised to what Go needs ("need"),
+// at most to 2 MiB over the watchdog's threshold (limit − max(footprint − Go's, 1 MiB) −
+// 6 MiB: the rest as measured), and to that when the GC has been busy ("gc"); 24 MiB at
+// least ("min"). nonGo is the rest as "fit" takes it.
 func goLimitFor(limit, footprint int64, m map[string]uint64, busy bool) (goLimit, nonGo, need int64, why string) {
 	goRetained := int64(m["total"] - m["released"]) // what the soft limit counts
-	nonGo = max(footprint-goRetained, minNonGo)
+	rest := max(footprint-goRetained, minRest)
+	nonGo = max(rest, minNonGo)
 	need = goNeed(m)
 	fit := limit - nonGo - limitMargin
-	top := limit - nonGo - watchdogMargin + aboveLine
+	top := limit - rest - watchdogMargin + aboveLine
 	goLimit, why = fit, "fit"
 	if busy {
 		goLimit, why = top, "gc"
@@ -188,9 +216,9 @@ func goLimitFor(limit, footprint int64, m map[string]uint64, busy bool) (goLimit
 }
 
 // setMemoryLimit sets the soft limit for the extension's limit and footprint now (bytes),
-// goLimitFor's. On a 50 MB extension: 30 MiB (libXray's) while the rest is 12 MiB or less and
-// Go needs no more, more as Go needs it (up to 2 MiB over the watchdog's line), less as the
-// rest grows.
+// goLimitFor's. On a 50 MB extension: 35 MiB while the rest is 4 MiB or less and Go needs no
+// more, more as Go needs it (up to 44 − the rest: 41-42 with the field's 2.2-3.1, 2 MiB over the
+// watchdog's line), less as the rest grows.
 // After runXray: the first one sets libXray's.
 func setMemoryLimit(limit, footprint int64) string {
 	if limit <= 0 || footprint <= 0 {

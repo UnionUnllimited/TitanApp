@@ -3,6 +3,7 @@ package internet
 // Titan patch, iOS memory (scripts/ios-patches/xray-mem): copied into transport/internet.
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -30,6 +31,54 @@ func TitanRegisterCloser(f func() int) {
 // may pool a connection under its stream settings after TitanCloseTransports: each pool
 // closes those this much later (a variable for the tests).
 var TitanSweepAfter = 90 * time.Second
+
+// How long a pooled connection stays up with no stream on it: XHTTP's HTTP/2 connections
+// (IdleConnTimeout, was net.ConnIdleTimeout: 300 s), gRPC's ClientConns (WithIdleTimeout, was
+// grpc-go's 30 min) and Hysteria's QUIC connections (with no TCP stream and no UDP session; the
+// panel's keep-alive under QUIC's idle timeout kept them for good, the cleaner only dropped dead
+// ones). A connection with a stream on it is never closed (each pool's own idle rule: HTTP/2 and
+// gRPC count their streams, Hysteria's cleaner its streams and sessions under the client's lock,
+// which a new stream takes too); the next stream after the idle close dials again. XHTTP over
+// HTTP/3 keeps its connections as before (quic-go's http3 counts a request until its headers
+// only). A variable for the tests.
+//
+// The pools carry only the tunnel's flows: the observatory's probes (TitanProbe) get a connection
+// of their own each, closed as the probe ends (XHTTP: a client of its own, gRPC: a ClientConn,
+// Hysteria: a client; each with its handshake), on a subject the tunnel's flows use too. Every
+// subject's connection was there for the observatory's next probe (interval × sampling: 5 per
+// subject each round), though user traffic rides only the balancers' picks, and they stayed: with
+// 60 outbounds (30 XHTTP, 10 gRPC, 10 Hysteria, 10 TCP REALITY) 21-28 HTTP/2, 10 gRPC and 10 QUIC
+// connections, ~60 / 72 / 100 KiB of heap each (3.1 MiB in all, 3.7 MiB of Go with the
+// goroutines' stacks), and the HTTP/2 ones went up to 59 for the minutes after every start
+// (XMUX's default 3 per subject). In the pool with this minute, next to probes about a minute
+// apart (1m × 5), a subject's probes were a random mix of warm ones and cold ones (a TCP + TLS /
+// REALITY or QUIC + auth handshake: +2 RTT); leastLoad ranks by the deviation of each subject's
+// last probes (the burst observatory's HealthPingRTTS), the mix added ~0.46 × 2 RTT that the path
+// didn't have, and leastLoad left gRPC and Hysteria for TCP REALITY. Now each probe is cold, as
+// TCP REALITY's always were (it pools nothing), the pick's too: a pick's probes warm on its
+// connection and the others' cold switched its samples from warm to cold as it stopped being the
+// pick and back, and in the review's model leastLoad changed its pick 1.7-1.8 times as often
+// (docs/HANDOFF.md, TestTitanProbeDeviation).
+var TitanIdleAfter = 60 * time.Second
+
+type titanProbeKey struct{}
+
+// TitanProbeContext marks ctx as the observatory's probes' (the burst observatory's ping client:
+// burst_mem.go). The mark goes with each probe's flow through the outbound to its transport's
+// dial, and on through a dialerProxy hop to the hop's transport (XHTTP's and Hysteria's dials
+// keep the flow's values; gRPC's copies it into grpc-go's dial context): the hop gives the probe
+// a connection of its own too, for a UDP leg as well (a Hysteria or XHTTP/3 subject through a
+// Hysteria hop: a UDP session on a client of its own). A flow through Xray's mux (mux.cool) loses
+// it and goes in the pool, as the tunnel's do.
+func TitanProbeContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, titanProbeKey{}, true)
+}
+
+// TitanProbe says ctx is the context of an observatory probe's flow.
+func TitanProbe(ctx context.Context) bool {
+	p, _ := ctx.Value(titanProbeKey{}).(bool)
+	return p
+}
 
 // TitanCloseTransports closes the pooled connections of every transport, without waiting
 // for them. Only once no Xray instance runs in the process (the tunnel, between stopXray and
