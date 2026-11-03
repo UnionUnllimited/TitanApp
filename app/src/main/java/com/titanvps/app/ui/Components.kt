@@ -178,7 +178,8 @@ internal fun TopBar(
             )
             Box { action() }
         },
-        modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).padding(horizontal = 16.dp),
+        // 8 at the start: the round button's 48 dp touch box puts its disc 16 dp in.
+        modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).padding(start = 8.dp, end = 16.dp),
     ) { measurables, constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         val start = measurables[0].measure(loose)
@@ -197,16 +198,17 @@ internal fun TopBar(
     }
 }
 
-/** A round button of [TopBar]: a glyph on a disc, 32 dp as the cabinet's. */
+/** A round button of [TopBar]: a glyph on a disc, 32 dp as the cabinet's, tapped within 48 dp. */
 @Composable
 private fun BarCircle(icon: ImageVector, contentDescription: String, tint: Color, disc: Color, glyph: Dp, onClick: () -> Unit) {
     Box(
         Modifier
             .pressable(onClick = onClick, scale = 0.9f)
-            .size(32.dp)
-            .background(disc, CircleShape),
+            .size(48.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription, Modifier.size(glyph), tint = tint)
+        Box(Modifier.size(32.dp).background(disc, CircleShape), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription, Modifier.size(glyph), tint = tint)
+        }
     }
 }

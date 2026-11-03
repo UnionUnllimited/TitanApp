@@ -143,10 +143,10 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onO
                     lineHeight = 16.sp,
                 )
                 if (info.totalBytes > 0) {
-                    // The cabinet's Тарифы.
+                    // The cabinet's Тарифы, the traffic packs first.
                     SecondaryButton(
                         "Добавить ГБ",
-                        { viewModel.openCabinet(CabinetActivity.TAB_TARIFFS) },
+                        { viewModel.openCabinet(CabinetActivity.TAB_TRAFFIC) },
                         Modifier.padding(top = 4.dp),
                         icon = Icons.Filled.AddCircle,
                         tint = if (low) palette.orange else palette.primary,

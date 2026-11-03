@@ -70,6 +70,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -163,6 +164,8 @@ class CabinetActivity : ComponentActivity() {
         /** The cabinet's tabs: the subscription, and the tariffs to pay for. */
         const val TAB_SUBSCRIPTION = 0
         const val TAB_TARIFFS = 1
+        /** Тарифы with the traffic packs first («Добавить ГБ»), as iOS's traffic paywall. */
+        const val TAB_TRAFFIC = 2
 
         /**
          * [devices]: connected devices and the limit (0 = not known), if the app knows them.
@@ -194,7 +197,9 @@ private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, startTab: Int,
     var note by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var pulling by remember { mutableStateOf(false) }
-    var tab by remember { mutableIntStateOf(startTab) }
+    // Kept through a rotation (the activity is recreated): the tab the user picked, not the intent's.
+    var tab by rememberSaveable { mutableIntStateOf(if (startTab == CabinetActivity.TAB_TRAFFIC) CabinetActivity.TAB_TARIFFS else startTab) }
+    val trafficFirst = startTab == CabinetActivity.TAB_TRAFFIC
     // A tab shows from its top (Продлить подписку is at the bottom of Подписка).
     val scroll = rememberScrollState()
     LaunchedEffect(tab) { scroll.animateScrollTo(0) }
@@ -313,6 +318,7 @@ private fun CabinetScreen(link: String, devices: Pair<Int, Int>?, startTab: Int,
                                 } else {
                                     PayPane(
                                         d,
+                                        trafficFirst,
                                         onPay = { tariff, method, done ->
                                             val a = api
                                             if (a == null) {
@@ -668,6 +674,7 @@ private fun IdTile(id: String, modifier: Modifier, onCopy: () -> Unit) {
 @Composable
 private fun PayPane(
     d: CabinetApi.Data,
+    trafficFirst: Boolean,
     onPay: (CabinetApi.Tariff, String, done: () -> Unit) -> Unit,
     onCode: (String, done: (Boolean) -> Unit) -> Unit,
 ) {
@@ -676,7 +683,8 @@ private fun PayPane(
     // Лимит устройств chosen (first purchase), and the tariff picked in each section.
     var limit by remember(d.limits) { mutableStateOf(d.limits.firstOrNull()) }
     var picked by remember { mutableStateOf(mapOf<String, String>()) }
-    for (kind in listOf("sub", "traffic")) {
+    // Opened from «Добавить ГБ»: the traffic packs before the renewal.
+    for (kind in if (trafficFirst) listOf("traffic", "sub") else listOf("sub", "traffic")) {
         val all = d.tariffs.filter { it.kind == kind }
         if (all.isEmpty()) continue
         val visible = if (kind == "sub" && d.limits.isNotEmpty()) all.filter { it.limit == limit } else all.filter { it.shown }.ifEmpty { all }

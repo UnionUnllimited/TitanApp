@@ -180,7 +180,7 @@ internal fun HomeScreen(
                     // In the order shown (favourites first): results fill the list from the top.
                     onPing = { viewModel.pingAll(shown.map { it.id }) },
                 )
-                ListCaption(page, sub.info, wifiLocked, onBuy = { viewModel.openCabinet(CabinetActivity.TAB_TARIFFS) })
+                ListCaption(page, sub.info, wifiLocked, onBuy = { viewModel.openCabinet(CabinetActivity.TAB_TRAFFIC) })
             }
         }
         // Read once for the list, not per row.

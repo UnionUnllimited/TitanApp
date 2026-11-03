@@ -194,10 +194,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadAccount() {
         val url = subscription.value?.url ?: return
         if (_accountLoading.value) return
-        viewModelScope.launch {
+        accountJob = viewModelScope.launch {
             _accountLoading.value = true
             runCatching { com.titanvps.app.data.AccountApi.fetch(url) }
-                .onSuccess { _account.value = it }
+                // Not for another key: signed out (or a new key) while it loaded.
+                .onSuccess { if (subscription.value?.url == url) _account.value = it }
                 .onFailure { android.util.Log.w("Titan", "account info: $it") }
             _accountLoading.value = false
         }
@@ -208,6 +209,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Fired after a key is added: connect right away (Android then turns other VPNs off). */
     private val _connectRequests = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
     val connectRequests = _connectRequests.receiveAsFlow()
+
+    /** The account info being loaded: [logout] drops it, so a new key's loads at once. */
+    private var accountJob: Job? = null
+
+    /**
+     * Bumped by [logout]: a subscription request begun before it (a refresh, a key being added)
+     * says nothing and leaves [busy] to what came after, as iOS's generation.
+     */
+    private var signOuts = 0
 
     fun activate(link: String) = launchBusy {
         val first = repo.subscription.value == null
@@ -225,20 +235,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshByHand() {
         if (_busy.value) return
         _busy.value = true
+        val gen = signOuts
         viewModelScope.launch {
             try {
-                repo.refresh()
+                // null: no key any more (signed out meanwhile): nothing to say.
+                repo.refresh() ?: return@launch
                 loadAccount()
                 Toasts.show("Подписка обновлена", ToastKind.SUCCESS)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 android.util.Log.w("Titan", "refresh failed", e)
+                if (gen != signOuts) return@launch
                 // Only our own, human-readable messages reach the user.
                 val reason = (e as? SubscriptionRepository.SubscriptionException)?.message ?: "сервер не ответил"
                 Toasts.show("Не удалось обновить подписку: " + reason.replaceFirstChar { it.lowercase() }, ToastKind.WARNING)
             } finally {
-                _busy.value = false
+                if (gen == signOuts) _busy.value = false
             }
         }
     }
@@ -253,7 +266,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Personal cabinet: the site's cabinet inside the app, signed in by the link the
      * subscription brings (profile-web-page-url); without one, the Telegram bot. [tab]: the
-     * cabinet's tab it opens on (CabinetActivity.TAB_TARIFFS to renew or add GB).
+     * cabinet's tab it opens on (CabinetActivity.TAB_TARIFFS to renew, TAB_TRAFFIC to add GB).
      */
     fun openCabinet(tab: Int = CabinetActivity.TAB_SUBSCRIPTION) = viewModelScope.launch {
         val page = subscription.value?.info?.webPageUrl
@@ -276,6 +289,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         stopPing()
         repo.logout()
         settings.clearFavorites()
+        // A refresh or a key still loading ends unheard; the key field is usable at once.
+        signOuts++
+        _busy.value = false
+        accountJob?.cancel()
+        _accountLoading.value = false
         _pings.value = emptyMap()
         _pingErrors.value = emptyMap()
         checkJob?.cancel()
@@ -415,17 +433,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun launchBusy(silent: Boolean = false, block: suspend () -> Unit) {
+        val gen = signOuts
         viewModelScope.launch {
             _busy.value = true
             try {
                 block()
             } catch (e: Exception) {
                 android.util.Log.w("Titan", "request failed", e)
-                // Only our own, human-readable messages reach the user.
-                if (!silent) _message.value = (e as? com.titanvps.app.data.SubscriptionRepository.SubscriptionException)?.message
+                // Only our own, human-readable messages reach the user (not after a sign-out).
+                if (!silent && gen == signOuts) _message.value = (e as? com.titanvps.app.data.SubscriptionRepository.SubscriptionException)?.message
                     ?: "Что-то пошло не так. Попробуйте ещё раз"
             } finally {
-                _busy.value = false
+                if (gen == signOuts) _busy.value = false
             }
         }
     }

@@ -102,6 +102,14 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
     // Diagnostics opened from «Технический режим» goes back there.
     var logsFromTech by rememberSaveable { mutableStateOf(false) }
 
+    // Signed out: a new key starts on Главная, nothing left open (as iOS).
+    LaunchedEffect(sub == null) {
+        if (sub == null) {
+            tab = MainTab.HOME
+            overlay = null
+        }
+    }
+
     // A tab asked for from outside (a reminder's notification): over anything open.
     LaunchedEffect(pendingTab) {
         val target = when (pendingTab) {
@@ -235,13 +243,13 @@ private fun SplashScreen() {
 private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit) {
     val palette = Titan.palette
     val haptics = rememberHaptics()
-    // Of gesture navigation's inset (the handle, 24 dp) 20 under the items, as the iPhone keeps of
-    // its home indicator, so the bar sits lower. The system takes only swipes there: the items'
+    // Of gesture navigation's inset (the handle, 24 dp) 18 under the items (48 dp tall, a touch
+    // target: the iPhone's 46 over 20 of its home indicator), so the bar sits lower. The system takes only swipes there: the items'
     // lower edge in it still gets taps, and the padding below them isn't tappable, so a swipe home
     // doesn't press a tab. Buttons (3-button navigation, a taskbar) are tappable insets: all of it.
     val nav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val buttons = WindowInsets.tappableElement.asPaddingValues().calculateBottomPadding()
-    val bottom = maxOf(buttons, minOf(nav, 20.dp))
+    val bottom = maxOf(buttons, minOf(nav, 18.dp))
     val hairline = with(LocalDensity.current) { 1.toDp() }
     Column(Modifier.fillMaxWidth().background(palette.surface)) {
         Box(Modifier.fillMaxWidth().height(hairline).background(palette.outline))
@@ -254,7 +262,7 @@ private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit) {
                 .widthIn(max = 560.dp)
                 .fillMaxWidth()
                 .padding(bottom = bottom)
-                .heightIn(min = 46.dp)
+                .heightIn(min = 48.dp)
                 .selectableGroup(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -264,7 +272,7 @@ private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit) {
                 Column(
                     Modifier
                         .weight(1f)
-                        .heightIn(min = 46.dp)
+                        .heightIn(min = 48.dp)
                         .pressable(
                             onClick = {
                                 if (!selected) {

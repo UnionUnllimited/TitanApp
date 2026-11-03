@@ -60,13 +60,15 @@ class SubscriptionRepository(private val context: Context) {
         val url = deepLinks.extractSubscriptionUrl(link)
             ?: linkFinder.find(link)
             ?: throw SubscriptionException("Это не ключ Titan VPS")
-        return fetch(url, generation) ?: throw SubscriptionException("Вы вышли из аккаунта")
+        // A fetch of the old key still under way doesn't overwrite this one (as iOS).
+        val gen = synchronized(saving) { ++generation }
+        return fetch(url, gen) ?: throw SubscriptionException("Вы вышли из аккаунта")
     }
 
     /** The current key's subscription again; null without a key or if it was signed out meanwhile. */
     suspend fun refresh(): Subscription? {
-        val url = _subscription.value?.url ?: return null
-        return fetch(url, generation)
+        val (url, gen) = synchronized(saving) { (_subscription.value?.url ?: return null) to generation }
+        return fetch(url, gen)
     }
 
     fun logout() = synchronized(saving) {
@@ -76,7 +78,10 @@ class SubscriptionRepository(private val context: Context) {
         _selectedId.value = null
     }
 
-    /** Bumped by [logout]: a fetch begun before it doesn't save the key back (as iOS's generation). */
+    /**
+     * Bumped by [logout] and by a new key ([activate]): a fetch begun before it doesn't save the
+     * old key back (as iOS's generation).
+     */
     @Volatile private var generation = 0
     private val saving = Any()
 
@@ -105,6 +110,7 @@ class SubscriptionRepository(private val context: Context) {
             if (gen != generation) return@synchronized false
             store.save(sub)
             _subscription.value = sub
+            if (sub.servers.none { it.id == _selectedId.value }) select(sub.servers.first().id)
             true
         }
         if (!saved) return@withContext null
@@ -114,7 +120,6 @@ class SubscriptionRepository(private val context: Context) {
                 context, java.io.File(com.titanvps.app.TitanApp.get(context).assetDir), sub.servers.map { it.xrayJson },
             )
         }
-        if (sub.servers.none { it.id == _selectedId.value }) select(sub.servers.first().id)
         sub
     }
 
