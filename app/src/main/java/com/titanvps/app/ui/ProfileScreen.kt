@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Shuffle
@@ -43,7 +44,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -69,7 +69,7 @@ import com.titanvps.app.data.Flags
 import com.titanvps.app.data.Fmt
 import com.titanvps.app.data.Subscription
 import com.titanvps.app.data.ThemeMode
-import com.titanvps.app.ui.kit.TitanAlertDialog
+import com.titanvps.app.ui.kit.DialogButton
 import com.titanvps.app.ui.kit.FlagCircle
 import com.titanvps.app.ui.kit.RowDivider
 import com.titanvps.app.ui.kit.SectionTitle
@@ -77,6 +77,7 @@ import com.titanvps.app.ui.kit.SegmentItem
 import com.titanvps.app.ui.kit.SegmentedTabs
 import com.titanvps.app.ui.kit.SettingsRow
 import com.titanvps.app.ui.kit.SettingsToggleRow
+import com.titanvps.app.ui.kit.TitanAlertDialog
 import com.titanvps.app.ui.kit.TitanCard
 import com.titanvps.app.ui.kit.pressable
 import com.titanvps.app.ui.kit.rememberHaptics
@@ -259,7 +260,24 @@ internal fun ProfileScreen(
                 )
                 QuickTileRow()
                 RowDivider()
-                SettingsRow("О приложении", Icons.Filled.Info, palette.violet, onClick = { about = true })
+                SettingsRow(
+                    "О приложении",
+                    Icons.Filled.Info,
+                    palette.violet,
+                    onClick = { about = true },
+                    subtitle = "Версия и открытый исходный код",
+                )
+                RowDivider()
+                SettingsRow(
+                    "Политика конфиденциальности",
+                    Icons.Filled.PanTool,
+                    palette.primary,
+                    onClick = { context.openUrl(PRIVACY_URL) },
+                    showChevron = false,
+                    trailing = {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, null, Modifier.size(13.dp), tint = palette.textTertiary)
+                    },
+                )
                 RowDivider()
                 // No highlight: the way in to Технический режим stays hidden.
                 SettingsRow(
@@ -301,7 +319,10 @@ internal fun ProfileScreen(
                     onClick = { confirmReset = true },
                     showChevron = false,
                 )
-                RowDivider()
+            }
+
+            SectionTitle("Аккаунт")
+            TitanCard {
                 SettingsRow(
                     "Выйти из аккаунта",
                     Icons.AutoMirrored.Filled.Logout,
@@ -331,21 +352,17 @@ internal fun ProfileScreen(
                         "сервер вернутся к исходным. Ключ останется.",
                 )
             },
-            confirmButton = {
-                TextButton(onClick = { confirmReset = false; viewModel.resetSettings() }) {
-                    Text("Сбросить", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Отмена") } },
+            confirmButton = { DialogButton("Сбросить", { confirmReset = false; viewModel.resetSettings() }, destructive = true) },
+            dismissButton = { DialogButton("Отмена", { confirmReset = false }) },
         )
     }
     if (confirmLogout) {
         TitanAlertDialog(
             onDismissRequest = { confirmLogout = false },
             title = { Text("Выйти из аккаунта?") },
-            text = { Text("VPN отключится, ключ нужно будет вставить заново.") },
-            confirmButton = { TextButton(onClick = { confirmLogout = false; viewModel.logout() }) { Text("Выйти") } },
-            dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Отмена") } },
+            text = { Text("VPN отключится, ключ и избранное удалятся с этого устройства. Ключ нужно будет вставить заново.") },
+            confirmButton = { DialogButton("Выйти", { confirmLogout = false; viewModel.logout() }, destructive = true) },
+            dismissButton = { DialogButton("Отмена", { confirmLogout = false }) },
         )
     }
 }
@@ -413,8 +430,8 @@ internal fun UpdateDialog(viewModel: MainViewModel) {
             onDismissRequest = close,
             title = { Text("Разрешите установку") },
             text = { Text("В открывшихся настройках включите «Разрешить установку» для Titan VPS, вернитесь сюда и нажмите «Продолжить».") },
-            confirmButton = { TextButton(onClick = { viewModel.downloadUpdate(st.release) }) { Text("Продолжить") } },
-            dismissButton = { TextButton(onClick = { viewModel.openInstallPermission() }) { Text("Открыть настройки") } },
+            confirmButton = { DialogButton("Продолжить", { viewModel.downloadUpdate(st.release) }, bold = true) },
+            dismissButton = { DialogButton("Открыть настройки", { viewModel.openInstallPermission() }) },
         )
         com.titanvps.app.data.Updater.State.Checking -> TitanAlertDialog(
             onDismissRequest = close,
@@ -426,7 +443,7 @@ internal fun UpdateDialog(viewModel: MainViewModel) {
             onDismissRequest = close,
             title = { Text("Обновление") },
             text = { Text("У вас последняя версия ${BuildConfig.VERSION_NAME}") },
-            confirmButton = { TextButton(onClick = close) { Text("OK") } },
+            confirmButton = { DialogButton("OK", close, bold = true) },
         )
         is com.titanvps.app.data.Updater.State.Available -> TitanAlertDialog(
             onDismissRequest = close,
@@ -438,8 +455,8 @@ internal fun UpdateDialog(viewModel: MainViewModel) {
                         " и установится поверх, настройки сохранятся."
                 )
             },
-            confirmButton = { TextButton(onClick = { viewModel.downloadUpdate(st.release) }) { Text("Обновить") } },
-            dismissButton = { TextButton(onClick = close) { Text("Позже") } },
+            confirmButton = { DialogButton("Обновить", { viewModel.downloadUpdate(st.release) }, bold = true) },
+            dismissButton = { DialogButton("Позже", close) },
         )
         is com.titanvps.app.data.Updater.State.Downloading -> TitanAlertDialog(
             onDismissRequest = {},
@@ -462,7 +479,7 @@ internal fun UpdateDialog(viewModel: MainViewModel) {
             onDismissRequest = close,
             title = { Text("Обновление") },
             text = { Text(st.message) },
-            confirmButton = { TextButton(onClick = close) { Text("OK") } },
+            confirmButton = { DialogButton("OK", close, bold = true) },
         )
     }
 }

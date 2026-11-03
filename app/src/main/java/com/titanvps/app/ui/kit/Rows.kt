@@ -87,12 +87,12 @@ fun IconTile(icon: ImageVector, color: Color, modifier: Modifier = Modifier, siz
     }
 }
 
-/** "ОФОРМЛЕНИЕ" above a card. */
+/** "ОФОРМЛЕНИЕ" above a card; the column's spacing (8 dp, as iOS) parts it from the card. */
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text.uppercase(),
-        modifier.padding(start = 6.dp, top = 14.dp, bottom = 6.dp).semantics { heading() },
+        modifier.padding(start = 6.dp, top = 14.dp).semantics { heading() },
         color = Titan.palette.textSecondary,
         fontSize = 13.sp,
         fontWeight = FontWeight.SemiBold,

@@ -54,6 +54,12 @@ class AppSettings(context: Context) {
         _favorites.value = next
     }
 
+    /** Выйти: the favourites were the key's servers. */
+    fun clearFavorites() {
+        prefs.edit().remove(KEY_FAVORITES).apply()
+        _favorites.value = emptySet()
+    }
+
     private val _autoBypass = MutableStateFlow(prefs.getBoolean(KEY_AUTO_BYPASS, true))
     /** Switch to a bypass server automatically when mobile internet goes whitelist-only. */
     val autoBypass: StateFlow<Boolean> = _autoBypass.asStateFlow()

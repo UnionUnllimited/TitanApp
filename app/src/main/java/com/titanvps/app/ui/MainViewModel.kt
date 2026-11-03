@@ -266,10 +266,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disconnect() = TitanVpnService.stop(getApplication<Application>())
 
+    /**
+     * Выйти (as iOS): what the key left on this device goes — the key, its servers and pick,
+     * favourites, pings, the account; reminders with it (TitanApp's observer of the key). The
+     * cabinet's session lived in memory only. The app's own settings stay.
+     */
     fun logout() {
         disconnect()
         stopPing()
         repo.logout()
+        settings.clearFavorites()
         _pings.value = emptyMap()
         _pingErrors.value = emptyMap()
         checkJob?.cancel()
