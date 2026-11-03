@@ -94,6 +94,9 @@ class TitanApp : Application() {
                 autoConnectOnOpen()
                 // Swiped away: back with each opening of the app.
                 OffNotification.opened(this@TitanApp)
+                // Notifications allowed in Android's settings meanwhile: the VPN's numbers come back now
+                // (the notification checks whether it is seen only on a change and when the screen comes on).
+                if (VpnStatus.state.value is VpnState.Connected) TitanVpnService.reshow(this@TitanApp)
             }
         }
 
