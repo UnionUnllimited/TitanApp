@@ -435,6 +435,8 @@ class TitanVpnService : VpnService() {
         // The way back's checks belong to one bypass: kept over its restarts only.
         if (returnFor != server.id) stopReturnWatch()
         launchedAt = SystemClock.elapsedRealtime()
+        // The notification's latency was another core's: another network, server or connection.
+        LiveLatency.clear()
         // Resolver for "direct" traffic: the carrier's/router's own DNS (like Happ), since
         // foreign resolvers such as 1.1.1.1 are often blocked on Russian mobile networks.
         val dns = underlyingDnsServer(network)
@@ -1124,6 +1126,7 @@ class TitanVpnService : VpnService() {
         postedAt = 0L
         // The notification's numbers go with it: nothing redraws it after the stop.
         stopTicking()
+        LiveLatency.clear()
         VpnStatus.set(VpnState.Disconnected)
     }
 

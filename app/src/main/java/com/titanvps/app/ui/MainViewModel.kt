@@ -181,7 +181,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var result: ConnectionCheck.State = ConnectionCheck.State.Failed(null)
             for (attempt in 0 until tries) {
                 if (attempt > 0) delay(1500)
-                result = ConnectionCheck.once(warm)
+                // A failure clears the notification's latency only once no try is left.
+                result = ConnectionCheck.once(warm, lastTry = attempt == tries - 1)
                 if (result is ConnectionCheck.State.Ok) break
             }
             _connectionCheck.value = result
