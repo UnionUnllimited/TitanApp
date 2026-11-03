@@ -16,7 +16,7 @@ import com.titanvps.app.vpn.VpnStatus
 
 /**
  * The widget's buttons, and those of the notification while the VPN is off ([OffNotification]:
- * ‹ › as the widget's, «Включить»). Not exported: only our own PendingIntents reach it.
+ * ‹ › as the widget's, «Включить», swiped away). Not exported: only our own PendingIntents reach it.
  */
 class WidgetActionReceiver : BroadcastReceiver() {
 
@@ -26,6 +26,7 @@ class WidgetActionReceiver : BroadcastReceiver() {
             TitanWidget.ACTION_PREV -> step(context, forward = false)
             TitanWidget.ACTION_NEXT -> step(context, forward = true)
             OffNotification.ACTION_ON -> turnOn(context)
+            OffNotification.ACTION_DISMISSED -> OffNotification.dismissed(context)
         }
     }
 

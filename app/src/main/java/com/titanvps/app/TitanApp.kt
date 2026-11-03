@@ -93,7 +93,7 @@ class TitanApp : Application() {
             if (started++ == 0) {
                 autoConnectOnOpen()
                 // Swiped away: back with each opening of the app.
-                runCatching { OffNotification.update(this@TitanApp) }
+                OffNotification.opened(this@TitanApp)
             }
         }
 
