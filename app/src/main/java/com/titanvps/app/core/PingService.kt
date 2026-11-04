@@ -27,7 +27,8 @@ import java.util.concurrent.TimeUnit
  * kept warm for a minute, so every request (the whole list or a single server, even
  * while the list is still being measured) starts measuring right away. Servers are
  * measured in the order asked, a few at a time, and each result is reported as soon as
- * it's ready. Falls back to libXray's pingBatch if the core can't start.
+ * it's ready; in a list, a miss or a slow answer only after it was measured again alone
+ * at the end ([PingRun]). Falls back to libXray's pingBatch if the core can't start.
  */
 class PingService : Service() {
 
@@ -38,7 +39,10 @@ class PingService : Service() {
         val serverKeys: Map<String, List<String>>,
         /** Naive / Mieru clients for the servers that need one. */
         val plugins: List<PluginProcess> = emptyList(),
-        /** Probes over UDP (Hysteria, TUIC, MASQUE over H3): the only ones measured twice. */
+        /**
+         * Probes over UDP (Hysteria, TUIC, MASQUE over H3): counted apart in a list's line in
+         * Диагностика (before, only their misses were measured again).
+         */
         val udp: Set<String> = emptySet(),
         /** Probes through a protocol client still starting: measured once it is up. */
         val ready: Map<String, java.util.concurrent.Future<*>> = emptyMap(),
@@ -76,7 +80,9 @@ class PingService : Service() {
                 val servers = root.getJSONArray("servers").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
                 val targets = root.getJSONArray("targets").let { a -> (0 until a.length()).map { a.getString(it) } }
                 val single = targets.size == 1
-                val anyOk = runCatching { measureTargets(servers, targets, single, receiver) }
+                // Balancer members per server: the watcher's reachability check asks for a few.
+                val maxMembers = PingRun.maxMembers(root, MAX_MEMBERS)
+                val anyOk = runCatching { measureTargets(servers, targets, single, maxMembers, receiver) }
                     .getOrElse { pingBatchFallback(servers.filter { it.getString("id") in targets }, receiver) }
                 receiver?.send(RESULT_DONE, Bundle().apply {
                     if (!anyOk) putString(KEY_ERROR, "серверы не ответили")
@@ -175,101 +181,45 @@ class PingService : Service() {
     }
 
     /**
-     * Every server is measured on all members of its balancer; a server's ping is its best
-     * member — what the balancer itself would pick. Returns true if anything answered.
+     * Every server is measured on up to [maxMembers] members of its balancer; a server's ping
+     * is its best member — what the balancer itself would pick. Returns true if anything answered.
      */
-    private fun measureTargets(servers: List<JSONObject>, targets: List<String>, single: Boolean, receiver: ResultReceiver?): Boolean {
+    private fun measureTargets(servers: List<JSONObject>, targets: List<String>, single: Boolean, maxMembers: Int, receiver: ResultReceiver?): Boolean {
         val gen = generation.get()
         val cancelled = { generation.get() != gen }
+        val startedAt = System.nanoTime()
         val s = acquireSession(servers, targets)
         try {
-            return measureWith(s, targets, single, receiver, cancelled)
+            val run = measureWith(s, targets, single, maxMembers, receiver, cancelled)
+            // A list's line in Диагностика: how much its first pass missed, how much the recheck found.
+            if (!single) Plugins.note(this, run.line((System.nanoTime() - startedAt) / 1_000_000))
+            return run.anyOk
         } finally {
             sessionLock.readLock().unlock()
         }
     }
 
-    private fun measureWith(s: Session, targets: List<String>, single: Boolean, receiver: ResultReceiver?, cancelled: () -> Boolean): Boolean {
-        val pool = if (single) singlePool else listPool
-        val keysOf = targets.associateWith { s.serverKeys[it].orEmpty() }
-        val best = HashMap<String, Long>()
-        val remaining = HashMap<String, Int>()
-        val started = HashSet<String>()
-        val serversByKey = LinkedHashMap<String, MutableList<String>>()
-        targets.forEach { id ->
-            remaining[id] = keysOf.getValue(id).size
-            keysOf.getValue(id).forEach { serversByKey.getOrPut(it) { mutableListOf() }.add(id) }
-        }
-        targets.filter { remaining[it] == 0 }.forEach { send(receiver, it, -1L, "нет адреса сервера") }
-        val lock = Any()
-        /** Why a member last failed: a server that got no answer at all says why. */
-        val lastError = HashMap<String, String>()
-        fun report(key: String, r: Long, error: String? = null) = synchronized(lock) {
-            for (id in serversByKey.getValue(key)) {
-                if (r >= 0 && (best[id] ?: -1L).let { it < 0 || r < it }) best[id] = r
-                if (r < 0 && error != null) lastError[id] = error
-                remaining[id] = remaining.getValue(id) - 1
-                if (remaining[id] == 0) {
-                    val result = best[id] ?: -1L
-                    send(receiver, id, result, if (result < 0) lastError[id] else null)
-                }
-            }
-        }
-        // Keys go into the pool in the order of the servers asked for, so the list fills top-down.
-        val recheck = java.util.Collections.synchronizedMap(LinkedHashMap<String, Long>())
-        val recheckError = java.util.Collections.synchronizedMap(HashMap<String, String>())
-        serversByKey.map { (key, ids) ->
-            pool.submit {
-                if (cancelled()) return@submit
-                synchronized(lock) {
-                    val fresh = ids.filter { started.add(it) }
-                    if (fresh.isNotEmpty()) sendStarted(receiver, fresh)
-                }
-                // Through a protocol client: once it is up (it didn't start: no answer).
-                s.ready[key]?.let { start ->
-                    if (runCatching { start.get(30, java.util.concurrent.TimeUnit.SECONDS) }.isFailure) {
-                        report(key, -1L, "клиент протокола не запустился")
-                        return@submit
-                    }
-                }
-                var error: String? = null
-                val r = measureKey(s.ports.getValue(key)) { error = it }
-                // In a full run a bad result over UDP (Hysteria, TUIC) is often just the crowd:
-                // measured again alone once the list is done. TCP results stand as they are.
-                if (!single && key in s.udp && (r < 0 || r > RECHECK_ABOVE_MS)) {
-                    error?.let { recheckError[key] = it }
-                    recheck[key] = r
-                } else {
-                    report(key, r, error)
-                }
-            }
-        }.forEach { runCatching { it.get() } }
-        if (cancelled()) return best.isNotEmpty()
-        // A few at a time, one attempt each; keep the better of the two runs. Not needed when
-        // every server using it already has a good result (e.g. another balancer member).
-        val (needed, settled) = recheck.toList().partition { (key, _) ->
-            synchronized(lock) { serversByKey.getValue(key).any { (best[it] ?: -1L) < 0 } }
-        }
-        settled.forEach { (key, first) -> report(key, first, recheckError[key]) }
-        needed.map { (key, first) ->
-            recheckPool.submit {
-                if (cancelled()) return@submit
-                var error: String? = null
-                val again = measure(s.ports.getValue(key), RECHECK_TIMEOUT_SEC) { error = it }
-                report(key, bestOf(first, again), error ?: recheckError[key])
-            }
-        }.forEach { runCatching { it.get() } }
-        return best.isNotEmpty()
-    }
-
-    /**
-     * One cold attempt; if it answered, a second one (the first handshake is often the
-     * slow part) and the better of the two. A dead server costs [TIMEOUT_SEC] here.
-     */
-    private fun measureKey(port: Int, onError: (String) -> Unit = {}): Long {
-        val first = measure(port, TIMEOUT_SEC, onError)
-        return if (first < 0) first else bestOf(first, measure(port, SECOND_TIMEOUT_SEC, onError))
-    }
+    /** [maxMembers] limits only what this request measures: the core keeps every member warm. */
+    private fun measureWith(
+        s: Session,
+        targets: List<String>,
+        single: Boolean,
+        maxMembers: Int,
+        receiver: ResultReceiver?,
+        cancelled: () -> Boolean,
+    ): PingRun.Summary = PingRun.run(
+        targets = targets,
+        keysOf = { s.serverKeys[it].orEmpty().take(maxMembers) },
+        single = single,
+        pool = if (single) singlePool else listPool,
+        recheckPool = recheckPool,
+        measure = { key, timeoutSec, onError -> measure(s.ports.getValue(key), timeoutSec, onError) },
+        result = { id, ms, error -> send(receiver, id, ms, error) },
+        started = { sendStarted(receiver, it) },
+        ready = { s.ready[it] },
+        udp = s.udp,
+        cancelled = cancelled,
+    )
 
     /** Hysteria, QUIC, mKCP… outbounds: they go over UDP. */
     private fun isUdp(json: String, tag: String): Boolean {
@@ -278,12 +228,6 @@ class PingService : Service() {
         val protocol = ob.optString("protocol").lowercase()
         val network = ob.optJSONObject("streamSettings")?.optString("network").orEmpty().lowercase()
         return protocol in setOf("hysteria", "hysteria2", "tuic", "wireguard") || network in setOf("hysteria", "quic", "kcp", "mkcp")
-    }
-
-    private fun bestOf(a: Long, b: Long): Long = when {
-        a < 0 -> b
-        b < 0 -> a
-        else -> minOf(a, b)
     }
 
     /** Time of one request through the server on a fresh connection, or -1 (why: [onError]). */
@@ -378,16 +322,12 @@ class PingService : Service() {
         const val RESULT_STARTED = 2
         const val RESULT_DONE = 0
         private const val PING_URL = "https://www.gstatic.com/generate_204"
-        private const val TIMEOUT_SEC = 4
-        private const val SECOND_TIMEOUT_SEC = 3
-        private const val RECHECK_TIMEOUT_SEC = 6
         private const val RECHECK_PARALLEL = 3
         private const val RETRY_TIMEOUT_SEC = 10 // pingBatch fallback
         private const val PARALLEL = 6 // more at once crowd each other out on a weak mobile network
         private const val MAX_PROBES = 200
         /** Balancer members measured per server: its ping is the best of them. */
         private const val MAX_MEMBERS = 30
-        private const val RECHECK_ABOVE_MS = 1500L
         private const val KEEP_WARM_MS = 60_000L
         private const val BATCH_LIMIT = 5 // libXray pingBatch accepts at most 5 configs per call
     }

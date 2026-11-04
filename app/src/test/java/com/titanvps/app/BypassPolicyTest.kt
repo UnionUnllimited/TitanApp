@@ -1,5 +1,6 @@
 package com.titanvps.app
 
+import com.titanvps.app.data.Server
 import com.titanvps.app.vpn.BypassPolicy
 import com.titanvps.app.vpn.BypassPolicy.Back
 import com.titanvps.app.vpn.BypassPolicy.Decision
@@ -126,5 +127,19 @@ class BypassPolicyTest {
         // The user picked the bypass himself: never a switch, one offer.
         assertEquals(Back.OFFER, BypassPolicy.onLifted(movedByUs = false, autoBypass = true, offered = false))
         assertEquals(Back.NONE, BypassPolicy.onLifted(movedByUs = false, autoBypass = true, offered = true))
+    }
+
+    @Test
+    fun watcherPingsKeepTheWholeSubscription() {
+        val old = Server("cur", "Сервер", "{\"v\":1}", "proxy")
+        val latest = listOf(Server("a", "A", "{}", "proxy"), Server("cur", "Сервер", "{\"v\":2}", "proxy"))
+        // The current server as the subscription has it now (Главная's copy), and every other one:
+        // the warm ping core is neither cut down nor restarted over an older copy.
+        assertEquals(latest, BypassPolicy.pingAll(latest, listOf(old)))
+        // A server the subscription no longer has (refreshed since connecting) is still measured.
+        val gone = Server("gone", "Ушёл", "{}", "proxy")
+        assertEquals(latest + gone, BypassPolicy.pingAll(latest, listOf(old, gone)))
+        // No subscription at hand: just the servers pinged.
+        assertEquals(listOf(old), BypassPolicy.pingAll(emptyList(), listOf(old)))
     }
 }

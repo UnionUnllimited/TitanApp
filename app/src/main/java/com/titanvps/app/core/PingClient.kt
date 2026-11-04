@@ -27,25 +27,32 @@ object PingClient {
         data class Done(val error: String?) : Event
     }
 
-    /** Pings under way (Главная's, the bypass watcher's): the VPN notification's probe waits. */
+    /**
+     * Pings under way (Главная's, the bypass watcher's): the VPN notification's probe and the
+     * watcher's next look wait. A request counts until its flow is closed, and collecting it
+     * returns only after that, so a caller's own finished ping never counts here.
+     */
     private val running = AtomicInteger()
 
     val busy: Boolean get() = running.get() > 0
 
-    /**
-     * Measures [targets] in that order. [all] is every server of the subscription: the
-     * service keeps one warm core for all of them, shared by concurrent requests.
-     */
     /** Stops the measurements in progress (what is still queued isn't measured). */
     fun cancel(context: Context) {
         runCatching { context.startService(Intent(context, PingService::class.java).putExtra(PingService.EXTRA_CANCEL, true)) }
     }
 
-    fun ping(context: Context, all: List<Server>, targets: List<String>): Flow<Event> = callbackFlow {
+    /**
+     * Measures [targets] in that order. [all] is every server of the subscription: the
+     * service keeps one warm core for all of them, shared by concurrent requests.
+     * [maxMembers]: balancer members measured per server (null: the service's own limit).
+     */
+    fun ping(context: Context, all: List<Server>, targets: List<String>, maxMembers: Int? = null): Flow<Event> = callbackFlow {
         val file = File(context.cacheDir, "ping-${System.nanoTime()}.json")
         val arr = JSONArray()
         all.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name).put("json", it.xrayJson).put("tag", it.proxyTag)) }
-        file.writeText(JSONObject().put("servers", arr).put("targets", JSONArray(targets)).toString())
+        val request = JSONObject().put("servers", arr).put("targets", JSONArray(targets))
+        maxMembers?.let { request.put("maxMembers", it) }
+        file.writeText(request.toString())
 
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, data: Bundle?) {

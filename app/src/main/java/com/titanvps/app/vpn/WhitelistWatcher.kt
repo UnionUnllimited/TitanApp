@@ -55,6 +55,9 @@ class WhitelistWatcher(private val context: Context) {
         while (true) {
             delay(CHECK_INTERVAL_MS)
             if (!onMobileData()) { misses.reset(); awaitMobile(); continue }
+            // Another ping is running, Главная's Пинг (ours has closed: ping() returns only after
+            // that): no probes of ours on top of it, and no miss either; the next tick looks.
+            if (PingClient.busy) continue
             if (!misses.add(failed(ping(listOf(current)), current))) continue
             if (whitelisted(current, all, pingCurrent = false)) {
                 delay(CONFIRM_AGAIN_MS)
@@ -160,8 +163,9 @@ class WhitelistWatcher(private val context: Context) {
 
     private suspend fun ping(servers: List<Server>): Map<String, Long> {
         val result = mutableMapOf<String, Long>()
+        val latest = TitanApp.get(context).repository.subscription.value?.servers.orEmpty()
         withTimeoutOrNull(60_000) {
-            PingClient.ping(context, servers, servers.map { it.id }).collect { event ->
+            PingClient.ping(context, BypassPolicy.pingAll(latest, servers), servers.map { it.id }, MAX_MEMBERS).collect { event ->
                 if (event is PingClient.Event.Partial) result += event.delays
             }
         }
@@ -199,6 +203,11 @@ class WhitelistWatcher(private val context: Context) {
         const val RETURN_INTERVAL_MS = 2 * 60_000L
         const val MAX_CANDIDATES = 8
         const val MAX_OTHERS = 4
+        /**
+         * Balancer members per server in our pings (АВТО, Безлимитные: up to 30): enough to
+         * tell it answers, not a burst every 30 s beside the user's own connections.
+         */
+        const val MAX_MEMBERS = 3
         val RU_PROBES = listOf("https://ya.ru", "https://vk.com", "https://www.gosuslugi.ru")
         val FOREIGN_PROBES = listOf(
             "https://www.gstatic.com/generate_204",

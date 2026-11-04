@@ -1,5 +1,7 @@
 package com.titanvps.app.vpn
 
+import com.titanvps.app.data.Server
+
 /**
  * Decisions around «Обходы» on mobile data, without Android (times in ms are passed in):
  * when silent servers mean whitelist mode, when the restrictions count as lifted, and how
@@ -116,5 +118,14 @@ class BypassPolicy(switches: List<Long> = emptyList(), returnedAt: Long = 0L) {
             offered -> Back.NONE
             else -> Back.OFFER
         }
+
+        /**
+         * Every server the watcher's pings send along: the subscription as it is now ([latest],
+         * Главная's copies), then any of [servers] it no longer has. With only the servers
+         * pinged, or older copies of them, the ping core Главная keeps warm would be cut down
+         * to those, and the next Пинг would start it cold again.
+         */
+        fun pingAll(latest: List<Server>, servers: List<Server>): List<Server> =
+            latest + servers.filter { s -> latest.none { it.id == s.id } }
     }
 }

@@ -131,6 +131,18 @@ object Plugins {
     }
 
     /**
+     * One line in plugins.log (shown in Диагностика) — no secrets. Also the ping process's
+     * (list runs), so a cold start and its misses read in one timeline.
+     */
+    fun note(context: Context, line: String) {
+        runCatching {
+            val f = File(context.cacheDir, PluginProcess.PLUGINS_LOG)
+            if (f.length() > 64 * 1024) f.writeText("")
+            f.appendText("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $line\n")
+        }
+    }
+
+    /**
      * The config to run for a server: as is, MASQUE rewritten for Xray, or pointed at a
      * started [PluginProcess] (returned, to be closed by the caller).
      */
@@ -239,12 +251,7 @@ class PluginProcess(private val context: Context, private val endpoint: Plugins.
         error("Не удалось подключиться к серверу")
     }
 
-    /** One line in plugins.log (shown in Диагностика) — no secrets. */
-    private fun note(line: String) = runCatching {
-        val f = File(context.cacheDir, PLUGINS_LOG)
-        if (f.length() > 64 * 1024) f.writeText("")
-        f.appendText("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $line\n")
-    }
+    private fun note(line: String) = Plugins.note(context, line)
 
     companion object {
         const val PLUGINS_LOG = "plugins.log"
