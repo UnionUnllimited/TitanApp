@@ -106,6 +106,17 @@ class BypassPolicy(switches: List<Long> = emptyList(), returnedAt: Long = 0L) {
         fun whitelisted(othersAnswered: Boolean, russianOpens: Boolean, foreignOpens: Boolean): Boolean =
             !othersAnswered && russianOpens && !foreignOpens
 
+        /**
+         * Whether any of [ids] answered in [pings] (ms, -1 a miss). Null when none did and one
+         * got no result at all (its request timed out behind Главная's Пинг, or was lost): that
+         * is no answer and no miss, so the watcher looks again instead of taking it as an answer.
+         */
+        fun anyAnswered(pings: Map<String, Long>, ids: List<String>): Boolean? = when {
+            ids.any { (pings[it] ?: -1L) >= 0 } -> true
+            ids.any { it !in pings } -> null
+            else -> false
+        }
+
         /** On a bypass: a foreign site opens directly and the regular server answers. */
         fun lifted(foreignOpens: Boolean, serverAnswered: Boolean): Boolean = foreignOpens && serverAnswered
 

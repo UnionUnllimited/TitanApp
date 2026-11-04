@@ -47,7 +47,8 @@ class WhitelistWatcher(private val context: Context) {
      * Suspends until whitelist mode is detected for [current]; returns false if it's not a
      * regular server. Every [CHECK_INTERVAL_MS] the server is pinged; after
      * [BypassPolicy.MISSES] misses in a row the network is looked at, and once more
-     * [CONFIRM_AGAIN_MS] later before it counts.
+     * [CONFIRM_AGAIN_MS] later before it counts. A look that can't tell (a server pinged got
+     * no result) keeps the misses and looks again on the next one.
      */
     suspend fun awaitWhitelist(current: Server, all: List<Server>): Boolean {
         if (ServerGroups.groupOf(current, all) != ServerGroups.Group.SERVERS) return false
@@ -58,10 +59,11 @@ class WhitelistWatcher(private val context: Context) {
             // Another ping is running, Главная's Пинг (ours has closed: ping() returns only after
             // that): no probes of ours on top of it, and no miss either; the next tick looks.
             if (PingClient.busy) continue
-            if (!misses.add(failed(ping(listOf(current)), current))) continue
-            if (whitelisted(current, all, pingCurrent = false)) {
+            if (!misses.add(missed(current))) continue
+            // Can't tell (null): the misses stay, the next tick looks again.
+            if (whitelisted(current, all, pingCurrent = false) ?: continue) {
                 delay(CONFIRM_AGAIN_MS)
-                if (onMobileData() && whitelisted(current, all, pingCurrent = true)) return true
+                if (onMobileData() && (whitelisted(current, all, pingCurrent = true) ?: continue)) return true
             }
             // The server is the problem (or no network at all): two new misses before the next look.
             misses.reset()
@@ -111,12 +113,21 @@ class WhitelistWatcher(private val context: Context) {
     }
 
     /**
+     * The tick: [current] on its first [MAX_MEMBERS] members; a balancer whose first ones are
+     * down may still work, so a miss there counts only once every member missed too.
+     */
+    private suspend fun missed(current: Server): Boolean {
+        if (!failed(ping(listOf(current), MAX_MEMBERS), current)) return false
+        return nodes(current).size <= MAX_MEMBERS || failed(ping(listOf(current)), current)
+    }
+
+    /**
      * The current server is silent: the network looks whitelisted. Cheapest first: a foreign
      * site that opens means the server is the problem; no Russian site means no network at
      * all; then up to [MAX_OTHERS] other regular servers (with [current] itself again when
-     * [pingCurrent]) must all miss.
+     * [pingCurrent]) must all miss. Null: can't tell ([BypassPolicy.anyAnswered]).
      */
-    private suspend fun whitelisted(current: Server, all: List<Server>, pingCurrent: Boolean): Boolean {
+    private suspend fun whitelisted(current: Server, all: List<Server>, pingCurrent: Boolean): Boolean? {
         val foreign = foreignSiteReachable()
         if (foreign) return false
         val russian = russianSiteReachable()
@@ -125,7 +136,7 @@ class WhitelistWatcher(private val context: Context) {
         val probe = if (pingCurrent) listOf(current) + others else others
         // No other node to ask (one server, or a balancer that covers them all): the sites decide.
         val pings = if (probe.isEmpty()) emptyMap<String, Long>() else ping(probe)
-        val othersAnswered = probe.any { !failed(pings, it) }
+        val othersAnswered = BypassPolicy.anyAnswered(pings, probe.map { it.id }) ?: return null
         return BypassPolicy.whitelisted(othersAnswered, russian, foreign)
     }
 
@@ -161,11 +172,17 @@ class WhitelistWatcher(private val context: Context) {
             .mapNotNull { XrayConfigs.endpointKey(server.xrayJson, it) }
             .distinct()
 
-    private suspend fun ping(servers: List<Server>): Map<String, Long> {
+    /**
+     * [members]: balancer members per server, null for every one (the service's limit): only
+     * the tick asks for fewer, a choice of where the user goes needs them all. Never measured
+     * again at the end ("recheck": false): who answers is all we need, and queued behind
+     * Главная's rechecks our misses came after the 60 s below.
+     */
+    private suspend fun ping(servers: List<Server>, members: Int? = null): Map<String, Long> {
         val result = mutableMapOf<String, Long>()
         val latest = TitanApp.get(context).repository.subscription.value?.servers.orEmpty()
         withTimeoutOrNull(60_000) {
-            PingClient.ping(context, BypassPolicy.pingAll(latest, servers), servers.map { it.id }, MAX_MEMBERS).collect { event ->
+            PingClient.ping(context, BypassPolicy.pingAll(latest, servers), servers.map { it.id }, members, recheck = false).collect { event ->
                 if (event is PingClient.Event.Partial) result += event.delays
             }
         }
@@ -204,8 +221,9 @@ class WhitelistWatcher(private val context: Context) {
         const val MAX_CANDIDATES = 8
         const val MAX_OTHERS = 4
         /**
-         * Balancer members per server in our pings (АВТО, Безлимитные: up to 30): enough to
-         * tell it answers, not a burst every 30 s beside the user's own connections.
+         * Balancer members per server in the 30 s tick only (АВТО, Безлимитные: up to 30):
+         * enough to tell it answers, not a burst every 30 s beside the user's own connections.
+         * A miss there, the way-back target and every other choice use all members.
          */
         const val MAX_MEMBERS = 3
         val RU_PROBES = listOf("https://ya.ru", "https://vk.com", "https://www.gosuslugi.ru")

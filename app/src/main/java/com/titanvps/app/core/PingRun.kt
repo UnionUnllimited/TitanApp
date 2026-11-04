@@ -28,14 +28,22 @@ internal object PingRun {
      * cold and crowded (6 at once, often on a core just started, beside the phone's own new
      * connections while the VPN is on), and as the last word it showed 3000+ ms or «таймаут»
      * for servers that answered normally on the next Пинг. One server asked for runs alone.
+     * A request can ask for no recheck ([recheck]).
      */
     fun needsRecheck(single: Boolean, ms: Long): Boolean = !single && (ms < 0 || ms > RECHECK_ABOVE_MS)
 
     /**
      * Balancer members a request measures per server: what it asks for ("maxMembers", the
-     * watcher a few) within 1..[cap]; [cap] when it asks for nothing (Главная).
+     * watcher's 30 s tick a few) within 1..[cap]; [cap] when it asks for nothing (Главная).
      */
     fun maxMembers(request: JSONObject, cap: Int): Int = request.optInt("maxMembers", cap).coerceIn(1, cap)
+
+    /**
+     * Whether a list request has its misses and slow answers measured again ([needsRecheck]):
+     * Главная's yes; the watcher's no ("recheck": false), it only needs to know who answered,
+     * and held behind Главная's rechecks its results came after its own time limit.
+     */
+    fun recheck(request: JSONObject): Boolean = request.optBoolean("recheck", true)
 
     fun bestOf(a: Long, b: Long): Long = when {
         a < 0 -> b
@@ -67,12 +75,14 @@ internal object PingRun {
     }
 
     /**
-     * Every server is measured on all its keys (a balancer: its members); a server's ping is
-     * its best member, what the balancer itself would pick. [keysOf]: a server's endpoint keys;
-     * [measure]: one attempt through a key within the seconds given, ms or -1 (why: its
-     * onError); [result]: a server's ping, once all its keys are done; [started]: servers
+     * Every server is measured on its keys (a balancer: its members, the first [maxMembers]);
+     * a server's ping is its best member, what the balancer itself would pick. [keysOf]: a
+     * server's endpoint keys; [measure]: one attempt through a key within the seconds given,
+     * ms or -1 (why: its onError); [result]: a server's ping, once, when all its keys are done
+     * or it has a good one and only keys held for the recheck are left; [started]: servers
      * being measured now; [ready]: a key's protocol client still starting; [udp]: keys over
-     * UDP (only counted apart in the [Summary]).
+     * UDP (only counted apart in the [Summary]); [recheck]: false, no recheck in a list either
+     * (the request's "recheck").
      */
     fun run(
         targets: List<String>,
@@ -86,8 +96,10 @@ internal object PingRun {
         ready: (key: String) -> Future<*>? = { null },
         udp: Set<String> = emptySet(),
         cancelled: () -> Boolean = { false },
+        maxMembers: Int = Int.MAX_VALUE,
+        recheck: Boolean = true,
     ): Summary {
-        val keys = targets.associateWith(keysOf)
+        val keys = targets.associateWith { keysOf(it).take(maxMembers) }
         val best = HashMap<String, Long>()
         val remaining = HashMap<String, Int>()
         val startedIds = HashSet<String>()
@@ -100,15 +112,40 @@ internal object PingRun {
         val lock = Any()
         /** Why a member last failed: a server that got no answer at all says why. */
         val lastError = HashMap<String, String>()
+        /** Servers whose result went out: one each, a later recheck of a shared key only counts down. */
+        val sent = HashSet<String>()
+        /** A server's keys held for the recheck at the end. */
+        val held = HashMap<String, MutableSet<String>>()
+        // Keys held for the recheck in the order of the servers asked for: their first-pass result and why.
+        val firstRun = Collections.synchronizedMap(LinkedHashMap<String, Long>())
+        val recheckError = Collections.synchronizedMap(HashMap<String, String>())
+        /**
+         * Sends [id]'s result once every key is in, or once it has a good one and only held keys
+         * are left: a balancer (АВТО, Безлимитные) whose dead member is also its own country row
+         * doesn't spin until that row's recheck at the very end (call under [lock]).
+         */
+        fun finish(id: String) {
+            val ms = best[id] ?: -1L
+            val left = remaining.getValue(id)
+            if ((left == 0 || ms >= 0 && left == held[id].orEmpty().size) && sent.add(id)) {
+                result(id, ms, if (ms < 0) lastError[id] else null)
+            }
+        }
         fun report(key: String, r: Long, error: String? = null) = synchronized(lock) {
             for (id in serversByKey.getValue(key)) {
                 if (r >= 0 && (best[id] ?: -1L).let { it < 0 || r < it }) best[id] = r
                 if (r < 0 && error != null) lastError[id] = error
                 remaining[id] = remaining.getValue(id) - 1
-                if (remaining[id] == 0) {
-                    val ms = best[id] ?: -1L
-                    result(id, ms, if (ms < 0) lastError[id] else null)
-                }
+                held[id]?.remove(key)
+                finish(id)
+            }
+        }
+        fun hold(key: String, r: Long, error: String?) = synchronized(lock) {
+            error?.let { recheckError[key] = it }
+            firstRun[key] = r
+            for (id in serversByKey.getValue(key)) {
+                held.getOrPut(id) { HashSet() } += key
+                finish(id)
             }
         }
         /** Every server using [key] already has a good result (e.g. another balancer member). */
@@ -123,8 +160,6 @@ internal object PingRun {
         val missed = AtomicInteger()
         val missedUdp = AtomicInteger()
         // Keys go into the pool in the order of the servers asked for, so the list fills top-down.
-        val recheck = Collections.synchronizedMap(LinkedHashMap<String, Long>())
-        val recheckError = Collections.synchronizedMap(HashMap<String, String>())
         serversByKey.map { (key, ids) ->
             pool.submit {
                 if (cancelled()) return@submit
@@ -141,25 +176,20 @@ internal object PingRun {
                 }
                 var error: String? = null
                 val r = measureKey(key) { error = it }
-                val again = needsRecheck(single, r)
+                val again = needsRecheck(single || !recheck, r)
                 if (again) {
                     missed.incrementAndGet()
                     if (key in udp) missedUdp.incrementAndGet()
                 }
                 // A bad result waits for the recheck at the end, unless its servers are done anyway.
-                if (again && !settled(key)) {
-                    error?.let { recheckError[key] = it }
-                    recheck[key] = r
-                } else {
-                    report(key, r, error)
-                }
+                if (again && !settled(key)) hold(key, r, error) else report(key, r, error)
             }
         }.forEach { runCatching { it.get() } }
         val summary = Summary(false, targets.size, serversByKey.size, missed.get(), missedUdp.get())
         if (cancelled()) return summary.copy(anyOk = best.isNotEmpty(), stopped = true)
         // A few at a time, one attempt each; keep the better of the two runs. Not needed when
         // every server using it already has a good result (e.g. another balancer member).
-        val (needed, done) = recheck.toList().partition { (key, _) -> !settled(key) }
+        val (needed, done) = firstRun.toList().partition { (key, _) -> !settled(key) }
         done.forEach { (key, first) -> report(key, first, recheckError[key]) }
         val rechecked = AtomicInteger()
         val turnedGood = AtomicInteger()

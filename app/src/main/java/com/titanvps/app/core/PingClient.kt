@@ -45,13 +45,22 @@ object PingClient {
      * Measures [targets] in that order. [all] is every server of the subscription: the
      * service keeps one warm core for all of them, shared by concurrent requests.
      * [maxMembers]: balancer members measured per server (null: the service's own limit).
+     * [recheck]: false, a list's misses and slow answers aren't measured again at the end
+     * (the watcher: who answers is all it needs, and it can't wait behind Главная's rechecks).
      */
-    fun ping(context: Context, all: List<Server>, targets: List<String>, maxMembers: Int? = null): Flow<Event> = callbackFlow {
+    fun ping(
+        context: Context,
+        all: List<Server>,
+        targets: List<String>,
+        maxMembers: Int? = null,
+        recheck: Boolean = true,
+    ): Flow<Event> = callbackFlow {
         val file = File(context.cacheDir, "ping-${System.nanoTime()}.json")
         val arr = JSONArray()
         all.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name).put("json", it.xrayJson).put("tag", it.proxyTag)) }
         val request = JSONObject().put("servers", arr).put("targets", JSONArray(targets))
         maxMembers?.let { request.put("maxMembers", it) }
+        if (!recheck) request.put("recheck", false)
         file.writeText(request.toString())
 
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {

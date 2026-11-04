@@ -142,4 +142,18 @@ class BypassPolicyTest {
         // No subscription at hand: just the servers pinged.
         assertEquals(listOf(old), BypassPolicy.pingAll(emptyList(), listOf(old)))
     }
+
+    @Test
+    fun aServerWithNoResultLeavesTheLookUndecided() {
+        // An answer decides: not whitelisted, whatever else came back.
+        assertEquals(true, BypassPolicy.anyAnswered(mapOf("a" to -1L, "b" to 120L), listOf("a", "b")))
+        assertEquals(true, BypassPolicy.anyAnswered(mapOf("b" to 120L), listOf("a", "b")))
+        // All missed: they count.
+        assertEquals(false, BypassPolicy.anyAnswered(mapOf("a" to -1L, "b" to -1L), listOf("a", "b")))
+        // One got nothing (timed out behind Главная's Пинг): neither an answer nor a miss.
+        assertEquals(null, BypassPolicy.anyAnswered(mapOf("a" to -1L), listOf("a", "b")))
+        assertEquals(null, BypassPolicy.anyAnswered(emptyMap(), listOf("a")))
+        // No other node to ask: the sites decide.
+        assertEquals(false, BypassPolicy.anyAnswered(emptyMap(), emptyList()))
+    }
 }

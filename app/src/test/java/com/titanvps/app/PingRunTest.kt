@@ -146,11 +146,12 @@ class PingRunTest {
 
     @Test
     fun aBalancerWithAGoodMemberDoesNotWaitForItsDeadOnes() {
-        // Dead member first: it waits for the end of the list, then needs no recheck.
+        // Dead member first: held, but the row goes out with its good member, and no recheck.
         val fake = Fake(mapOf("d" to listOf(-1L), "g" to listOf(200L, 190L), "t" to listOf(300L, 300L)))
         run(fake, mapOf("BAL" to listOf("d", "g"), "T" to listOf("t")))
         assertEquals(190L to null, fake.results["BAL"])
         assertEquals(listOf(PingRun.TIMEOUT_SEC), fake.callsOf("d"))
+        assertTrue(fake.log.indexOf("result BAL") < fake.log.indexOf("measure t"))
         // Good member first: the dead one is settled at once, the row doesn't wait for the rest.
         val fake2 = Fake(mapOf("g" to listOf(200L, 190L), "d" to listOf(-1L), "t" to listOf(300L, 300L)))
         run(fake2, mapOf("BAL" to listOf("g", "d"), "T" to listOf("t")))
@@ -255,5 +256,84 @@ class PingRunTest {
         assertEquals(3, PingRun.maxMembers(JSONObject().put("maxMembers", 3), 30))
         assertEquals(1, PingRun.maxMembers(JSONObject().put("maxMembers", 0), 30))
         assertEquals(30, PingRun.maxMembers(JSONObject().put("maxMembers", 99), 30))
+        // Главная's lists are measured again; the watcher asks for no recheck.
+        assertTrue(PingRun.recheck(JSONObject()))
+        assertFalse(PingRun.recheck(JSONObject().put("recheck", false)))
+    }
+
+    @Test
+    fun aBalancerPastItsFirstMembersAnswersOnlyWithAllOfThem() {
+        // АВТО whose first three members are down and the fourth works: the balancer works.
+        val servers = mapOf("AUTO" to listOf("d1", "d2", "d3", "g"))
+        val fake = Fake(mapOf("d1" to listOf(-1L, -1L), "d2" to listOf(-1L, -1L), "d3" to listOf(-1L, -1L), "g" to listOf(200L, 190L)))
+        fun once(maxMembers: Int) = PingRun.run(
+            targets = listOf("AUTO"), keysOf = { servers.getValue(it) }, single = true,
+            pool = pool(), recheckPool = pool(), measure = fake::measure, result = fake::result,
+            maxMembers = maxMembers,
+        )
+        // The watcher's tick (3 members): a miss, so it has to ask again with every member.
+        once(PingRun.maxMembers(JSONObject().put("maxMembers", 3), 30))
+        assertEquals(-1L, fake.results.getValue("AUTO").first)
+        assertTrue(fake.callsOf("g").isEmpty())
+        // Every member (what the way back and the tick's second look ask for): it answers.
+        once(PingRun.maxMembers(JSONObject(), 30))
+        assertEquals(190L to null, fake.results["AUTO"])
+    }
+
+    @Test
+    fun aListWithoutRecheckReportsItsMissesFromTheFirstPass() {
+        // The watcher's lists: a dead key after its one 4 s attempt, a slow answer as it came,
+        // in the list's order; nothing goes to the recheck pool (shut: a submit there would throw).
+        val fake = Fake(mapOf("a" to listOf(-1L), "b" to listOf(3200L, 3100L), "c" to listOf(100L, 90L)))
+        val shut = pool().also { it.shutdown() }
+        val summary = PingRun.run(
+            targets = listOf("A", "B", "C"), keysOf = { listOf(it.lowercase()) }, single = false,
+            pool = pool(), recheckPool = shut, measure = fake::measure, result = fake::result,
+            recheck = false,
+        )
+        assertEquals(-1L to "таймаут", fake.results["A"])
+        assertEquals(3100L to null, fake.results["B"])
+        assertEquals(90L to null, fake.results["C"])
+        assertEquals(listOf(PingRun.TIMEOUT_SEC), fake.callsOf("a"))
+        assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.SECOND_TIMEOUT_SEC), fake.callsOf("b"))
+        assertEquals(listOf("measure a", "result A", "measure b", "measure b", "result B"), fake.log.take(5))
+        assertEquals(0, summary.rechecked)
+    }
+
+    /** АВТО over a, b, c, and each node also its own row; a misses on the first pass. */
+    private val autoAndRows = mapOf("AUTO" to listOf("a", "b", "c"), "A" to listOf("a"), "B" to listOf("b"), "C" to listOf("c"))
+
+    @Test
+    fun aBalancerDoesNotWaitForItsMembersRowToBeMeasuredAgain() {
+        val fake = Fake(mapOf("a" to listOf(-1L, 150L), "b" to listOf(280L, 300L), "c" to listOf(400L, 410L)))
+        run(fake, autoAndRows)
+        // АВТО as soon as only a's recheck (for row A) is left, not after it.
+        assertTrue(fake.log.indexOf("result AUTO") < fake.log.lastIndexOf("measure a"))
+        assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.RECHECK_TIMEOUT_SEC), fake.callsOf("a"))
+        assertEquals(280L to null, fake.results["AUTO"])
+        // Row A gets the recheck; АВТО's result goes out once.
+        assertEquals(150L to null, fake.results["A"])
+        assertEquals(1, fake.log.count { it == "result AUTO" })
+        // Dead member last: АВТО right after it, before the recheck too.
+        val fake2 = Fake(mapOf("b" to listOf(280L, 300L), "a" to listOf(-1L, 150L)))
+        run(fake2, mapOf("AUTO" to listOf("b", "a"), "A" to listOf("a")))
+        assertEquals(listOf("measure b", "measure b", "measure a", "result AUTO", "measure a", "result A"), fake2.log)
+    }
+
+    @Test
+    fun aStoppedRunKeepsTheBalancerItMeasured() {
+        // Stopped before the recheck: row A keeps its old value, АВТО shows its good member.
+        val stop = AtomicBoolean(false)
+        val fake = Fake(mapOf("a" to listOf(-1L), "b" to listOf(280L, 300L), "c" to listOf(400L, 410L)))
+        val summary = PingRun.run(
+            targets = autoAndRows.keys.toList(), keysOf = { autoAndRows.getValue(it) }, single = false,
+            pool = pool(), recheckPool = pool(),
+            measure = { key, sec, onError -> fake.measure(key, sec, onError).also { if (key == "c") stop.set(true) } },
+            result = fake::result, cancelled = { stop.get() },
+        )
+        assertEquals(280L to null, fake.results["AUTO"])
+        assertEquals(null, fake.results["A"])
+        assertEquals(listOf(PingRun.TIMEOUT_SEC), fake.callsOf("a"))
+        assertTrue(summary.stopped)
     }
 }

@@ -27,8 +27,8 @@ import java.util.concurrent.TimeUnit
  * kept warm for a minute, so every request (the whole list or a single server, even
  * while the list is still being measured) starts measuring right away. Servers are
  * measured in the order asked, a few at a time, and each result is reported as soon as
- * it's ready; in a list, a miss or a slow answer only after it was measured again alone
- * at the end ([PingRun]). Falls back to libXray's pingBatch if the core can't start.
+ * it's ready; in Главная's list, a miss or a slow answer only after it was measured again
+ * alone at the end ([PingRun]). Falls back to libXray's pingBatch if the core can't start.
  */
 class PingService : Service() {
 
@@ -80,9 +80,11 @@ class PingService : Service() {
                 val servers = root.getJSONArray("servers").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
                 val targets = root.getJSONArray("targets").let { a -> (0 until a.length()).map { a.getString(it) } }
                 val single = targets.size == 1
-                // Balancer members per server: the watcher's reachability check asks for a few.
+                // Balancer members per server: the watcher's reachability tick asks for a few.
                 val maxMembers = PingRun.maxMembers(root, MAX_MEMBERS)
-                val anyOk = runCatching { measureTargets(servers, targets, single, maxMembers, receiver) }
+                // The watcher's lists aren't measured again: its misses come out of the first pass.
+                val recheck = PingRun.recheck(root)
+                val anyOk = runCatching { measureTargets(servers, targets, single, maxMembers, recheck, receiver) }
                     .getOrElse { pingBatchFallback(servers.filter { it.getString("id") in targets }, receiver) }
                 receiver?.send(RESULT_DONE, Bundle().apply {
                     if (!anyOk) putString(KEY_ERROR, "серверы не ответили")
@@ -184,15 +186,22 @@ class PingService : Service() {
      * Every server is measured on up to [maxMembers] members of its balancer; a server's ping
      * is its best member — what the balancer itself would pick. Returns true if anything answered.
      */
-    private fun measureTargets(servers: List<JSONObject>, targets: List<String>, single: Boolean, maxMembers: Int, receiver: ResultReceiver?): Boolean {
+    private fun measureTargets(
+        servers: List<JSONObject>,
+        targets: List<String>,
+        single: Boolean,
+        maxMembers: Int,
+        recheck: Boolean,
+        receiver: ResultReceiver?,
+    ): Boolean {
         val gen = generation.get()
         val cancelled = { generation.get() != gen }
         val startedAt = System.nanoTime()
         val s = acquireSession(servers, targets)
         try {
-            val run = measureWith(s, targets, single, maxMembers, receiver, cancelled)
+            val run = measureWith(s, targets, single, maxMembers, recheck, receiver, cancelled)
             // A list's line in Диагностика: how much its first pass missed, how much the recheck found.
-            if (!single) Plugins.note(this, run.line((System.nanoTime() - startedAt) / 1_000_000))
+            if (!single && recheck) Plugins.note(this, run.line((System.nanoTime() - startedAt) / 1_000_000))
             return run.anyOk
         } finally {
             sessionLock.readLock().unlock()
@@ -205,11 +214,12 @@ class PingService : Service() {
         targets: List<String>,
         single: Boolean,
         maxMembers: Int,
+        recheck: Boolean,
         receiver: ResultReceiver?,
         cancelled: () -> Boolean,
     ): PingRun.Summary = PingRun.run(
         targets = targets,
-        keysOf = { s.serverKeys[it].orEmpty().take(maxMembers) },
+        keysOf = { s.serverKeys[it].orEmpty() },
         single = single,
         pool = if (single) singlePool else listPool,
         recheckPool = recheckPool,
@@ -219,6 +229,8 @@ class PingService : Service() {
         ready = { s.ready[it] },
         udp = s.udp,
         cancelled = cancelled,
+        maxMembers = maxMembers,
+        recheck = recheck,
     )
 
     /** Hysteria, QUIC, mKCP… outbounds: they go over UDP. */
