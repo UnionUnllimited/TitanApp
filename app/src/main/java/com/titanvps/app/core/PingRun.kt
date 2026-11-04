@@ -28,7 +28,8 @@ internal object PingRun {
      * cold and crowded (6 at once, often on a core just started, beside the phone's own new
      * connections while the VPN is on), and as the last word it showed 3000+ ms or «таймаут»
      * for servers that answered normally on the next Пинг. One server asked for runs alone.
-     * A request can ask for no recheck ([recheck]).
+     * A request can ask for no recheck ([recheck]); then only UDP gets a second chance
+     * ([run]).
      */
     fun needsRecheck(single: Boolean, ms: Long): Boolean = !single && (ms < 0 || ms > RECHECK_ABOVE_MS)
 
@@ -81,8 +82,9 @@ internal object PingRun {
      * ms or -1 (why: its onError); [result]: a server's ping, once, when all its keys are done
      * or it has a good one and only keys held for the recheck are left; [started]: servers
      * being measured now; [ready]: a key's protocol client still starting; [udp]: keys over
-     * UDP (only counted apart in the [Summary]); [recheck]: false, no recheck in a list either
-     * (the request's "recheck").
+     * UDP; [recheck]: false, no recheck at the end of a list either (the request's "recheck"),
+     * only a bad result over UDP of a server measured on that key alone is measured once
+     * more right away.
      */
     fun run(
         targets: List<String>,
@@ -175,7 +177,17 @@ internal object PingRun {
                     }
                 }
                 var error: String? = null
-                val r = measureKey(key) { error = it }
+                var r = measureKey(key) { error = it }
+                // No recheck at the end (the watcher's lists): a miss or slow answer over UDP
+                // (Hysteria, TUIC: often just the crowd) is measured once more alone at once, on
+                // this thread, never behind Главная's rechecks. Only for a server of its own: a
+                // balancer has its other members, and each dead one measured again would take
+                // the watcher's look past its time limit.
+                if (!recheck && !single && key in udp && (r < 0 || r > RECHECK_ABOVE_MS) &&
+                    serversByKey.getValue(key).any { keys.getValue(it).size == 1 }
+                ) {
+                    r = bestOf(r, measure(key, RECHECK_TIMEOUT_SEC) { error = it })
+                }
                 val again = needsRecheck(single || !recheck, r)
                 if (again) {
                     missed.incrementAndGet()

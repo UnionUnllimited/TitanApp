@@ -87,9 +87,30 @@ class BypassPolicy(switches: List<Long> = emptyList(), returnedAt: Long = 0L) {
         }
     }
 
+    /**
+     * The watcher's ticks while another ping runs (Главная's Пинг): skipped, with no miss
+     * counted, but at most [max] in a row, then one goes ahead anyway. A Пинг in whitelist
+     * mode (every server misses, and is measured again) or one whose ':ping' died (its flow
+     * stays open for minutes) delays the checks by that much, not for as long as it lasts.
+     */
+    class BusySkip(private val max: Int) {
+        private var skipped = 0
+
+        fun skip(busy: Boolean): Boolean {
+            if (busy && skipped < max) {
+                skipped++
+                return true
+            }
+            skipped = 0
+            return false
+        }
+    }
+
     companion object {
         /** Misses of the current server in a row before the network is looked at. */
         const val MISSES = 2
+        /** Ticks in a row skipped while another ping runs ([BusySkip]). */
+        const val MAX_BUSY_SKIPS = 1
         /** Checks in a row that must find the restrictions lifted. */
         const val LIFTED_CHECKS = 2
         /** No switch of our own this soon after our own way back. */

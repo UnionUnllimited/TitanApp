@@ -47,6 +47,27 @@ class BypassPolicyTest {
     }
 
     @Test
+    fun aLongPingDelaysTheChecksByOneTickAtMost() {
+        val busy = BypassPolicy.BusySkip(BypassPolicy.MAX_BUSY_SKIPS)
+        assertFalse(busy.skip(false))
+        // Главная's Пинг through four ticks (whitelist mode: every server misses and is measured again).
+        assertEquals(listOf(true, false, true, false), List(4) { busy.skip(true) })
+        // Over: the next one skips a tick again.
+        assertFalse(busy.skip(false))
+        assertTrue(busy.skip(true))
+        assertEquals(1, BypassPolicy.MAX_BUSY_SKIPS)
+    }
+
+    @Test
+    fun skippedTicksKeepTheMisses() {
+        // The watcher's loop while a Пинг never ends (its ':ping' died, the flow stays open):
+        // the current server misses on every tick that goes ahead, and the network is looked at.
+        val misses = BypassPolicy.Streak(BypassPolicy.MISSES)
+        val busy = BypassPolicy.BusySkip(BypassPolicy.MAX_BUSY_SKIPS)
+        assertEquals(4, (1..10).first { !busy.skip(true) && misses.add(true) })
+    }
+
+    @Test
     fun switchesOnlyWithAutoBypass() {
         val policy = BypassPolicy()
         assertEquals(Decision.Switch, policy.onWhitelist(start, autoBypass = true))

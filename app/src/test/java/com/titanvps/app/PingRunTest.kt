@@ -300,6 +300,61 @@ class PingRunTest {
         assertEquals(0, summary.rechecked)
     }
 
+    /** A run with no recheck at the end (the watcher's): a submit to the recheck pool would throw. */
+    private fun runWithoutRecheck(fake: Fake, servers: Map<String, List<String>>, udp: Set<String>, single: Boolean = false) =
+        PingRun.run(
+            targets = servers.keys.toList(), keysOf = { servers.getValue(it) }, single = single,
+            pool = pool(), recheckPool = pool().also { it.shutdown() }, measure = fake::measure, result = fake::result,
+            udp = udp, recheck = false,
+        )
+
+    @Test
+    fun withoutRecheckAUdpMissGetsItsSecondChanceAtOnce() {
+        // UDP: a miss, then 300 alone; a slow answer, then 400; a good one as it came. TCP: one 4 s attempt.
+        val fake = Fake(mapOf(
+            "u" to listOf(-1L, 300L), "s" to listOf(3200L, 3100L, 400L), "g" to listOf(200L, 190L), "t" to listOf(-1L),
+        ))
+        val summary = runWithoutRecheck(
+            fake, mapOf("U" to listOf("u"), "S" to listOf("s"), "G" to listOf("g"), "T" to listOf("t")), udp = setOf("u", "s", "g"),
+        )
+        assertEquals(300L to null, fake.results["U"])
+        assertEquals(400L to null, fake.results["S"])
+        assertEquals(190L to null, fake.results["G"])
+        assertEquals(-1L to "таймаут", fake.results["T"])
+        assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.RECHECK_TIMEOUT_SEC), fake.callsOf("u"))
+        assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.SECOND_TIMEOUT_SEC, PingRun.RECHECK_TIMEOUT_SEC), fake.callsOf("s"))
+        assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.SECOND_TIMEOUT_SEC), fake.callsOf("g"))
+        assertEquals(listOf(PingRun.TIMEOUT_SEC), fake.callsOf("t"))
+        // On the same thread, before the next key: nothing waits for the end of the list.
+        assertEquals(listOf("measure u", "measure u", "result U", "measure s"), fake.log.take(4))
+        assertEquals(0, summary.rechecked)
+        // A dead one: 4 s and 6 s, and why.
+        val dead = Fake(mapOf("d" to listOf(-1L, -1L)))
+        runWithoutRecheck(dead, mapOf("D" to listOf("d")), udp = setOf("d"))
+        assertEquals(-1L to "таймаут", dead.results["D"])
+        assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.RECHECK_TIMEOUT_SEC), dead.callsOf("d"))
+    }
+
+    @Test
+    fun withoutRecheckOneServerAndBalancerMembersGetNoSecondChance() {
+        // One server asked for (the tick): its one attempt, UDP or not.
+        val fake = Fake(mapOf("u" to listOf(-1L)))
+        runWithoutRecheck(fake, mapOf("U" to listOf("u")), udp = setOf("u"), single = true)
+        assertEquals(listOf(PingRun.TIMEOUT_SEC), fake.callsOf("u"))
+        // A balancer over UDP whose members are all down (АВТО in whitelist mode): one attempt each,
+        // or the watcher's look would run past its time limit.
+        val bal = Fake(mapOf("m1" to listOf(-1L), "m2" to listOf(-1L), "m3" to listOf(-1L)))
+        runWithoutRecheck(bal, mapOf("BAL" to listOf("m1", "m2", "m3")), udp = setOf("m1", "m2", "m3"))
+        assertEquals(-1L to "таймаут", bal.results["BAL"])
+        assertEquals(listOf("m1", "m2", "m3").map { it to PingRun.TIMEOUT_SEC }, bal.calls)
+        // A member that is also its own row: measured again, for the row.
+        val shared = Fake(mapOf("m1" to listOf(200L, 190L), "m2" to listOf(-1L, 350L)))
+        runWithoutRecheck(shared, mapOf("BAL" to listOf("m1", "m2"), "ROW" to listOf("m2")), udp = setOf("m1", "m2"))
+        assertEquals(190L to null, shared.results["BAL"])
+        assertEquals(350L to null, shared.results["ROW"])
+        assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.RECHECK_TIMEOUT_SEC), shared.callsOf("m2"))
+    }
+
     /** АВТО over a, b, c, and each node also its own row; a misses on the first pass. */
     private val autoAndRows = mapOf("AUTO" to listOf("a", "b", "c"), "A" to listOf("a"), "B" to listOf("b"), "C" to listOf("c"))
 

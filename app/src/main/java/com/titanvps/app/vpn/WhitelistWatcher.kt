@@ -53,12 +53,14 @@ class WhitelistWatcher(private val context: Context) {
     suspend fun awaitWhitelist(current: Server, all: List<Server>): Boolean {
         if (ServerGroups.groupOf(current, all) != ServerGroups.Group.SERVERS) return false
         val misses = BypassPolicy.Streak(BypassPolicy.MISSES)
+        val busy = BypassPolicy.BusySkip(BypassPolicy.MAX_BUSY_SKIPS)
         while (true) {
             delay(CHECK_INTERVAL_MS)
             if (!onMobileData()) { misses.reset(); awaitMobile(); continue }
             // Another ping is running, Главная's Пинг (ours has closed: ping() returns only after
-            // that): no probes of ours on top of it, and no miss either; the next tick looks.
-            if (PingClient.busy) continue
+            // that): no probes of ours on top of it, and no miss either; the next tick looks,
+            // even if it still runs (a Пинг in whitelist mode, or one whose ':ping' died).
+            if (busy.skip(PingClient.busy)) continue
             if (!misses.add(missed(current))) continue
             // Can't tell (null): the misses stay, the next tick looks again.
             if (whitelisted(current, all, pingCurrent = false) ?: continue) {
@@ -176,7 +178,8 @@ class WhitelistWatcher(private val context: Context) {
      * [members]: balancer members per server, null for every one (the service's limit): only
      * the tick asks for fewer, a choice of where the user goes needs them all. Never measured
      * again at the end ("recheck": false): who answers is all we need, and queued behind
-     * Главная's rechecks our misses came after the 60 s below.
+     * Главная's rechecks our misses came after the 60 s below. A server of one node over UDP
+     * still gets its second attempt, at once ([com.titanvps.app.core.PingRun.run]).
      */
     private suspend fun ping(servers: List<Server>, members: Int? = null): Map<String, Long> {
         val result = mutableMapOf<String, Long>()

@@ -46,7 +46,8 @@ object PingClient {
      * service keeps one warm core for all of them, shared by concurrent requests.
      * [maxMembers]: balancer members measured per server (null: the service's own limit).
      * [recheck]: false, a list's misses and slow answers aren't measured again at the end
-     * (the watcher: who answers is all it needs, and it can't wait behind Главная's rechecks).
+     * (the watcher: who answers is all it needs, and it can't wait behind Главная's rechecks);
+     * over UDP a server of one node gets its second attempt right away ([PingRun.run]).
      */
     fun ping(
         context: Context,
