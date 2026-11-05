@@ -98,6 +98,10 @@ jobs:
           Copy-Item package/flags/1x1/*.svg desktop/src/main/resources/flags/
           (Get-ChildItem desktop/src/main/resources/flags).Count
 
+      # The ping's rules (PingRun: one probe per host, the recheck) and its config, before anything is packaged.
+      - name: Desktop unit tests
+        run: .\gradlew.bat -p desktop test --no-daemon
+
       - name: Build installer
         run: .\gradlew.bat -p desktop packageMsi createDistributable --no-daemon
 

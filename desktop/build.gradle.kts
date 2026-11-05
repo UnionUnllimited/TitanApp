@@ -24,6 +24,9 @@ dependencies {
     implementation("org.json:json:20250517")
     implementation("net.java.dev.jna:jna:5.17.0")
     implementation("net.java.dev.jna:jna-platform:5.17.0")
+
+    // Plain JVM unit tests (the ping's rules, its config): gradlew -p desktop test, run in CI before packaging.
+    testImplementation("junit:junit:4.13.2")
 }
 
 compose.desktop {
