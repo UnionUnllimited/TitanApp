@@ -102,6 +102,8 @@ object Account {
  */
 object Autostart {
     private const val RUN_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+    /** Task Manager's and Settings' «Автозагрузка» switch for each Run key value. */
+    private const val APPROVED_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run"
     private const val NAME = "Titan VPS"
 
     private val exe: String?
@@ -109,27 +111,51 @@ object Autostart {
             ?.takeIf { it.endsWith(".exe", true) && !it.endsWith("java.exe", true) }
 
     val isEnabled: Boolean
-        get() = isWindows && (runKey() != null || taskExists())
+        get() = isWindows && (viaRunKey || taskExists())
 
-    /** On through the Run key (turned on without administrator rights): it starts us without them. */
+    /**
+     * On through the Run key (turned on without administrator rights): it starts us without
+     * them. Not when turned off in Task Manager or Settings > Apps > Startup: Windows keeps the
+     * value then and skips it, so it is off.
+     */
     val viaRunKey: Boolean
-        get() = isWindows && runKey() != null
+        get() = isWindows && runKey() != null && !offInWindows(approved())
 
-    /** Throws if Windows refused (the toggle says so then). */
+    /**
+     * Throws if Windows refused (the toggle says so then): also the logon task made with
+     * administrator rights, which a copy without them can't delete.
+     */
     fun set(enabled: Boolean, elevated: Boolean) {
         if (!isWindows) return
         val path = exe ?: return
         if (enabled && elevated) {
             // The task first: if Windows refuses it, the Run key stays and nothing is lost.
             createTask(path)
-            runCatching { com.sun.jna.platform.win32.Advapi32Util.registryDeleteValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, RUN_KEY, NAME) }
+            deleteRunKey()
             return
         }
-        runCatching { com.sun.jna.platform.win32.Advapi32Util.registryDeleteValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, RUN_KEY, NAME) }
-        if (taskExists()) runCatching { exec("schtasks", "/delete", "/tn", NAME, "/f") }
+        if (taskExists()) check(exec("schtasks", "/delete", "/tn", NAME, "/f") == 0) { "schtasks /delete failed" }
+        deleteRunKey()
         if (!enabled) return
         com.sun.jna.platform.win32.Advapi32Util.registrySetStringValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, RUN_KEY, NAME, "\"$path\" --autostart")
     }
+
+    /** The Run key value and Windows' own switch for it: one turned on here again isn't off there. */
+    private fun deleteRunKey() {
+        for (key in listOf(RUN_KEY, APPROVED_KEY)) {
+            runCatching { com.sun.jna.platform.win32.Advapi32Util.registryDeleteValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, key, NAME) }
+        }
+    }
+
+    /**
+     * A StartupApproved\Run value: Windows' switch, its first byte odd when turned off there
+     * (03, 07), even when on (02, 06); none counts as on.
+     */
+    fun offInWindows(approved: ByteArray?): Boolean = approved != null && approved.isNotEmpty() && (approved[0].toInt() and 1) == 1
+
+    private fun approved(): ByteArray? = runCatching {
+        com.sun.jna.platform.win32.Advapi32Util.registryGetBinaryValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, APPROVED_KEY, NAME)
+    }.getOrNull()
 
     /**
      * The logon task made by an earlier version (schtasks' defaults: no start on battery,

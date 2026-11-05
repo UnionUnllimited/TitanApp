@@ -163,7 +163,7 @@ object Updater {
      * [coreDir], runs [setup] silently, then makes sure [exe] (the installed app) is running.
      */
     internal fun updateScript(pid: Long, coreDir: String, exe: String?, logo: String, setup: String): String {
-        fun q(path: String) = "'" + path.replace("'", "''") + "'" // PowerShell single quotes
+        fun q(path: String) = psQuoted(path)
         return """
                 ${'$'}ErrorActionPreference = 'SilentlyContinue'
                 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

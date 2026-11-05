@@ -72,6 +72,22 @@ Filename: "{app}\Titan VPS.exe"; Flags: nowait; Check: WizardSilent
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+// Text for a PowerShell single-quoted string: its quote marks doubled, the curly ones too
+// (PowerShell takes them for quotes as well), or a profile folder like O'Brien breaks the command.
+function PsQuoted(S: String): String;
+var
+  Quotes, Q: String;
+  I: Integer;
+begin
+  Result := S;
+  Quotes := '''' + #$2018 + #$2019 + #$201A + #$201B;
+  for I := 1 to Length(Quotes) do
+  begin
+    Q := Quotes[I];
+    StringChangeEx(Result, Q, Q + Q, True);
+  end;
+end;
+
 // The app first (it would start a core stopped under it again), then our cores and clients,
 // which keep files locked; only ours (by path), not other programs' xray. True when no Titan VPS
 // is left running: one with administrator rights can't be stopped from here, and its system
@@ -79,13 +95,15 @@ Type: filesandordirs; Name: "{app}"
 function StopApp(Dir: String): Boolean;
 var
   Code: Integer;
+  Ours: String;
 begin
+  Ours := '$_.Path -like ''' + PsQuoted(Dir) + '*''';
   Result := Exec('powershell.exe',
     '-NoProfile -WindowStyle Hidden -Command "' +
-    '$app = Get-Process ''Titan VPS'' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ''' + Dir + '*'' }; ' +
+    '$app = Get-Process ''Titan VPS'' -ErrorAction SilentlyContinue | Where-Object { ' + Ours + ' }; ' +
     'if ($app) { $app | Stop-Process -Force; $app | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue }; ' +
     'Get-Process xray,sing-box,naive,mieru -ErrorAction SilentlyContinue | ' +
-    'Where-Object { $_.Path -like ''' + Dir + '*'' } | Stop-Process -Force; ' +
+    'Where-Object { ' + Ours + ' } | Stop-Process -Force; ' +
     'if (Get-Process ''Titan VPS'' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"',
     '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
 end;
@@ -122,14 +140,22 @@ begin
 end;
 
 // The app was stopped (or had crashed) with its system proxy on: the settings from before it
-// come back, as the app's own SystemProxy.restore() does, or browsers would keep pointing at a
-// core that is gone.
-procedure RestoreProxy;
+// come back, or browsers would keep pointing at a core that is gone. Exe: the app, which puts
+// back all of it with --restore-proxy (its own SystemProxy.restore()): also «Определять
+// параметры автоматически», the setup script and dial-up or VPN connections, which only WinINet
+// sets. Without it, or if it fails: the registry values here; with Exe '' the backup stays, so
+// the new version puts back the rest.
+procedure RestoreProxy(Exe: String);
 var
   Backup, Json, Key, Value: String;
   Raw: AnsiString;
+  Code: Integer;
 begin
   Backup := ExpandConstant('{userappdata}\TitanVPS\proxy-backup.json');
+  if not FileExists(Backup) then Exit;
+  if (Exe <> '') and FileExists(Exe) then
+    if Exec(Exe, '--restore-proxy', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) and not FileExists(Backup) then
+      Exit;
   if not LoadStringFromFile(Backup, Raw) then Exit;
   Json := String(Raw);
   Key := 'Software\Microsoft\Windows\CurrentVersion\Internet Settings';
@@ -140,7 +166,7 @@ begin
   if Value = '' then RegDeleteValue(HKCU, Key, 'ProxyOverride') else RegWriteStringValue(HKCU, Key, 'ProxyOverride', Value);
   Value := BackupValue(Json, 'pac');
   if Value <> '' then RegWriteStringValue(HKCU, Key, 'AutoConfigURL', Value);
-  DeleteFile(Backup);
+  if Exe <> '' then DeleteFile(Backup);
   // INTERNET_OPTION_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH: running programs re-read them.
   InternetSetOption(0, 39, 0, 0);
   InternetSetOption(0, 37, 0, 0);
@@ -179,23 +205,31 @@ begin
   end;
 end;
 
+var
+  AppStopped: Boolean;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    // An app stopped here can't put its system proxy back itself.
-    if StopApp(ExpandConstant('{localappdata}')) then
-      RestoreProxy;
+    // An app stopped here can't put its system proxy back itself: the registry values now,
+    // the rest by the new version once it is in place (before [Run] starts it).
+    AppStopped := StopApp(ExpandConstant('{localappdata}'));
+    if AppStopped then
+      RestoreProxy('');
     RemoveOldMsi(HKCU);
   end;
+  if (CurStep = ssPostInstall) and AppStopped then
+    RestoreProxy(ExpandConstant('{app}\Titan VPS.exe'));
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
+    // Its files are still here: the app itself puts everything back; nothing starts after this.
     if StopApp(ExpandConstant('{app}')) then
-      RestoreProxy;
+      RestoreProxy(ExpandConstant('{app}\Titan VPS.exe'));
     RemoveAutostart;
   end;
 end;

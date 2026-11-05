@@ -1,5 +1,7 @@
 package com.titanvps.desktop
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -206,9 +208,137 @@ class LifecycleTest {
     fun perConnectionOptionsAreLaidOutAsWininetExpects() {
         // 64-bit: INTERNET_PER_CONN_OPTIONW is 16 bytes (DWORD, padding, 8-byte union);
         // the list is dwSize, padding, pszConnection, two DWORDs, pOptions = 32.
-        assertEquals(SystemProxy.PerConnLayout(optionSize = 16, valueOffset = 8, listSize = 32, countOffset = 16, optionsOffset = 24), SystemProxy.PerConnLayout.of(8))
+        assertEquals(
+            SystemProxy.PerConnLayout(optionSize = 16, valueOffset = 8, listSize = 32, connectionOffset = 8, countOffset = 16, optionsOffset = 24),
+            SystemProxy.PerConnLayout.of(8),
+        )
         // 32-bit: 12 and 20.
-        assertEquals(SystemProxy.PerConnLayout(optionSize = 12, valueOffset = 4, listSize = 20, countOffset = 8, optionsOffset = 16), SystemProxy.PerConnLayout.of(4))
+        assertEquals(
+            SystemProxy.PerConnLayout(optionSize = 12, valueOffset = 4, listSize = 20, connectionOffset = 4, countOffset = 8, optionsOffset = 16),
+            SystemProxy.PerConnLayout.of(4),
+        )
+    }
+
+    private val pppoe = "Высокоскоростное подключение"
+
+    @Test
+    fun aDialUpOrVpnConnectionIsSavedBeforeItIsChanged() {
+        val ras = JSONArray()
+        val read = mutableListOf<String>()
+        val before = mapOf(
+            pppoe to SystemProxy.Settings(SystemProxy.PROXY_TYPE_DIRECT or SystemProxy.PROXY_TYPE_AUTO_DETECT, "", "", ""),
+            "Work VPN" to SystemProxy.Settings(SystemProxy.PROXY_TYPE_DIRECT or SystemProxy.PROXY_TYPE_AUTO_PROXY_URL, "", "<local>", "http://wpad.test/proxy.pac"),
+        )
+        val ours = SystemProxy.takeRas(ras, listOf(pppoe, "Work VPN", "Unreadable", pppoe)) { read += it; before[it] }
+        // Each one read once; one Windows didn't say about is left alone (restore couldn't put it back).
+        assertEquals(listOf(pppoe, "Work VPN"), ours)
+        assertEquals(listOf(pppoe, "Work VPN", "Unreadable"), read)
+        assertEquals(before, SystemProxy.savedRas(JSONObject().put("ras", ras)))
+
+        // The next connect (another server): already saved, so what is there now (ours) isn't read
+        // over it; a connection added meanwhile is saved too.
+        read.clear()
+        val next = SystemProxy.takeRas(ras, listOf(pppoe, "Work VPN", "New VPN")) { read += it; SystemProxy.Settings(SystemProxy.PROXY_TYPE_DIRECT, "", "", "") }
+        assertEquals(listOf(pppoe, "Work VPN", "New VPN"), next)
+        assertEquals(listOf("New VPN"), read)
+        val saved = SystemProxy.savedRas(JSONObject().put("ras", ras))
+        assertEquals(before[pppoe], saved[pppoe])
+        assertEquals(3, saved.size)
+    }
+
+    @Test
+    fun anOlderBackupHasNoDialUpConnections() {
+        assertTrue(SystemProxy.savedRas(SystemProxy.backupOf(0, "", "", "", 9)).isEmpty())
+        assertTrue(SystemProxy.savedRas(JSONObject("""{"enable":0,"server":"","override":"","pac":""}""")).isEmpty())
+    }
+
+    /** The installer's BackupValue (titan.iss): the first "key": in the text, a string or a number. */
+    private fun installerValue(json: String, key: String): String {
+        var i = json.indexOf("\"$key\":")
+        if (i < 0) return ""
+        i += key.length + 3
+        val out = StringBuilder()
+        if (i < json.length && json[i] == '"') {
+            i++
+            while (i < json.length && json[i] != '"') {
+                if (json[i] == '\\' && i < json.length - 1) i++
+                out.append(json[i])
+                i++
+            }
+        } else {
+            while (i < json.length && json[i] != ',' && json[i] != '}') out.append(json[i++])
+        }
+        return out.toString()
+    }
+
+    @Test
+    fun theInstallerReadsTheLanValuesWhateverTheDialUpConnectionsHold() {
+        val backup = SystemProxy.backupOf(1, "proxy.lan.test:3128", "<local>", "http://lan.test/proxy.pac", 0x0B)
+        val ras = JSONArray().also { backup.put("ras", it) }
+        // Connections named like the keys, with settings of their own.
+        for (name in listOf("server", "enable", "override", "pac")) {
+            SystemProxy.takeRas(ras, listOf(name)) { SystemProxy.Settings(3, "\"server\":\"x\"", "dial.test", "http://dial.test/pac") }
+        }
+        // Whatever order the file has its keys in: none of those names inside the connections' list.
+        for (key in listOf("enable", "server", "override", "pac")) assertFalse(key, ras.toString().contains("\"$key\":"))
+        val text = backup.toString()
+        assertEquals("1", installerValue(text, "enable"))
+        assertEquals("proxy.lan.test:3128", installerValue(text, "server"))
+        assertEquals("<local>", installerValue(text, "override"))
+        assertEquals("http://lan.test/proxy.pac", installerValue(text, "pac"))
+        assertEquals(4, SystemProxy.savedRas(JSONObject(text)).size)
+    }
+
+    /** RasEnumEntriesW's buffer: [names] as RASENTRYNAMEW of [size] bytes. */
+    private fun rasBuffer(size: Int, names: List<String>): ByteArray {
+        val bytes = ByteArray(size * names.size) { 0x5A } // what Windows leaves after each name
+        names.forEachIndexed { i, name ->
+            val at = i * size
+            java.nio.ByteBuffer.wrap(bytes, at, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(size)
+            val text = name.toByteArray(Charsets.UTF_16LE) + byteArrayOf(0, 0)
+            text.copyInto(bytes, at + 4)
+        }
+        return bytes
+    }
+
+    @Test
+    fun dialUpConnectionsAreReadFromTheirEntries() {
+        for (size in SystemProxy.RAS_ENTRY_SIZES) {
+            val names = listOf(pppoe, "Work VPN", "L2TP (дом)")
+            assertEquals(names, SystemProxy.rasNames(rasBuffer(size, names), names.size, size))
+        }
+        // The longest name Windows allows (256) still ends inside its entry.
+        val long = "Я".repeat(256)
+        assertEquals(listOf(long, "B"), SystemProxy.rasNames(rasBuffer(1048, listOf(long, "B")), 2, 1048))
+        // Fewer bytes than said: only whole names.
+        assertEquals(listOf(pppoe), SystemProxy.rasNames(rasBuffer(1048, listOf(pppoe)), 2, 1048))
+        assertEquals(emptyList<String>(), SystemProxy.rasNames(ByteArray(0), 0, 1048))
+    }
+
+    // ------------------------------------------------------------ Autostart
+
+    @Test
+    fun aRunKeyTurnedOffInWindowsIsOff() {
+        fun approved(first: Int) = byteArrayOf(first.toByte(), 0, 0, 0, 0x10, 0x2F, 0x41, 0x7B, 0x33, 0x12, 0xDA.toByte(), 0x01)
+        // Task Manager / Settings > Apps > Startup: off.
+        assertTrue(Autostart.offInWindows(approved(0x03)))
+        assertTrue(Autostart.offInWindows(approved(0x07)))
+        // On there, or never touched there.
+        assertFalse(Autostart.offInWindows(approved(0x02)))
+        assertFalse(Autostart.offInWindows(approved(0x06)))
+        assertFalse(Autostart.offInWindows(null))
+        assertFalse(Autostart.offInWindows(ByteArray(0)))
+    }
+
+    // ------------------------------------------------------------ PowerShell quoting
+
+    @Test
+    fun everyQuoteMarkPowerShellKnowsIsDoubled() {
+        assertEquals("'C:\\Users\\Ivan\\x'", psQuoted("C:\\Users\\Ivan\\x"))
+        assertEquals("'C:\\Users\\O''Brien'", psQuoted("C:\\Users\\O'Brien"))
+        // Curly ones too: PowerShell ends a single-quoted string at them as well.
+        assertEquals("'C:\\Users\\O\u2019\u2019Brien'", psQuoted("C:\\Users\\O\u2019Brien"))
+        assertEquals("'\u2018\u2018a\u201A\u201Ab\u201B\u201B'", psQuoted("\u2018a\u201Ab\u201B"))
     }
 
     // ------------------------------------------------------------ Restart as administrator

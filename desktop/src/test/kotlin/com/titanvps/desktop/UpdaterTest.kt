@@ -229,6 +229,9 @@ class UpdaterTest {
         val s = Updater.updateScript(1, "C:\\Users\\O'Brien\\core", null, "C:\\l.png", "C:\\Users\\O'Brien\\setup.exe")
         assertTrue(s.contains("-FilePath 'C:\\Users\\O''Brien\\setup.exe'"))
         assertTrue(s.contains("-like 'C:\\Users\\O''Brien\\core*'"))
+        // A curly apostrophe is a quote mark for PowerShell too.
+        val curly = Updater.updateScript(1, "C:\\Users\\O\u2019Brien\\core", null, "C:\\l.png", "C:\\Users\\O\u2019Brien\\setup.exe")
+        assertTrue(curly.contains("-FilePath 'C:\\Users\\O\u2019\u2019Brien\\setup.exe'"))
         // No installed exe known: nothing to start by hand.
         assertFalse(s.contains("Get-Process 'Titan VPS')) { Start-Process"))
     }

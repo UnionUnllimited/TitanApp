@@ -357,6 +357,9 @@ class AppState {
         val sub = subscription ?: return
         val from = selected ?: return
         if (!bypassLocked || !vpnOn || !isBypass(from.id)) return
+        // TUN picked, administrator rights still asked for: connect() would stop at that, the
+        // bypass server running on. Here again on the next check once the question is answered.
+        if (waitsForAdmin) return
         if (update is UpdateState.Downloading || update == UpdateState.Installing) return
         val to = regularFallback(sub) ?: return
         selectedId = to.id
@@ -386,6 +389,9 @@ class AppState {
         // Also while connecting (as on iPhone): the connect under way gives way to this one.
         if (vpnOn) connect()
     }
+
+    /** TUN without administrator rights: [connect] only asks for them («Перезапустить»), nothing changes. */
+    private val waitsForAdmin: Boolean get() = mode == "tun" && !Admin.isAdmin
 
     /** On, or on its way (connecting, or bringing back an exited core): a new pick reconnects. */
     private val vpnOn: Boolean get() = vpn is VpnState.Connected || vpn == VpnState.Connecting
@@ -476,7 +482,15 @@ class AppState {
         scope.launch {
             val ok = withContext(Dispatchers.IO) { runCatching { Autostart.set(value, Admin.isAdmin) }.isSuccess }
             autostart = withContext(Dispatchers.IO) { Autostart.isEnabled }
-            if (!ok) showToast("Не удалось изменить автозапуск", Toast.Kind.WARNING)
+            when {
+                ok -> {}
+                // The logon task made with administrator rights: only a copy with them can delete it.
+                !value && autostart && !Admin.isAdmin -> showToast(
+                    "Автозапуск включали с правами администратора — чтобы выключить его, запустите Titan VPS от имени администратора",
+                    Toast.Kind.WARNING,
+                )
+                else -> showToast("Не удалось изменить автозапуск", Toast.Kind.WARNING)
+            }
         }
     }
 
@@ -521,7 +535,7 @@ class AppState {
             scope.launch(Dispatchers.IO) { persist() }
             showToast("Интернет работает без белых списков — подключаем к обычному серверу ${ServerGroups.splitFlag(regular.name).second}")
         }
-        if (mode == "tun" && !Admin.isAdmin) { needAdmin = true; return }
+        if (waitsForAdmin) { needAdmin = true; return }
         // Fixed for this connect: another mode picked meanwhile starts a new one.
         val useTun = mode == "tun"
         val gen = conn.next()

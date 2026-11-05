@@ -62,6 +62,14 @@ private fun logCrash(e: Throwable) {
 
 fun main(args: Array<String>) {
     Thread.setDefaultUncaughtExceptionHandler { _, e -> logCrash(e) }
+    // The installer ended this app without its own shutdown (installer/titan.iss): only the
+    // system proxy as it was before it, the connections' own settings too, which WinINet alone
+    // sets. No window, no tray, no second copy check.
+    if (SystemProxy.RESTORE_ARG in args) {
+        Splash.close()
+        val ok = runCatching { SystemProxy.restore() }.onFailure(::logCrash).isSuccess
+        kotlin.system.exitProcess(if (ok) 0 else 1)
+    }
     // Already running (e.g. in the tray): that copy shows its window instead.
     val instance = SingleInstance.claim(waitMs = if ("--elevated" in args) 10_000 else 0) ?: run { Splash.close(); return }
     // Started with Windows: straight to the tray.
