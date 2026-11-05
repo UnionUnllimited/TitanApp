@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/database64128/tfo-go/v2"
@@ -84,7 +85,7 @@ var tfoStat struct {
 	notSafe      atomic.Int64 // dialed without TFO: the first write isn't safe to repeat
 	failed       atomic.Int64 // TFO dials that failed
 	noAnswer     atomic.Int64 // TFO connections closed with nothing received after a TLS or HTTP first write
-	synTwice     atomic.Int64 // TFO dials whose SYN went twice: 0.7 s or more over the path's RTT (tfo_syn_twice.go)
+	synTwice     atomic.Int64 // TFO dials whose SYN went twice: its data sent again, or the handshake 0.7 s or more over the path's RTT (tfo_syn_twice.go)
 }
 
 // What the kernel did with a dialed connection (tfoKernel, per system).
@@ -97,8 +98,10 @@ type tfoKernelInfo struct {
 	extra                     []string
 }
 
-// verdict counts the dial (dialMs: how long it took) and says what really went on the wire.
-func (k tfoKernelInfo) verdict(dialMs int64) string {
+// verdict counts the dial and says what really went on the wire. handshakeMs: the connected
+// socket's own handshake time, from just before its connect (after the name lookup and any other
+// address tried, which the dial's time also counts), -1 if unknown (tfoStampConnect).
+func (k tfoKernelInfo) verdict(handshakeMs int64) string {
 	var v string
 	switch {
 	case k.synDataSent && k.synDataAcked:
@@ -123,10 +126,14 @@ func (k tfoKernelInfo) verdict(dialMs int64) string {
 	if len(k.extra) > 0 {
 		v += ", " + strings.Join(k.extra, ", ")
 	}
-	// The kernel doesn't flag this one under TCP_FASTOPEN_FORCE_ENABLE: the dial's time does.
-	if tfoSynTwice(dialMs, k.srttMs) {
+	// The kernel doesn't flag this one under TCP_FASTOPEN_FORCE_ENABLE: the data it sent again,
+	// or the handshake's time, does (tfo_syn_twice.go).
+	if tfoSynSentAgain(k.synDataSent && k.synDataAcked, k.retransmit, handshakeMs, k.srttMs) {
 		tfoStat.synTwice.Add(1)
 		v += ", SYN sent twice"
+	}
+	if handshakeMs >= 0 {
+		v += fmt.Sprintf(", handshake %d ms", handshakeMs)
 	}
 	return v + fmt.Sprintf(", rtt %d ms", k.srttMs)
 }
@@ -271,15 +278,18 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, string, error) {
 		}
 		first := b[:min(safe, limit)]
 		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
-		conn, err := c.dialer.DialContext(ctx, c.network, c.address, first)
-		dialMs := time.Since(c.start).Milliseconds()
+		// The dial as before; only when its socket started to connect is noted.
+		dialer, handshakeOf := tfoStampConnect(c.dialer)
+		conn, err := dialer.DialContext(ctx, c.network, c.address, first)
+		dialMs := time.Since(c.start).Milliseconds() // the note's "in N ms": the name lookup included
 		cancel()
 		if err == nil {
 			tfoStat.dials.Add(1)
+			handshake := handshakeOf(conn)
 			// The kernel's record right after the handshake: what went in the SYN.
 			verdict := "no kernel record"
 			if k, ok := tfoKernel(conn); ok {
-				verdict = k.verdict(dialMs)
+				verdict = k.verdict(handshake)
 			} else {
 				tfoStat.unchecked.Add(1)
 			}
@@ -299,6 +309,56 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, string, error) {
 	}
 	tfoStat.plain.Add(1)
 	return c.openPlain(b, "plain (TFO to this host failed lately)")
+}
+
+// tfoStampConnect: a copy of d that notes when each of its sockets starts to connect, and a
+// func giving the connected socket's handshake time in ms (-1: unknown). tfo-go resolves a host
+// name inside DialContext and may try several addresses (a fallback delay between families, a
+// share of the timeout each), then calls the dialer's Control (or ControlContext) with the
+// resolved address right before connectx. The kernel's RTT is the winning socket's alone, so a
+// SYN sent twice is told from this time, not the dial's. Nothing about the dial changes.
+func tfoStampConnect(d *tfo.Dialer) (*tfo.Dialer, func(stdnet.Conn) int64) {
+	var mu sync.Mutex
+	at := map[netip.AddrPort]time.Time{}
+	// Control may get "[::ffff:a.b.c.d]:p" where an IPv4 socket's RemoteAddr is "a.b.c.d:p".
+	key := func(ap netip.AddrPort) netip.AddrPort { return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()) }
+	stamp := func(address string) {
+		if ap, err := netip.ParseAddrPort(address); err == nil {
+			mu.Lock()
+			at[key(ap)] = time.Now()
+			mu.Unlock()
+		}
+	}
+	dd := *d
+	if ctrl := d.ControlContext; ctrl != nil {
+		// Set, it is called instead of Control.
+		dd.ControlContext = func(ctx context.Context, network, address string, rc syscall.RawConn) error {
+			stamp(address)
+			return ctrl(ctx, network, address, rc)
+		}
+	} else {
+		ctrl := d.Control
+		dd.Control = func(network, address string, rc syscall.RawConn) error {
+			stamp(address)
+			if ctrl != nil {
+				return ctrl(network, address, rc)
+			}
+			return nil
+		}
+	}
+	return &dd, func(conn stdnet.Conn) int64 {
+		ra, ok := conn.RemoteAddr().(*stdnet.TCPAddr)
+		if !ok {
+			return -1
+		}
+		mu.Lock()
+		t, found := at[key(ra.AddrPort())]
+		mu.Unlock()
+		if !found {
+			return -1
+		}
+		return time.Since(t).Milliseconds()
+	}
 }
 
 // openPlain dials without TFO and sends b after the handshake.

@@ -1,7 +1,7 @@
 package internet
 
 // Titan patch check: only data that is safe to repeat goes in a TFO SYN, and a dial whose SYN
-// went twice is told by its time.
+// went twice is told by the data the kernel sent again or by its handshake's time.
 
 import (
 	"context"
@@ -43,20 +43,44 @@ func TestTitanTFOSynPart(t *testing.T) {
 
 func TestTitanTFOSynTwice(t *testing.T) {
 	for _, c := range []struct {
-		dialMs int64
-		srttMs uint32
-		twice  bool
+		handshakeMs int64
+		srttMs      uint32
+		twice       bool
 	}{
-		{80, 75, false},    // a dial of one round trip
+		{80, 75, false},    // a handshake of one round trip
 		{774, 75, false},   // just under 0.7 s over
 		{775, 75, true},    // 0.7 s over
 		{1090, 80, true},   // the SYN sent again after 1 s
 		{1450, 420, true},  // the same on a slower path
 		{1500, 900, false}, // a loaded path: its RTT is long too
 		{1500, 0, false},   // no RTT known: nothing said
+		{-1, 75, false},    // no handshake time known: nothing said
 	} {
-		if got := tfoSynTwice(c.dialMs, c.srttMs); got != c.twice {
-			t.Errorf("dial %d ms, rtt %d ms: got %v, want %v", c.dialMs, c.srttMs, got, c.twice)
+		if got := tfoSynTwice(c.handshakeMs, c.srttMs); got != c.twice {
+			t.Errorf("handshake %d ms, rtt %d ms: got %v, want %v", c.handshakeMs, c.srttMs, got, c.twice)
+		}
+	}
+	// Both signs, as the notes and synTwice count them (tfo_syn_twice.go).
+	for _, c := range []struct {
+		name         string
+		synDataAcked bool
+		resentBytes  uint64
+		handshakeMs  int64
+		srttMs       uint32
+		twice        bool
+	}{
+		{"the SYN-ACK lost: its resend echoes the first SYN's timestamp", true, 438, 1080, 1075, true},
+		{"cellular, no timestamps: the RTT timed from the first SYN", true, 438, 1095, 1090, true},
+		{"Wi-Fi, no timestamps: no RTT", true, 438, 1095, 0, true},
+		{"one SYN, acked", true, 0, 80, 75, false},
+		{"SYN data not taken: sent again after the handshake", false, 438, 80, 75, false},
+		{"a cookie request resent, with timestamps", false, 0, 1090, 80, true},
+		{"a cookie request resent, RTT spanning it (not seen)", false, 0, 1090, 1085, false},
+		{"the name lookup took 800 ms, the handshake one round trip", true, 0, 75, 75, false},
+		{"no handshake time known", true, 0, -1, 75, false},
+	} {
+		if got := tfoSynSentAgain(c.synDataAcked, c.resentBytes, c.handshakeMs, c.srttMs); got != c.twice {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.twice)
 		}
 	}
 }

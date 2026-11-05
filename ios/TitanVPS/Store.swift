@@ -324,7 +324,7 @@ final class AppStore: ObservableObject {
     private var oneMeasuring: Set<String> = []
     private var oneTasks: [String: Task<Void, Never>] = [:]
     /// Ping-all results that came while the server's own ping ran (shown if that is stopped),
-    /// and the servers ping-all hasn't reported yet.
+    /// and the servers ping-all hasn't reported a final result for yet.
     private var droppedAll: [String: (Int, String?)] = [:]
     private var allPending: Set<String> = []
     private var pingTask: Task<Void, Never>?
@@ -350,15 +350,16 @@ final class AppStore: ObservableObject {
             // Стоп while the VPN was going off.
             guard !Task.isCancelled else { return }
             pingAllHold = hold
-            await XrayPing.pingMany(order) { [weak self] id, ms, error in
+            await XrayPing.pingMany(order) { [weak self] id, ms, error, done in
                 // A stopped run's call may still answer: its results don't go into a newer one.
                 guard let self, self.pinging, self.pingAllHold == hold else { return }
-                self.allPending.remove(id)
+                // A slow first answer (not done): shown now, its spinner on until its recheck.
+                if done { self.allPending.remove(id) }
                 // Its own ping is running: that one's result wins; this one waits in case it's stopped.
                 if self.oneMeasuring.contains(id) { self.droppedAll[id] = (ms, error); return }
                 self.pings[id] = ms
                 self.pingErrors[id] = error
-                self.measuring.remove(id)
+                if done { self.measuring.remove(id) }
             }
             if !Task.isCancelled { measuring = oneMeasuring; pinging = false; allPending = [] }
         }
@@ -392,13 +393,12 @@ final class AppStore: ObservableObject {
             oneMeasuring.remove(server.id)
             oneTasks.removeValue(forKey: server.id)?.cancel()
             if let dropped = droppedAll.removeValue(forKey: server.id) {
-                // Ping-all measured it meanwhile: that result after all.
+                // Ping-all measured it meanwhile: that result after all (its first one, if its
+                // recheck is still to come: the spinner stays for that).
                 pings[server.id] = dropped.0
                 pingErrors[server.id] = dropped.1
-                measuring.remove(server.id)
-            } else if !(pinging && allPending.contains(server.id)) {
-                measuring.remove(server.id)
             }
+            if !(pinging && allPending.contains(server.id)) { measuring.remove(server.id) }
             if let hold = oneHolds.removeValue(forKey: server.id) { endPing(hold) }
             return
         }
@@ -410,7 +410,8 @@ final class AppStore: ObservableObject {
             // Stopped while the VPN was going off.
             guard oneMeasuring.contains(server.id) else { return }
             oneHolds[server.id] = hold
-            await XrayPing.pingMany([server]) { [weak self] id, ms, error in
+            // One server: no recheck, every result final.
+            await XrayPing.pingMany([server]) { [weak self] id, ms, error, _ in
                 guard let self, self.oneHolds[id] == hold, self.oneMeasuring.contains(id) else { return }
                 self.pings[id] = ms
                 self.pingErrors[id] = error

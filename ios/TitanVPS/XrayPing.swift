@@ -50,10 +50,18 @@ enum XrayPing {
     /// started a new instance: only the kernel's TFO cookie and DNS were warm then.)
     private static let warmTimeout = 3
     /// A list's answer slower than this is measured once more after the list, in the retry
-    /// ([retryCalls] at a time, [retryTimeout], warm included), and the better one is shown, as
-    /// on Android (RECHECK_ABOVE_MS): the first is often just the crowd. One server asked for
-    /// (its own ping button) runs alone already: as there, no recheck.
+    /// ([retryCalls] at a time, [retryTimeout], one attempt: no warm second), and the better one
+    /// is shown, as Android's recheck (RECHECK_ABOVE_MS): the first is often just the crowd. The
+    /// first answer is shown at once all the same, its spinner on until the recheck: Стоп or
+    /// leaving the app keeps it. One server asked for (its own ping button) runs alone already:
+    /// as there, no recheck.
     private static let recheckAbove = 1500
+    /// At most this many of a list's slow answers are measured again (Android has no such limit:
+    /// its VPN stays on): the first in the list's order (the tab on screen comes first). The rest
+    /// keep their first answer. The VPN is off for the recheck: it adds about [recheckMax] /
+    /// [retryCalls] x [retryTimeout] = 18 s at most (twice that for slow servers behind one entry
+    /// host, measured one at a time).
+    private static let recheckMax = 6
 
     private struct Item: Sendable { let json: String; let tag: String }
 
@@ -72,9 +80,11 @@ enum XrayPing {
     /// Measures [servers] in the order given, reporting each one's ms (-1: nothing answered)
     /// as soon as it's known, as Happ does. A balancer (АВТО) is measured on its members and
     /// shown with the first that answers. What fails is tried again, slower, after the rest;
-    /// in a list, so is the member that answered slower than [recheckAbove] (its server shown
-    /// after that, with the better of the two).
-    static func pingMany(_ servers: [Server], timeout: Int = 5, onResult: @escaping @MainActor (String, Int, String?) -> Void) async {
+    /// in a list, so is the member that answered slower than [recheckAbove] (the first
+    /// [recheckMax] such servers). onResult's last value says whether the result is final: such a
+    /// slow answer is reported at once as not final, then once more, final, with the better of
+    /// the two. Every other result is final.
+    static func pingMany(_ servers: [Server], timeout: Int = 5, onResult: @escaping @MainActor (String, Int, String?, Bool) -> Void) async {
         // Our protocol clients (sing-box, mieru) run here for the time of the ping.
         var clients: [Int] = []
         defer { clients.forEach(Titan.stop) }
@@ -87,12 +97,12 @@ enum XrayPing {
                 p = try Plugins.prepare(server)
                 if let plugin = p.plugin { clients.append(try Titan.start(plugin)) }
             } catch {
-                await onResult(server.id, -1, error.localizedDescription)
+                await onResult(server.id, -1, error.localizedDescription, true)
                 continue
             }
             guard let tag = server.proxyTag,
                   let cfg = (try? JSONSerialization.jsonObject(with: Data(p.json.utf8))) as? [String: Any] else {
-                await onResult(server.id, -1, "Не удалось разобрать конфиг сервера")
+                await onResult(server.id, -1, "Не удалось разобрать конфиг сервера", true)
                 continue
             }
             prepared[index] = p
@@ -102,19 +112,26 @@ enum XrayPing {
         }
 
         var failed: [Int: String] = [:]
-        // A list's slow answers, held for the recheck: the unit that gave it and its ms.
+        // A list's slow answers, to be measured again: the unit that gave it and its ms.
         let recheck = servers.count > 1
         var slow: [Int: (unit: Int, ms: Int)] = [:]
         await measure(units, timeout: timeout, maxCalls: maxCalls) { server, unit, ms, why in
             if recheck, ms > recheckAbove {
+                // Shown now (kept if the run stops), final after its recheck.
                 slow[server] = (unit: unit, ms: ms)
+                await onResult(servers[server].id, ms, nil, false)
             } else if ms >= 0 {
-                await onResult(servers[server].id, ms, nil)
+                await onResult(servers[server].id, ms, nil, true)
             } else {
                 failed[server] = why ?? ""
             }
         }
-        if Task.isCancelled || (failed.isEmpty && slow.isEmpty) { return }
+        if Task.isCancelled { return }
+        // Beyond [recheckMax] (in the list's order) the first answer stands.
+        for server in slow.keys.sorted().dropFirst(recheckMax) {
+            if let s = slow.removeValue(forKey: server) { await onResult(servers[server].id, s.ms, nil, true) }
+        }
+        if failed.isEmpty && slow.isEmpty { return }
         // In the list's order: a slow server's member that answered, a failed one's members.
         var retried: [Int: Int] = [:]
         let again = units.indices.filter { i in
@@ -124,17 +141,18 @@ enum XrayPing {
             retried[u.server, default: 0] += 1
             return true
         }.map { units[$0] }
-        await measure(again, timeout: retryTimeout, maxCalls: retryCalls) { server, _, ms, why in
+        // A recheck is one attempt (no warm second); a failed server's retry keeps its second.
+        await measure(again, timeout: retryTimeout, maxCalls: retryCalls, coldOnly: Set(slow.keys)) { server, _, ms, why in
             // A slow answer measured again: the better of the two (no answer now: the first).
             if let first = slow[server] {
-                await onResult(servers[server].id, ms >= 0 ? min(first.ms, ms) : first.ms, nil)
+                await onResult(servers[server].id, ms >= 0 ? min(first.ms, ms) : first.ms, nil, true)
                 return
             }
             // A failed protocol client says why in its own log.
             let clientLog = ms < 0 && prepared[server]?.log != nil ? prepared[server]?.logTail() : nil
             let reason = why ?? failed[server].flatMap { $0.isEmpty ? nil : $0 }
             let text = [reason, clientLog.map { "[\($0)]" }].compactMap { $0 }.joined(separator: " ")
-            await onResult(servers[server].id, ms, ms < 0 && !text.isEmpty ? text : nil)
+            await onResult(servers[server].id, ms, ms < 0 && !text.isEmpty ? text : nil, true)
         }
     }
 
@@ -152,8 +170,9 @@ enum XrayPing {
     /// servers behind one entry (a bridge) all timed out pinged together, yet answered one by
     /// one. [each] gets a server's result once (server, unit, ms, reason): its first member
     /// that answers (that unit), or its first failure reason when none did (the last unit).
-    /// Members of a server already shown aren't started. Stopped: nothing new starts.
-    private static func measure(_ units: [Unit], timeout: Int, maxCalls: Int,
+    /// Members of a server already shown aren't started. Stopped: nothing new starts. The
+    /// servers in [coldOnly] get no warm second probe.
+    private static func measure(_ units: [Unit], timeout: Int, maxCalls: Int, coldOnly: Set<Int> = [],
                                 each: (Int, Int, Int, String?) async -> Void) async {
         var left: [Int: Int] = [:]
         for u in units { left[u.server, default: 0] += 1 }
@@ -176,12 +195,13 @@ enum XrayPing {
                    }) {
                     let index = pending.remove(at: at)
                     let item = units[index].item
+                    let warm = coldOnly.contains(units[index].server) ? 0 : warmTimeout
                     busy[units[index].server, default: 0] += 1
                     hostBusy[units[index].host, default: 0] += 1
                     running += 1
                     ticking = true
                     group.addTask {
-                        let (ms, why) = await probe(item, timeout: timeout)
+                        let (ms, why) = await probe(item, timeout: timeout, warmTimeout: warm)
                         return .done(unit: index, ms: ms, why: why)
                     }
                     group.addTask {
@@ -227,9 +247,9 @@ enum XrayPing {
         }
     }
 
-    /// One call with one probe and, if it answered, its warm second on the same instance
-    /// ([warmTimeout]): the better ms (-1: no answer) and the reason of a failure.
-    private static func probe(_ item: Item, timeout: Int) async -> (Int, String?) {
+    /// One call with one probe and, if it answered (and [warmTimeout] isn't 0), its warm second
+    /// on the same instance: the better ms (-1: no answer) and the reason of a failure.
+    private static func probe(_ item: Item, timeout: Int, warmTimeout: Int) async -> (Int, String?) {
         let result = await run([(item.json, item.tag)], timeout: timeout, warmTimeout: warmTimeout).first ?? (-1, nil)
         return (result.0, result.0 >= 0 ? nil : result.1.map(shortReason))
     }

@@ -4,7 +4,8 @@ package internet
 
 // Titan patch check, run on the macOS build machine: a tcpFastOpen dial carries data both
 // ways, also when the host refuses TFO (plain fallback), and honours read deadlines; data
-// not safe to repeat stays out of the SYN; the kernel's record of a TFO dial is readable.
+// not safe to repeat stays out of the SYN; the kernel's record of a TFO dial is readable; a
+// slow name lookup in a dial is not taken for a SYN sent twice.
 
 import (
 	"context"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/database64128/tfo-go/v2"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 func titanEcho(t *testing.T, ln stdnet.Listener) {
@@ -183,4 +185,88 @@ func TestTitanTFO(t *testing.T) {
 		t.Fatal("read deadline ignored")
 	}
 	c.Close()
+}
+
+// titanSlowDNS answers DNS queries (UDP) after delay: A with 127.0.0.1, any other with no records.
+func titanSlowDNS(t *testing.T, delay time.Duration) string {
+	pc, err := stdnet.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		for {
+			b := make([]byte, 1500)
+			n, from, err := pc.ReadFrom(b)
+			if err != nil {
+				return
+			}
+			go func(query []byte) {
+				var p dnsmessage.Parser
+				h, err := p.Start(query)
+				if err != nil {
+					return
+				}
+				q, err := p.Question()
+				if err != nil {
+					return
+				}
+				time.Sleep(delay)
+				a := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, Authoritative: true,
+					RecursionDesired: h.RecursionDesired, RecursionAvailable: true})
+				a.StartQuestions()
+				a.Question(q)
+				a.StartAnswers()
+				if q.Type == dnsmessage.TypeA {
+					a.AResource(dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 60},
+						dnsmessage.AResource{A: [4]byte{127, 0, 0, 1}})
+				}
+				if out, err := a.Finish(); err == nil {
+					pc.WriteTo(out, from)
+				}
+			}(b[:n])
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+// A server given by name whose DNS answer comes 800 ms late (the first lookup after the VPN went
+// off for a ping, or a query sent again): tfo-go looks the name up inside the dial, so the dial
+// takes that long, while its socket's handshake is one loopback round trip. One SYN: not counted.
+func TestTitanTFOSlowDNS(t *testing.T) {
+	ln, err := (&tfo.ListenConfig{Fallback: true}).Listen(context.Background(), "tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	titanEcho(t, ln)
+	dns := titanSlowDNS(t, 800*time.Millisecond)
+	d := &stdnet.Dialer{Timeout: 5 * time.Second, Resolver: &stdnet.Resolver{PreferGo: true,
+		Dial: func(ctx context.Context, _, _ string) (stdnet.Conn, error) {
+			return (&stdnet.Dialer{}).DialContext(ctx, "udp", dns)
+		}}}
+	_, port, _ := stdnet.SplitHostPort(ln.Addr().String())
+	twice := tfoStat.synTwice.Load()
+	start := time.Now()
+	c, err := dialTFO(titanSafe, d, "tcp", stdnet.JoinHostPort("titan.example.com", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("hello")); err != nil {
+		t.Fatal("write: ", err)
+	}
+	dial := time.Since(start)
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if b, err := io.ReadAll(c); string(b) != "re:hello" {
+		t.Fatalf("got %q, %v", b, err)
+	}
+	notes := TitanTFOLog()
+	if dial < 700*time.Millisecond {
+		t.Fatalf("the dial took %v: the slow DNS answer wasn't in it (%s)", dial, notes)
+	}
+	if tfoStat.synTwice.Load() != twice {
+		t.Fatalf("a slow name lookup counted as a SYN sent twice: %s", notes)
+	}
+	t.Logf("dial %v: %s", dial, notes)
 }
