@@ -91,21 +91,40 @@ object Updater {
         client(proxyPort, readSec = 60).newCall(Request.Builder().url(release.url).header("User-Agent", Config.TITAN_UA).build()).execute().use { r ->
             if (!r.isSuccessful) error("HTTP ${r.code}")
             val total = r.body.contentLength()
-            r.body.byteStream().use { input ->
-                file.outputStream().use { out ->
-                    val buf = ByteArray(64 * 1024)
-                    var done = 0L
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                        done += n
-                        if (total > 0) onProgress(done.toFloat() / total)
-                    }
-                }
-            }
+            r.body.byteStream().use { input -> save(input, { file.outputStream() }, total, onProgress) }
         }
         return file
+    }
+
+    /**
+     * The disk failed (full, the file locked or not created), not the network: no other server
+     * would help, so the update doesn't move the user to АВТО for it (only an IOException does).
+     */
+    class DiskError(cause: java.io.IOException) : IllegalStateException("disk: ${cause.message}", cause)
+
+    private inline fun <T> disk(block: () -> T): T =
+        try { block() } catch (e: java.io.IOException) { throw DiskError(e) }
+
+    /**
+     * [input] (the network) into the file [open] gives: a failed read stays an IOException, a
+     * failed file a [DiskError]. [onProgress] with the share of [total] done (none when unknown).
+     */
+    internal fun save(input: java.io.InputStream, open: () -> java.io.OutputStream, total: Long, onProgress: (Float) -> Unit) {
+        val out = disk(open)
+        try {
+            val buf = ByteArray(64 * 1024)
+            var done = 0L
+            while (true) {
+                val n = input.read(buf) // the network: IOException, another server may help
+                if (n < 0) break
+                disk { out.write(buf, 0, n) } // the disk (no space): DiskError
+                done += n
+                if (total > 0) onProgress(done.toFloat() / total)
+            }
+            disk { out.close() } // what is still buffered goes to the disk here
+        } finally {
+            runCatching { out.close() }
+        }
     }
 
     /**

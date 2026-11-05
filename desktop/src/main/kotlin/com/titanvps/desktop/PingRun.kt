@@ -365,3 +365,24 @@ internal class PingRuns {
     /** No newer Пинг came after [t]'s: its end ends «Стоп» on the button. */
     fun isLatest(t: Ticket): Boolean = t.run == latestRun
 }
+
+/**
+ * The protocol clients (Naive, Mieru, sing-box) behind a warm ping core, and each one's latest
+ * start. A warm core outlives its clients: one whose start failed, or that has exited since,
+ * is started again (on its own port, where the core still points) when a probe needs it, not
+ * reused for a «таймаут» on every Пинг. At most one start at a time per client, also for a
+ * list and a row's ping at once; a balancer's members through one client share its start.
+ * [start] begins a start in the background, [isRunning] tells the client is up.
+ */
+internal class ClientStarts<P : Any>(private val isRunning: (P) -> Boolean, private val start: (P) -> Future<*>) {
+    private val latest = java.util.concurrent.ConcurrentHashMap<P, Future<*>>()
+
+    /** A cold core: [client] starts in the background while the rest is already measured. */
+    fun begin(client: P) {
+        latest[client] = start(client)
+    }
+
+    /** [client]'s start to wait for: the latest, unless it failed or the client is down since; then a new one. */
+    fun ready(client: P): Future<*> =
+        latest.compute(client) { _, f -> if (f != null && (!f.isDone || isRunning(client))) f else start(client) }!!
+}

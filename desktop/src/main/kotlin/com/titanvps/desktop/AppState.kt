@@ -794,6 +794,9 @@ class AppState {
                     shutdown()
                 }
                 kotlin.system.exitProcess(0)
+            } catch (e: Updater.DiskError) {
+                // The disk, not the server: no other server was tried for it ([viaVpn]).
+                if (gen == updateGen) update = UpdateState.Error("Не удалось сохранить обновление. Освободите место на диске и попробуйте ещё раз")
             } catch (e: Exception) {
                 if (gen == updateGen) update = UpdateState.Error("Не удалось скачать обновление. Попробуйте ещё раз")
             }
@@ -814,8 +817,9 @@ class AppState {
      * [block] over the VPN; if GitHub can't be reached through the picked server, once more
      * through АВТО (a dead server picked must not keep the app from updating). Not when GitHub
      * answered (an error status: its limit per address, a failure on its side), the server
-     * works then; nor from a bypass server (whitelist mode: АВТО wouldn't open anything); nor
-     * once the dialog was closed ([gen]).
+     * works then; nor when the disk failed ([Updater.DiskError]: no space, the file locked); nor
+     * from a bypass server (whitelist mode: АВТО wouldn't open anything); nor once the dialog
+     * was closed ([gen]).
      */
     private suspend fun <T> viaVpn(gen: Int, block: suspend () -> T): T = try {
         block()
@@ -980,13 +984,19 @@ class AppState {
     fun shutdown() {
         conn.next()
         conn.locked { stopAll() }
+        // The ping core isn't the VPN's (TUN leaves xray.exe and the clients out, the system
+        // proxy doesn't carry it): only quitting ends it, Выкл leaves a Пинг under way measuring.
+        runCatching { Pinger.stop() }
     }
 
-    /** Off: the update checks, the ping core, then [stopProcesses]. Under [conn]. */
+    /**
+     * Off: the update checks, then [stopProcesses]. Under [conn]. A Пинг under way goes on
+     * (killing its core made every server not yet measured «таймаут»); its core stops itself
+     * a minute after the last measurement.
+     */
     private fun stopAll() {
         updateJob?.cancel()
         proxyPort = 0
-        runCatching { Pinger.stop() }
         stopProcesses()
     }
 

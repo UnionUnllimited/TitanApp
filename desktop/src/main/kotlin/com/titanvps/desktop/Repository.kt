@@ -206,8 +206,10 @@ class PingEngine(private val name: String) {
         val plugins: List<PluginProcess> = emptyList(),
         /** Probes over UDP (Hysteria, TUIC, MASQUE over H3): counted apart in a list's line in ping.log. */
         val udp: Set<String> = emptySet(),
-        /** Probes through a protocol client still starting: measured once it is up. */
-        val ready: Map<String, java.util.concurrent.Future<*>> = emptyMap(),
+        /** Probes through a protocol client: measured once it is up ([starts]). */
+        val clients: Map<String, PluginProcess> = emptyMap(),
+        /** The clients' latest starts: one that failed or has exited since starts again when needed. */
+        val starts: ClientStarts<PluginProcess>? = null,
         /** The host each probe dials first: one probe at a time per host ([PingRun.run]). */
         val hosts: Map<String, String> = emptyMap(),
     )
@@ -317,16 +319,18 @@ class PingEngine(private val name: String) {
         // the background (each takes a second or more: antivirus scan) while the core is
         // already measuring the rest; a probe through a client waits for that client only.
         val plugins = java.util.Collections.synchronizedList(mutableListOf<PluginProcess>())
-        val startOf = HashMap<String, java.util.concurrent.Future<*>>()
+        val starts = ClientStarts<PluginProcess>({ it.isRunning }, { p -> startPool.submit { p.start() } })
+        val clientOf = HashMap<String, PluginProcess>()
         val jsonOf = servers.associate { s ->
             val (json, p) = runCatching { Plugins.prepare(s, start = false) }.getOrDefault(s.xrayJson to null)
             if (p != null) {
                 plugins += p
-                startOf[s.id] = startPool.submit { p.start() }
+                clientOf[s.id] = p
+                starts.begin(p)
             }
             s.id to json
         }
-        val ready = HashMap<String, java.util.concurrent.Future<*>>()
+        val clients = HashMap<String, PluginProcess>()
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
         val udp = HashSet<String>()
@@ -342,7 +346,7 @@ class PingEngine(private val name: String) {
                 val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
                 if (key !in probes && probes.size < MAX_PROBES) probes[key] = Probe(json, tag)
                 if (key in probes && (serverUdp || isUdp(json, tag))) udp += key
-                startOf[s.id]?.let { if (key in probes) ready[key] = it }
+                clientOf[s.id]?.let { if (key in probes) clients[key] = it }
                 // From the server's own config: through a protocol client the probe dials that
                 // client's server, not the local SOCKS [json] points at (loopback: no rule).
                 if (key in probes && key !in hosts) XrayConfigs.entryHost(s, tag, client)?.let { hosts[key] = it }
@@ -352,7 +356,7 @@ class PingEngine(private val name: String) {
         val keys = probes.keys.toList()
         val ports = if (keys.isEmpty()) emptyList() else freePorts(keys.size)
         if (keys.isNotEmpty()) core.start(XrayConfigs.buildPingConfig(keys.map { probes.getValue(it).let { p -> p.json to p.tag } }, ports))
-        return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp, ready, hosts).also { session = it }
+        return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp, clients, starts, hosts).also { session = it }
     }
 
     /** Hysteria, QUIC, mKCP… outbounds: they go over UDP. */
@@ -383,7 +387,9 @@ class PingEngine(private val name: String) {
         // The rows show the ms (or «таймаут»), not why: the reason stays in PingRun.
         result = { id, ms, _ -> onResult(id, ms) },
         started = onStart,
-        ready = { s.ready[it] },
+        // A client down since the last Пинг (its start failed, it exited) starts again here:
+        // [covering] keeps the warm core, which only checks the servers.
+        ready = { key -> s.clients[key]?.let { s.starts?.ready(it) } },
         udp = s.udp,
         cancelled = cancelled,
         maxMembers = maxMembers,

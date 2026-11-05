@@ -8,11 +8,17 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 
 /**
  * «Обновление приложения»: which release is offered (every app's builds share one list, newest
- * commit first, read page by page), the update script's waits, and the one-time reconnect
- * after an update saved in state.json.
+ * commit first, read page by page), a disk error told from a network one, the update script's
+ * waits, and the one-time reconnect after an update saved in state.json.
  */
 class UpdaterTest {
 
@@ -105,6 +111,86 @@ class UpdaterTest {
     fun anErrorFromGitHubIsNotReadAsNoUpdate() {
         // An HTTP status from GitHub (its limit per address) must not read «У вас последняя версия».
         Updater.newestWindows { error("HTTP 403") }
+    }
+
+    // ------------------------------------------------------------ saving the download
+
+    /** What [Updater.save] threw, or null. */
+    private fun saveError(input: InputStream, open: () -> OutputStream): Throwable? =
+        runCatching { Updater.save(input, open, total = 1024, onProgress = {}) }.exceptionOrNull()
+
+    private val bytes = ByteArray(200_000) { (it % 251).toByte() }
+
+    @Test
+    fun aFullDiskIsADiskErrorNotANetworkOne() {
+        // Only an IOException moves the user to АВТО: a full disk must not.
+        val full = object : OutputStream() {
+            override fun write(b: Int) = throw IOException("There is not enough space on the disk")
+            override fun write(b: ByteArray, off: Int, len: Int) = throw IOException("There is not enough space on the disk")
+        }
+        val e = saveError(ByteArrayInputStream(bytes)) { full }
+        assertTrue(e.toString(), e is Updater.DiskError)
+        assertFalse(e is IOException)
+        assertTrue(e!!.cause is IOException)
+    }
+
+    @Test
+    fun aFileThatCantBeOpenedIsADiskError() {
+        // Locked by another process, or the folder not writable.
+        val e = saveError(ByteArrayInputStream(bytes)) { throw FileNotFoundException("locked") }
+        assertTrue(e.toString(), e is Updater.DiskError)
+        assertFalse(e is IOException)
+    }
+
+    @Test
+    fun aFailedCloseIsADiskError() {
+        // What the file still held goes to the disk on close.
+        val out = object : OutputStream() {
+            override fun write(b: Int) {}
+            override fun write(b: ByteArray, off: Int, len: Int) {}
+            override fun close() = throw IOException("There is not enough space on the disk")
+        }
+        assertTrue(saveError(ByteArrayInputStream(bytes)) { out } is Updater.DiskError)
+    }
+
+    @Test
+    fun aNetworkFailureStaysAnIOException() {
+        // GitHub not reachable through the server mid-download: АВТО may still help.
+        val dropped = object : InputStream() {
+            private var sent = 0
+            override fun read(): Int = throw IOException("unexpected end of stream")
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (sent > 0) throw IOException("unexpected end of stream")
+                sent = minOf(len, 1000)
+                return sent
+            }
+        }
+        var closed = false
+        val out = object : ByteArrayOutputStream() {
+            override fun close() { closed = true }
+        }
+        val e = saveError(dropped) { out }
+        assertTrue(e.toString(), e is IOException)
+        assertFalse(e is Updater.DiskError)
+        // The file isn't left open (Windows would keep it locked).
+        assertTrue(closed)
+    }
+
+    @Test
+    fun everyByteIsSavedWithItsProgress() {
+        val out = ByteArrayOutputStream()
+        val progress = mutableListOf<Float>()
+        Updater.save(ByteArrayInputStream(bytes), { out }, bytes.size.toLong()) { progress += it }
+        assertTrue(bytes.contentEquals(out.toByteArray()))
+        assertTrue(progress.isNotEmpty())
+        assertEquals(1f, progress.last(), 0f)
+        assertEquals(progress.sorted(), progress)
+        // An unknown length: no progress, the file still whole.
+        val unknown = ByteArrayOutputStream()
+        val none = mutableListOf<Float>()
+        Updater.save(ByteArrayInputStream(bytes), { unknown }, -1) { none += it }
+        assertTrue(bytes.contentEquals(unknown.toByteArray()))
+        assertTrue(none.isEmpty())
     }
 
     // ------------------------------------------------------------ the update script
