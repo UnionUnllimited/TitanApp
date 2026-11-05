@@ -72,7 +72,9 @@ fun main(args: Array<String>) {
     if (startHidden) Splash.close()
     application {
         val windowState = rememberWindowState(size = DpSize(1280.dp, 820.dp))
-        var visible by remember { mutableStateOf(!startHidden) }
+        // Started with Windows in TUN without administrator rights (Автоподключение asked for
+        // them): the window with the question, not a tray that quietly stays off.
+        var visible by remember { mutableStateOf(!startHidden || state.needAdmin) }
         var trayHintShown by remember { mutableStateOf(false) }
         /** Each request to show the window (tray, second start) brings it to the front, also when already open. */
         var shown by remember { mutableStateOf(0) }

@@ -111,19 +111,112 @@ object Autostart {
     val isEnabled: Boolean
         get() = isWindows && (runKey() != null || taskExists())
 
+    /** On through the Run key (turned on without administrator rights): it starts us without them. */
+    val viaRunKey: Boolean
+        get() = isWindows && runKey() != null
+
+    /** Throws if Windows refused (the toggle says so then). */
     fun set(enabled: Boolean, elevated: Boolean) {
         if (!isWindows) return
         val path = exe ?: return
+        if (enabled && elevated) {
+            // The task first: if Windows refuses it, the Run key stays and nothing is lost.
+            createTask(path)
+            runCatching { com.sun.jna.platform.win32.Advapi32Util.registryDeleteValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, RUN_KEY, NAME) }
+            return
+        }
         runCatching { com.sun.jna.platform.win32.Advapi32Util.registryDeleteValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, RUN_KEY, NAME) }
         if (taskExists()) runCatching { exec("schtasks", "/delete", "/tn", NAME, "/f") }
         if (!enabled) return
-        val arg = "\"$path\" --autostart"
-        if (elevated) {
-            exec("schtasks", "/create", "/tn", NAME, "/tr", arg, "/sc", "onlogon", "/rl", "highest", "/f")
-        } else {
-            com.sun.jna.platform.win32.Advapi32Util.registrySetStringValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, RUN_KEY, NAME, arg)
+        com.sun.jna.platform.win32.Advapi32Util.registrySetStringValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, RUN_KEY, NAME, "\"$path\" --autostart")
+    }
+
+    /**
+     * The logon task made by an earlier version (schtasks' defaults: no start on battery,
+     * stopped when the charger is pulled and after 72 hours, the cores at below-normal
+     * priority) gets [taskXml]'s settings. Only with administrator rights, as the task has them;
+     * if Windows refuses, the old task stays.
+     */
+    fun repair() {
+        if (!isWindows || !Admin.isAdmin) return
+        val path = exe ?: return
+        val xml = queryTaskXml() ?: return
+        if (!isCurrent(xml)) runCatching { createTask(path) }
+    }
+
+    /**
+     * The logon task: at logon, with the highest rights, also on battery and never stopped by
+     * the Task Scheduler (no time limit), at normal priority (the cores inherit it).
+     */
+    fun taskXml(exe: String): String {
+        val command = "\"$exe\"".replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return """<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>$command</Command>
+      <Arguments>--autostart</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"""
+    }
+
+    /** [xml] (the task as `schtasks /query /xml` prints it) already has [taskXml]'s settings. */
+    fun isCurrent(xml: String): Boolean {
+        val flat = xml.filterNot { it.isWhitespace() }
+        return CURRENT.all { it in flat }
+    }
+
+    private val CURRENT = listOf(
+        "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+        "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+        "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
+        "<Priority>4</Priority>",
+    )
+
+    private fun createTask(path: String) {
+        val file = java.io.File.createTempFile("titan-autostart", ".xml")
+        try {
+            // UTF-16 with its mark, as the declaration says (what schtasks itself writes).
+            file.writeBytes(("\uFEFF" + taskXml(path)).toByteArray(Charsets.UTF_16LE))
+            check(exec("schtasks", "/create", "/tn", NAME, "/xml", file.absolutePath, "/f") == 0) { "schtasks /create failed" }
+        } finally {
+            file.delete()
         }
     }
+
+    /** The task's definition, null if there is none. */
+    private fun queryTaskXml(): String? = runCatching {
+        val p = ProcessBuilder("schtasks", "/query", "/tn", NAME, "/xml").redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        val out = p.inputStream.use { it.readBytes() }
+        if (p.waitFor() != 0) null else textOf(out)
+    }.getOrNull()
+
+    /**
+     * schtasks' output as text for [isCurrent], whether it came as UTF-16 or in the console's
+     * code page: only its ASCII matters, so it is read byte by byte with UTF-16's zero bytes dropped.
+     */
+    fun textOf(bytes: ByteArray): String = String(bytes, Charsets.ISO_8859_1).replace("\u0000", "")
 
     private fun runKey(): String? = runCatching {
         com.sun.jna.platform.win32.Advapi32Util.registryGetStringValue(com.sun.jna.platform.win32.WinReg.HKEY_CURRENT_USER, RUN_KEY, NAME)

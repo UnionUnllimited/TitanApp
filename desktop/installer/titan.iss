@@ -72,15 +72,89 @@ Filename: "{app}\Titan VPS.exe"; Flags: nowait; Check: WizardSilent
 Type: filesandordirs; Name: "{app}"
 
 [Code]
-// Our cores keep files locked; stop only ours (by path), not other programs' xray.
-procedure StopCores(Dir: String);
+// The app first (it would start a core stopped under it again), then our cores and clients,
+// which keep files locked; only ours (by path), not other programs' xray. True when no Titan VPS
+// is left running: one with administrator rights can't be stopped from here, and its system
+// proxy is then its own to put back.
+function StopApp(Dir: String): Boolean;
 var
   Code: Integer;
 begin
-  Exec('powershell.exe',
-    '-NoProfile -WindowStyle Hidden -Command "Get-Process xray,sing-box -ErrorAction SilentlyContinue | ' +
-    'Where-Object { $_.Path -like ''' + Dir + '*'' } | Stop-Process -Force"',
-    '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := Exec('powershell.exe',
+    '-NoProfile -WindowStyle Hidden -Command "' +
+    '$app = Get-Process ''Titan VPS'' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ''' + Dir + '*'' }; ' +
+    'if ($app) { $app | Stop-Process -Force; $app | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue }; ' +
+    'Get-Process xray,sing-box,naive,mieru -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Path -like ''' + Dir + '*'' } | Stop-Process -Force; ' +
+    'if (Get-Process ''Titan VPS'' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"',
+    '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+end;
+
+function InternetSetOption(hInternet: Longint; dwOption: Cardinal; lpBuffer: Longint; dwBufferLength: Cardinal): Longint;
+  external 'InternetSetOptionW@wininet.dll stdcall delayload';
+
+// A value from the app's proxy-backup.json (org.json: "key":"text" or "key":number), '' if none.
+function BackupValue(const Json, Key: String): String;
+var
+  I: Integer;
+begin
+  Result := '';
+  I := Pos('"' + Key + '":', Json);
+  if I = 0 then Exit;
+  I := I + Length(Key) + 3;
+  if (I <= Length(Json)) and (Json[I] = '"') then
+  begin
+    I := I + 1;
+    while (I <= Length(Json)) and (Json[I] <> '"') do
+    begin
+      if (Json[I] = '\') and (I < Length(Json)) then
+        I := I + 1;
+      Result := Result + Json[I];
+      I := I + 1;
+    end;
+  end
+  else
+    while (I <= Length(Json)) and (Json[I] <> ',') and (Json[I] <> '}') do
+    begin
+      Result := Result + Json[I];
+      I := I + 1;
+    end;
+end;
+
+// The app was stopped (or had crashed) with its system proxy on: the settings from before it
+// come back, as the app's own SystemProxy.restore() does, or browsers would keep pointing at a
+// core that is gone.
+procedure RestoreProxy;
+var
+  Backup, Json, Key, Value: String;
+  Raw: AnsiString;
+begin
+  Backup := ExpandConstant('{userappdata}\TitanVPS\proxy-backup.json');
+  if not LoadStringFromFile(Backup, Raw) then Exit;
+  Json := String(Raw);
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Internet Settings';
+  RegWriteDWordValue(HKCU, Key, 'ProxyEnable', StrToIntDef(Trim(BackupValue(Json, 'enable')), 0));
+  Value := BackupValue(Json, 'server');
+  if Value = '' then RegDeleteValue(HKCU, Key, 'ProxyServer') else RegWriteStringValue(HKCU, Key, 'ProxyServer', Value);
+  Value := BackupValue(Json, 'override');
+  if Value = '' then RegDeleteValue(HKCU, Key, 'ProxyOverride') else RegWriteStringValue(HKCU, Key, 'ProxyOverride', Value);
+  Value := BackupValue(Json, 'pac');
+  if Value <> '' then RegWriteStringValue(HKCU, Key, 'AutoConfigURL', Value);
+  DeleteFile(Backup);
+  // INTERNET_OPTION_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH: running programs re-read them.
+  InternetSetOption(0, 39, 0, 0);
+  InternetSetOption(0, 37, 0, 0);
+end;
+
+// Start with Windows as the app set it: the Run key value, and the logon task (TUN). The task
+// was made with administrator rights, which this uninstaller doesn't have; if Windows refuses,
+// it stays and fails quietly at logon (its program is gone).
+procedure RemoveAutostart;
+var
+  Code: Integer;
+begin
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Titan VPS');
+  Exec('schtasks.exe', '/delete /tn "Titan VPS" /f', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
 // Versions up to now were installed as MSI ("Titan VPS"): remove that copy quietly,
@@ -109,7 +183,9 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    StopCores(ExpandConstant('{localappdata}'));
+    // An app stopped here can't put its system proxy back itself.
+    if StopApp(ExpandConstant('{localappdata}')) then
+      RestoreProxy;
     RemoveOldMsi(HKCU);
   end;
 end;
@@ -117,5 +193,9 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
-    StopCores(ExpandConstant('{app}'));
+  begin
+    if StopApp(ExpandConstant('{app}')) then
+      RestoreProxy;
+    RemoveAutostart;
+  end;
 end;

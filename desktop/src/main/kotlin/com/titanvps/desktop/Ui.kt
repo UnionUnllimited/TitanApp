@@ -224,6 +224,21 @@ fun App(state: AppState) {
 
 @Composable
 private fun AdminDialog(state: AppState) {
+    // A standard Windows account: «Да» isn't enough there, Windows asks for an administrator's
+    // password and the app would open in that account, without the key and the settings.
+    if (!Admin.canElevate) {
+        TitanDialog(
+            { state.cancelAdmin() }, "Нужны права администратора",
+            "Режим «Весь компьютер» создаёт виртуальную сетевую карту — для этого Windows требует права администратора, " +
+                "а эта учётная запись Windows — обычная. С паролем администратора приложение открылось бы в его профиле — " +
+                "без вашего ключа и настроек. Войдите в Windows под администратором или пользуйтесь системным прокси.",
+            icon = Icons.Default.AdminPanelSettings, iconColor = Orange,
+            buttons = {
+                PrimaryButton("Остаться на системном прокси", { state.cancelAdmin() }, height = 48.dp)
+            },
+        )
+        return
+    }
     TitanDialog(
         { state.cancelAdmin() }, "Нужны права администратора",
         "Режим «Весь компьютер» создаёт виртуальную сетевую карту — для этого Windows требует права администратора. " +

@@ -37,7 +37,20 @@ class AppState {
     private val core = XrayProcess("core")
     private val tun = SingBoxProcess()
     /** Naive / Mieru client of the connected server, if it is one. */
-    private var plugin: PluginProcess? = null
+    @Volatile private var plugin: PluginProcess? = null
+    /**
+     * Who owns the cores, the tunnel and the system proxy: each connect, off and quit takes a
+     * new number, so a connect or a restart under way that was overtaken gives up quietly,
+     * and an exit of a process we stopped ourselves is never taken for a crash.
+     */
+    private val conn = ConnectionGen()
+    /** SOCKS port of the running sing-box (0 when TUN is off): the next server's core takes it, the tunnel stays. */
+    private var tunSocks = 0
+    /** The current exit watch ([watchExits]): an exit seen by an older one isn't handled twice. */
+    private var watchId = 0
+    /** Restarts of exited processes in a row, and since when the connection has been up again. */
+    private var revives = 0
+    private var upSince = 0L
 
     var subscription by mutableStateOf<Subscription?>(null); private set
     var selectedId by mutableStateOf<String?>(null); private set
@@ -118,7 +131,7 @@ class AppState {
         favorites = st.favorites
         reminders = st.reminders
         reminded = st.reminded
-        scope.launch { autostart = withContext(Dispatchers.IO) { Autostart.isEnabled } }
+        syncAutostart()
         Runtime.getRuntime().addShutdownHook(Thread { shutdown() })
         scope.launch {
             while (true) {
@@ -163,8 +176,8 @@ class AppState {
             showToast("Подписка подключена", Toast.Kind.SUCCESS)
             loadAccount()
             when {
-                vpn is VpnState.Connected -> if (previous != url) connect()
-                vpn != VpnState.Connecting -> connect()
+                vpnOn -> if (previous != url) connect()
+                else -> connect()
             }
         }
     }
@@ -287,8 +300,12 @@ class AppState {
         }
         selectedId = id
         scope.launch(Dispatchers.IO) { persist() }
-        if (vpn is VpnState.Connected) connect()
+        // Also while connecting (as on iPhone): the connect under way gives way to this one.
+        if (vpnOn) connect()
     }
+
+    /** On, or on its way (connecting, or bringing back an exited core): a new pick reconnects. */
+    private val vpnOn: Boolean get() = vpn is VpnState.Connected || vpn == VpnState.Connecting
 
     /** System proxy ↔ TUN; reconnects if on. TUN needs administrator rights. */
     fun changeMode(value: String) {
@@ -301,7 +318,8 @@ class AppState {
         }
         mode = value
         scope.launch(Dispatchers.IO) { persist() }
-        if (vpn is VpnState.Connected) connect()
+        if (value == "tun") syncAutostart()
+        if (vpnOn) connect()
     }
 
     /** Picks or unpicks a program for the current [appsMode]. */
@@ -318,12 +336,14 @@ class AppState {
 
     /** Applies the exclusion list (TUN restarts with it). */
     fun applyExclusions() {
-        if (vpn is VpnState.Connected && mode == "tun") connect()
+        if (vpnOn && mode == "tun") connect()
     }
 
     /** Restart as administrator for TUN; on refusal fall back to the system proxy. */
     fun restartAsAdmin() {
         needAdmin = false
+        // A standard account (the dialog says so): the elevated copy would be another account's.
+        if (!Admin.canElevate) { cancelAdmin(); return }
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
                 persist()
@@ -347,6 +367,25 @@ class AppState {
     fun changeAutoConnect(value: Boolean) {
         autoConnect = value
         scope.launch(Dispatchers.IO) { persist() }
+    }
+
+    /**
+     * Автозапуск turned on without administrator rights is a Run-key entry, which starts us
+     * without them at logon, so TUN couldn't come up: in TUN with them it becomes the elevated
+     * logon task. An elevated start also gives a task made by an earlier version this one's
+     * settings (on battery too, never stopped, normal priority).
+     */
+    private fun syncAutostart() {
+        val tun = mode == "tun"
+        scope.launch {
+            autostart = withContext(Dispatchers.IO) {
+                if (Admin.isAdmin) {
+                    if (tun && Autostart.viaRunKey) runCatching { Autostart.set(true, elevated = true) }
+                    Autostart.repair()
+                }
+                Autostart.isEnabled
+            }
+        }
     }
 
     /** Start with Windows (a logon task with admin rights when we have them, for TUN). */
@@ -395,46 +434,78 @@ class AppState {
             showToast("Интернет работает без белых списков — подключаем к обычному серверу ${ServerGroups.splitFlag(regular.name).second}")
         }
         if (mode == "tun" && !Admin.isAdmin) { needAdmin = true; return }
+        // Fixed for this connect: another mode picked meanwhile starts a new one.
+        val useTun = mode == "tun"
+        val gen = conn.next()
+        revives = 0
         resetCheck()
         vpn = VpnState.Connecting
         connectStep = "Готовим настройки маршрутов…"
-        fun step(text: String) { scope.launch { connectStep = text } }
+        fun step(text: String) { scope.launch { if (conn.isCurrent(gen)) connectStep = text } }
         scope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    val geo = GeoFiles.prepare(sub.servers.map { it.xrayJson })
-                    step("Запускаем протокол сервера…")
-                    val (socks, http, metrics) = freePorts(3)
-                    val logDir = AppPaths.logDir.absolutePath.replace('\\', '/')
-                    // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound
-                    // points at it; MASQUE: Xray's own client.
-                    plugin?.close()
-                    plugin = null
-                    val (prepared, p) = Plugins.prepare(server)
-                    plugin = p
-                    val serverJson = prepared
-                    if ("\"tcpFastOpen\":true" in serverJson) Admin.enableTcpFastOpen()
-                    step("Подключаемся к серверу…")
-                    core.start(XrayConfigs.buildProxyConfig(serverJson, socks, http, logDir, server.proxyTag, metrics), geo)
-                    if (mode == "tun") {
-                        // The whole PC through the tunnel; no system proxy then.
-                        runCatching { SystemProxy.restore() }
-                        step("Включаем VPN для всего компьютера…")
-                        tun.start(TunConfig.build(socks, pickedApps, appsMode == "only", logDir))
-                    } else {
-                        tun.stop()
-                        step("Включаем системный прокси…")
-                        SystemProxy.enable(http)
+                // Null: overtaken (Выкл, another server or mode); the newer one stops or
+                // replaces what this one started.
+                val started = withContext(Dispatchers.IO) {
+                    conn.ifCurrent(gen) {
+                        val geo = GeoFiles.prepare(sub.servers.map { it.xrayJson })
+                        if (!conn.isCurrent(gen)) return@ifCurrent false
+                        step("Запускаем протокол сервера…")
+                        // TUN already up (a server switch): the new core takes the tunnel's SOCKS
+                        // port, so sing-box goes on and nothing goes around the VPN meanwhile.
+                        val keepTun = useTun && tun.isRunning && tunSocks > 0
+                        val (fresh, http, metrics) = freePorts(4).filter { it != tunSocks }
+                        val logDir = AppPaths.logDir.absolutePath.replace('\\', '/')
+                        // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound
+                        // points at it; MASQUE: Xray's own client.
+                        plugin?.close()
+                        plugin = null
+                        val (prepared, p) = Plugins.prepare(server)
+                        plugin = p
+                        if (!conn.isCurrent(gen)) return@ifCurrent false
+                        if ("\"tcpFastOpen\":true" in prepared) Admin.enableTcpFastOpen()
+                        step("Подключаемся к серверу…")
+                        fun startCore(socks: Int) =
+                            core.start(XrayConfigs.buildProxyConfig(prepared, socks, http, logDir, server.proxyTag, metrics), geo)
+                        var socks = if (keepTun) tunSocks else fresh
+                        try {
+                            startCore(socks)
+                        } catch (e: Exception) {
+                            if (!keepTun) throw e
+                            // The tunnel's port taken meanwhile: a new one, the tunnel restarts with it.
+                            socks = fresh
+                            startCore(socks)
+                        }
+                        if (!conn.isCurrent(gen)) return@ifCurrent false
+                        if (useTun) {
+                            // The whole PC through the tunnel; no system proxy then.
+                            runCatching { SystemProxy.restore() }
+                            step("Включаем VPN для всего компьютера…")
+                            tun.start(TunConfig.build(socks, pickedApps, appsMode == "only", logDir))
+                            tunSocks = socks
+                        } else {
+                            tun.stop()
+                            tunSocks = 0
+                            step("Включаем системный прокси…")
+                            SystemProxy.enable(http)
+                        }
+                        proxyPort = http
+                        metricsPort = metrics
+                        true
                     }
-                    proxyPort = http
-                    metricsPort = metrics
                 }
+                if (started != true || !conn.isCurrent(gen)) return@launch
                 vpn = VpnState.Connected(System.currentTimeMillis())
+                upSince = System.currentTimeMillis()
+                watchExits(gen, useTun)
                 watchUpdates()
                 checkConnection(auto = true)
             } catch (e: Exception) {
+                // Overtaken meanwhile: not this connect's error, the newer one cleans up.
+                if (!conn.isCurrent(gen)) return@launch
                 System.err.println("connect failed: $e")
-                withContext(Dispatchers.IO) { tun.stop(); core.stop(); plugin?.close(); plugin = null; runCatching { SystemProxy.restore() } }
+                withContext(Dispatchers.IO) { conn.ifCurrent(gen) { stopProcesses() } }
+                if (!conn.isCurrent(gen)) return@launch
                 // No technical details for clients.
                 vpn = VpnState.Error("Не удалось подключиться. Попробуйте другой сервер или ещё раз")
                 failures += 1
@@ -442,14 +513,81 @@ class AppState {
         }
     }
 
+    /** Выкл: also while connecting, which then gives up (as on iPhone and Android) and ends off. */
     fun disconnect() {
         if (vpn !is VpnState.Connected && vpn != VpnState.Connecting) return
+        val gen = conn.next()
         vpn = VpnState.Disconnecting
         resetCheck()
         scope.launch {
-            withContext(Dispatchers.IO) { shutdown() }
-            vpn = VpnState.Off
+            // After the step a connect under way is in (a core starting can't be cut short);
+            // not if a newer connect came meanwhile: that one replaces everything.
+            withContext(Dispatchers.IO) { conn.ifCurrent(gen) { stopAll() } }
+            if (conn.isCurrent(gen)) vpn = VpnState.Off
         }
+    }
+
+    /**
+     * After connecting, xray, the protocol's client and sing-box are watched: one that exits by
+     * itself (Defender, a crash, Task Manager) would leave «Подключено» over a proxy with
+     * nothing behind it, or in TUN a PC offline or going around the VPN. Our own stops come
+     * with a new [conn] number, so they never count.
+     */
+    private fun watchExits(gen: Int, useTun: Boolean) {
+        val id = ++watchId
+        listOfNotNull(core.exits(), plugin?.exits(), if (useTun) tun.exits() else null).forEach { exit ->
+            exit.thenRun { scope.launch { if (id == watchId) onExit(gen, useTun) } }
+        }
+    }
+
+    /**
+     * Brings back what exited, in place: the same ports, while the system proxy or the tunnel
+     * holds the traffic, at once and then after a growing pause ([Revive]). If it stays down,
+     * everything goes off (the system proxy back, no tunnel) with an error; never «Подключено»
+     * over a dead core.
+     */
+    private fun onExit(gen: Int, useTun: Boolean) {
+        val was = vpn as? VpnState.Connected ?: return
+        if (!conn.isCurrent(gen)) return
+        // The rest of this watch: each try below brings back whatever is down.
+        watchId++
+        revives = Revive.triesAfterExit(revives, System.currentTimeMillis() - upSince)
+        System.err.println("a core exited; restarting (try ${revives + 1})")
+        resetCheck()
+        vpn = VpnState.Connecting
+        connectStep = "Соединение прервалось — восстанавливаем…"
+        scope.launch {
+            while (true) {
+                val wait = Revive.waitSec(revives++) ?: break
+                kotlinx.coroutines.delay(wait * 1000L)
+                val ok = withContext(Dispatchers.IO) {
+                    conn.ifCurrent(gen) {
+                        runCatching { reviveExited(useTun) }.onFailure { System.err.println("restart failed: $it") }.isSuccess
+                    }
+                } ?: return@launch
+                if (!conn.isCurrent(gen)) return@launch
+                if (ok) {
+                    vpn = VpnState.Connected(was.since)
+                    upSince = System.currentTimeMillis()
+                    watchExits(gen, useTun)
+                    checkConnection(auto = true)
+                    return@launch
+                }
+            }
+            if (!conn.isCurrent(gen)) return@launch
+            val off = conn.next()
+            withContext(Dispatchers.IO) { conn.ifCurrent(off) { stopAll() } }
+            if (!conn.isCurrent(off)) return@launch
+            vpn = VpnState.Error("Соединение прервалось. Включите VPN ещё раз или выберите другой сервер")
+            failures += 1
+        }
+    }
+
+    /** Starts again whatever of the connection has exited: the tunnel first (without it traffic goes around the VPN). Under [conn]. */
+    private fun reviveExited(useTun: Boolean) {
+        if (useTun && !tun.isRunning) tun.restart()
+        plugin?.let { if (!it.isRunning) it.start() }
+        if (!core.isRunning) core.restart()
     }
 
     /** Speed counters of the running core, 0 when off. */
@@ -682,12 +820,27 @@ class AppState {
         scope.launch(Dispatchers.IO) { persist() }
     }
 
-    @Synchronized
+    /**
+     * Everything off (Выйти, restart as administrator, an update, Windows ending the app): a
+     * connect or restart under way gives up, its step finished first.
+     */
     fun shutdown() {
+        conn.next()
+        conn.locked { stopAll() }
+    }
+
+    /** Off: the update checks, the ping core, then [stopProcesses]. Under [conn]. */
+    private fun stopAll() {
         updateJob?.cancel()
         proxyPort = 0
         runCatching { Pinger.stop() }
+        stopProcesses()
+    }
+
+    /** Cores, tunnel and our system proxy off. Under [conn]. */
+    private fun stopProcesses() {
         tun.stop()
+        tunSocks = 0
         core.stop()
         plugin?.close()
         plugin = null

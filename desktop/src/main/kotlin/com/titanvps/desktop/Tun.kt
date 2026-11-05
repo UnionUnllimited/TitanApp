@@ -2,6 +2,10 @@ package com.titanvps.desktop
 
 import com.sun.jna.Library
 import com.sun.jna.Native
+import com.sun.jna.platform.win32.Advapi32
+import com.sun.jna.platform.win32.Kernel32
+import com.sun.jna.platform.win32.WinNT
+import com.sun.jna.ptr.IntByReference
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -20,6 +24,41 @@ object Admin {
 
     val isAdmin: Boolean
         get() = !isWindows || runCatching { Native.load("shell32", Shell::class.java).IsUserAnAdmin() }.getOrDefault(false)
+
+    @Suppress("FunctionName")
+    private interface Token : Library {
+        fun GetTokenInformation(token: WinNT.HANDLE, infoClass: Int, info: IntByReference, length: Int, returned: IntByReference): Boolean
+    }
+
+    /**
+     * TOKEN_ELEVATION_TYPE of this process: 1 no split token (a standard account, or UAC off),
+     * 2 elevated, 3 an administrator under UAC; null if Windows didn't say.
+     */
+    private fun elevationType(): Int? = runCatching {
+        val ref = WinNT.HANDLEByReference()
+        if (!Advapi32.INSTANCE.OpenProcessToken(Kernel32.INSTANCE.GetCurrentProcess(), WinNT.TOKEN_QUERY, ref)) return null
+        try {
+            val type = IntByReference()
+            val ok = Native.load("advapi32", Token::class.java)
+                .GetTokenInformation(ref.value, WinNT.TOKEN_INFORMATION_CLASS.TokenElevationType, type, 4, IntByReference())
+            if (ok) type.value else null
+        } finally {
+            Kernel32.INSTANCE.CloseHandle(ref.value)
+        }
+    }.getOrNull()
+
+    /**
+     * «Перезапустить» can give this account administrator rights: it is an administrator
+     * under UAC (Windows only asks «Да»), or already has them. On a standard account Windows
+     * asks for another account's password, and the app would open in that account's profile:
+     * without the key, the settings or this user's system proxy.
+     */
+    val canElevate: Boolean by lazy { !isWindows || canElevate(isAdmin, elevationType()) }
+
+    /** [canElevate] from the facts: not known ([type] null) counts as yes, as before. */
+    fun canElevate(admin: Boolean, type: Int?): Boolean = admin || type != TOKEN_ELEVATION_TYPE_DEFAULT
+
+    private const val TOKEN_ELEVATION_TYPE_DEFAULT = 1
 
     private var tfoEnabled = false
 
@@ -122,8 +161,10 @@ object TunConfig {
 
 /** The sing-box process (TUN). */
 class SingBoxProcess {
-    private var process: Process? = null
+    @Volatile private var process: Process? = null
     private val pidFile = File(AppPaths.dataDir, "tun.pid")
+    /** The config of the last start (kept after an exit, for [restart]). */
+    private var config: String? = null
 
     init {
         // A tunnel left over from a crash would keep Windows' traffic in a dead adapter.
@@ -135,8 +176,34 @@ class SingBoxProcess {
 
     val exe: File get() = File(AppPaths.coreDir, "sing-box.exe")
 
+    val isRunning: Boolean get() = process?.isAlive == true
+
+    /** Completes when sing-box exits (whoever ends it); null when it isn't running. */
+    fun exits(): java.util.concurrent.CompletableFuture<Process>? = process?.onExit()
+
+    /**
+     * Runs the tunnel with [config]. Already running with the same config (a server switch: the
+     * new core took the old SOCKS port), it is kept: stopping sing-box takes Windows' adapter,
+     * its routes and the DNS filters with it, and until a new one has them back, apps and DNS
+     * would go around the VPN.
+     */
+    @Synchronized
     fun start(config: String) {
+        if (isRunning && config == this.config) return
         stop()
+        run(config)
+    }
+
+    /** The tunnel again after sing-box exited, with the same config. */
+    @Synchronized
+    fun restart() {
+        val c = config ?: throw IllegalStateException("TUN ещё не запускался")
+        stop()
+        run(c)
+    }
+
+    private fun run(config: String) {
+        this.config = config
         if (!exe.exists()) throw IllegalStateException("Не найден ${exe.absolutePath}")
         val configFile = File(AppPaths.dataDir, "tun.json").apply { writeText(config) }
         val out = File(AppPaths.logDir, "sing-box-stdout.log")
@@ -156,6 +223,7 @@ class SingBoxProcess {
         }
     }
 
+    @Synchronized
     fun stop() {
         process?.let { p ->
             p.destroy()

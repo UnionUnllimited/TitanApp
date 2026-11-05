@@ -152,12 +152,23 @@ object Plugins {
     }
 }
 
-/** One running naive.exe / mieru.exe on a local SOCKS port. */
+/**
+ * One running naive.exe / mieru.exe on a local SOCKS port. [start] again after an exit runs it
+ * on the same port (Xray's outbound still points there); once closed it never starts again.
+ */
 class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
-    private var process: Process? = null
+    @Volatile private var process: Process? = null
+    @Volatile private var closed = false
     val port: Int = freePorts(1).first()
 
+    val isRunning: Boolean get() = process?.isAlive == true
+
+    /** Completes when the client exits (whoever ends it); null when it isn't running. */
+    fun exits(): java.util.concurrent.CompletableFuture<Process>? = process?.onExit()
+
+    @Synchronized
     fun start() {
+        check(!closed) { "${endpoint.kind} уже остановлен" }
         val exe = File(AppPaths.coreDir, endpoint.kind.exe ?: error("${endpoint.kind} needs no client"))
         if (!exe.exists()) throw IllegalStateException("Не найден ${exe.name}")
         val dir = File(AppPaths.dataDir, "plugins").apply { mkdirs() }
@@ -185,7 +196,8 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
             if (runCatching { Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 200) } }.isSuccess) return
             Thread.sleep(100)
         }
-        close()
+        // Not closed: a restart after an exit may try again.
+        kill()
         throw IllegalStateException("${endpoint.kind} не отвечает")
     }
 
@@ -256,7 +268,13 @@ class PluginProcess(private val endpoint: Plugins.Endpoint) : Closeable {
             .toString()
     }
 
+    @Synchronized
     override fun close() {
+        closed = true
+        kill()
+    }
+
+    private fun kill() {
         process?.let { p ->
             p.destroy()
             if (!p.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()
