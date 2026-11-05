@@ -95,14 +95,15 @@ internal object PingRun {
 
     /**
      * Every server is measured on its keys (a balancer: its members, the first [maxMembers]);
-     * a server's ping is its best member, what the balancer itself would pick. [keysOf]: a
+     * in a list a server's ping is its best member, what the balancer itself would pick; in a
+     * [single] request its first member that answers (the rest aren't started). [keysOf]: a
      * server's endpoint keys; [measure]: one attempt through a key within the seconds given,
      * ms or -1 (why: its onError); [result]: a server's ping, once, when all its keys are done
-     * or it has a good one and only keys held for the recheck are left; [started]: servers
-     * being measured now; [ready]: a key's protocol client still starting; [udp]: keys over
-     * UDP; [recheck]: false, no recheck at the end of a list either (the request's "recheck"),
-     * only a bad result over UDP of a server measured on that key alone is measured once
-     * more right away.
+     * or it has a good one and only keys held for the recheck are left (a single request: or
+     * it has a good one); [started]: servers being measured now; [ready]: a key's protocol
+     * client still starting; [udp]: keys over UDP; [recheck]: false, no recheck at the end of
+     * a list either (the request's "recheck"), only a bad result over UDP of a server measured
+     * on that key alone is measured once more right away.
      *
      * [hosts]: the host a key dials first (none: no rule for it). A host gets one probe at a
      * time, in both passes and in a single request too, until it has failed [HOST_GIVE_UP]
@@ -155,12 +156,14 @@ internal object PingRun {
         /**
          * Sends [id]'s result once every key is in, or once it has a good one and only held keys
          * are left: a balancer (АВТО, Безлимитные) whose dead member is also its own country row
-         * doesn't spin until that row's recheck at the very end (call under [lock]).
+         * doesn't spin until that row's recheck at the very end. A single request sends it at its
+         * first good one (as iOS): its members behind one entry go one at a time, and waiting for
+         * all of them took the watcher's way back past its time limit (call under [lock]).
          */
         fun finish(id: String) {
             val ms = best[id] ?: -1L
             val left = remaining.getValue(id)
-            if ((left == 0 || ms >= 0 && left == held[id].orEmpty().size) && sent.add(id)) {
+            if ((left == 0 || ms >= 0 && (single || left == held[id].orEmpty().size)) && sent.add(id)) {
                 result(id, ms, if (ms < 0) lastError[id] else null)
             }
         }
@@ -198,6 +201,9 @@ internal object PingRun {
         val firstPass = gated(serversByKey.keys.toList(), hosts, parallel, pool, cancelled, answered) { key ->
             val ids = serversByKey.getValue(key)
             if (cancelled()) return@gated null
+            // A single request's server already shown: the members still waiting for their host
+            // aren't started (nothing about the host either).
+            if (single && synchronized(lock) { ids.all { it in sent } }) return@gated null
             synchronized(lock) {
                 val fresh = ids.filter { startedIds.add(it) }
                 if (fresh.isNotEmpty()) started(fresh)

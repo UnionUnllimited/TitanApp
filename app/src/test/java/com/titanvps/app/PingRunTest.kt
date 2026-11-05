@@ -495,6 +495,21 @@ class PingRunTest {
     }
 
     @Test
+    fun aGivenUpHostThatAnswersIsHeldAgain() {
+        // e1, e2 dead first: the entry is given up, e3 and e4 start together. e3 answers, so the
+        // entry is up after all: e5 waits for e4 again, as before it was given up.
+        val hosts = (1..5).associate { "e$it" to "a.example" }
+        val fake = Fake(
+            mapOf("e1" to listOf(-1L, -1L), "e2" to listOf(-1L, -1L)) +
+                (3..5).associate { "e$it" to listOf(100L, 90L) },
+            hosts,
+        ) { if (it == "e4") 200L else 20L }
+        runTimed(fake, rows("e1", "e2", "e3", "e4", "e5"), hosts, parallel = 2)
+        val spans = fake.spans.toList()
+        assertTrue(spans.toString(), spans.lastIndexOf("end e4") < spans.indexOf("start e5"))
+    }
+
+    @Test
     fun anEntryThatAnsweredIsNotGivenUpInTheRecheck() {
         // h1 answers; h2, h3 dead; h4, h5 slow, then good. The recheck starts with h2 and h3:
         // two misses, yet the entry answered before, so h4 and h5 still go one at a time.
@@ -547,17 +562,23 @@ class PingRunTest {
 
     @Test
     fun aSingleRequestHoldsItsMembersToOnePerHostToo() {
-        // АВТО tapped: four members behind one entry, one elsewhere beside them; no recheck.
+        // АВТО tapped: four members behind one entry, one elsewhere beside them (better, but slow
+        // to come); no recheck. m1 dead, m2 answers: АВТО is shown with m2 at once (as iOS), m3
+        // and m4 aren't started, and it doesn't wait for m5.
         val hosts = (1..4).associate { "m$it" to "a.example" } + mapOf("m5" to "192.0.2.5")
         val fake = Fake(
-            mapOf("m1" to listOf(300L, 280L), "m2" to listOf(-1L), "m3" to listOf(200L, 190L), "m4" to listOf(250L, 240L), "m5" to listOf(400L, 390L)),
+            mapOf("m1" to listOf(-1L), "m2" to listOf(300L, 280L), "m3" to listOf(200L, 190L), "m4" to listOf(250L, 240L), "m5" to listOf(100L, 90L)),
             hosts,
-        ) { 30L }
+        ) { if (it == "m5") 300L else 30L }
         runTimed(fake, mapOf("AUTO" to listOf("m1", "m2", "m3", "m4", "m5")), hosts, single = true)
-        assertEquals(190L to null, fake.results["AUTO"])
+        assertEquals(280L to null, fake.results["AUTO"])
+        assertTrue(fake.log.toString(), fake.log.indexOf("result AUTO") < fake.log.lastIndexOf("measure m5"))
+        assertEquals(1, fake.log.count { it == "result AUTO" })
+        assertEquals(listOf(PingRun.TIMEOUT_SEC), fake.callsOf("m1"))
+        assertTrue(fake.callsOf("m3").isEmpty())
+        assertTrue(fake.callsOf("m4").isEmpty())
         assertEquals(1, fake.peak["first a.example"])
         assertEquals(2, fake.peak["first *"])
-        assertEquals(listOf(PingRun.TIMEOUT_SEC), fake.callsOf("m2"))
         // One server of one node: as before, two attempts.
         val one = Fake(mapOf("k" to listOf(300L, 280L)), mapOf("k" to "a.example")) { 10L }
         runTimed(one, mapOf("K" to listOf("k")), mapOf("k" to "a.example"), single = true)

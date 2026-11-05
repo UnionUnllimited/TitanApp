@@ -190,8 +190,9 @@ class PingService : Service() {
     }
 
     /**
-     * Every server is measured on up to [maxMembers] members of its balancer; a server's ping
-     * is its best member — what the balancer itself would pick. Returns true if anything answered.
+     * Every server is measured on up to [maxMembers] members of its balancer; in a list a
+     * server's ping is its best member — what the balancer itself would pick; one server asked
+     * for, its first member that answers ([PingRun.run]). Returns true if anything answered.
      */
     private fun measureTargets(
         servers: List<JSONObject>,
@@ -239,7 +240,8 @@ class PingService : Service() {
         maxMembers = maxMembers,
         recheck = recheck,
         // A single request has no limit of its own (its pool grows), but one per host too: a
-        // balancer's members behind one entry are the same burst as a list's.
+        // balancer's members behind one entry are the same burst as a list's. It is shown at
+        // its first member that answers, so one at a time doesn't add up every member's time.
         hosts = s.hosts,
         parallel = if (single) Int.MAX_VALUE else PARALLEL,
     )
@@ -348,7 +350,7 @@ class PingService : Service() {
         private const val RETRY_TIMEOUT_SEC = 10 // pingBatch fallback
         private const val PARALLEL = 6 // more at once crowd each other out on a weak mobile network
         private const val MAX_PROBES = 200
-        /** Balancer members measured per server: its ping is the best of them. */
+        /** Balancer members measured per server: in a list its ping is the best of them. */
         private const val MAX_MEMBERS = 30
         private const val KEEP_WARM_MS = 60_000L
         private const val BATCH_LIMIT = 5 // libXray pingBatch accepts at most 5 configs per call
