@@ -171,6 +171,10 @@ func TestTitanTFO(t *testing.T) {
 	if dials, _ := stats["dials"].(float64); err != nil || dials < 1 {
 		t.Fatalf("stats: %v %v", stats, err)
 	}
+	// The SYN-sent-twice counter is there for the app (Технический режим).
+	if _, found := stats["synTwice"].(float64); !found {
+		t.Fatalf("stats: no synTwice: %v", stats)
+	}
 	t.Logf("stats: %v", TitanTFOStats())
 
 	c, _ := dialTFO(titanSafe, &stdnet.Dialer{}, "tcp", ln.Addr().String())

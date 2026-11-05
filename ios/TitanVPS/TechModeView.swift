@@ -187,6 +187,8 @@ struct TFOStats {
             "  данные в SYN не приняты (повторены после рукопожатия): \(c("synDataLost"))",
             "  cookie ещё не было, данные после рукопожатия: \(c("cookieOnly"))",
             "  ядро отправило обычный SYN: \(c("kernelPlain"))",
+            // A dial 0.7 s or more over the path's RTT: iOS sent the SYN again after 1 s (it doesn't flag it itself under forced TFO).
+            "SYN отправлен повторно (+1 с): \(c("synTwice")) (TFO-подключение дольше RTT на 0,7 с и больше)",
             "Без TFO: \(c("plain")) (TFO к серверу недавно не прошёл), \(c("notSafe")) (данные нельзя повторять)",
             "Ошибок TFO-подключения: \(c("failed"))",
             // TLS or HTTP sent, closed with nothing back: what a DPI box dropping the data after a TFO handshake looks like.

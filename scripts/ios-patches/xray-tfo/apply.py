@@ -12,7 +12,8 @@ new = ("\tif sockopt != nil && sockopt.ParseTFOValue() > 0 {\n"
 if code.count(old) != 1:
     sys.exit("system_dialer.go: dial line not found")
 target.write_text(code.replace(old, new))
-for f in ("system_dialer_tfo.go", "tfo_syn_darwin.go", "tfo_syn_windows.go", "system_dialer_tfo_other.go", "tfo_safe.go"):
+for f in ("system_dialer_tfo.go", "tfo_syn_darwin.go", "tfo_syn_windows.go", "system_dialer_tfo_other.go", "tfo_safe.go",
+          "tfo_syn_twice.go"):
     shutil.copy(here / f, src / "transport/internet" / f)
 
 # XHTTP packet-up over TFO: one upload per connection (splithttp_upload_once.go).

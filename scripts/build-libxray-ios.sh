@@ -82,6 +82,12 @@ fi
 # Our protocol clients (sing-box: TUIC / AnyTLS / ShadowTLS / SSH, and mieru) in the same
 # framework: one Go runtime per app. Package titan, bound next to libXray's.
 "$ROOT/scripts/ios-patches/titan/vendor.sh" "$WORK"
+# pingBatch's warm probe (xray-tfo/apply_libxray.py) checked on what the build takes: the patched
+# Xray-core and quic-go copies (the replace and the tidy of the "local" build below, made earlier).
+cp "$ROOT/scripts/ios-patches/xray-tfo/titan_warm_test.go" "$WORK/"
+(cd "$WORK" && go mod edit -replace "github.com/xtls/xray-core=../Xray-core" && go mod tidy \
+  && go test -count=1 -v -run TestTitanWarm .)
+rm "$WORK/titan_warm_test.go"
 python3 - "$WORK/build/app/apple_gomobile.py" <<'PY'
 import sys
 p = sys.argv[1]

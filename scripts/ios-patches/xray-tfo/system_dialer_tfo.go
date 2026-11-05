@@ -84,6 +84,7 @@ var tfoStat struct {
 	notSafe      atomic.Int64 // dialed without TFO: the first write isn't safe to repeat
 	failed       atomic.Int64 // TFO dials that failed
 	noAnswer     atomic.Int64 // TFO connections closed with nothing received after a TLS or HTTP first write
+	synTwice     atomic.Int64 // TFO dials whose SYN went twice: 0.7 s or more over the path's RTT (tfo_syn_twice.go)
 }
 
 // What the kernel did with a dialed connection (tfoKernel, per system).
@@ -96,8 +97,8 @@ type tfoKernelInfo struct {
 	extra                     []string
 }
 
-// verdict counts the dial and says what really went on the wire.
-func (k tfoKernelInfo) verdict() string {
+// verdict counts the dial (dialMs: how long it took) and says what really went on the wire.
+func (k tfoKernelInfo) verdict(dialMs int64) string {
 	var v string
 	switch {
 	case k.synDataSent && k.synDataAcked:
@@ -121,6 +122,11 @@ func (k tfoKernelInfo) verdict() string {
 	}
 	if len(k.extra) > 0 {
 		v += ", " + strings.Join(k.extra, ", ")
+	}
+	// The kernel doesn't flag this one under TCP_FASTOPEN_FORCE_ENABLE: the dial's time does.
+	if tfoSynTwice(dialMs, k.srttMs) {
+		tfoStat.synTwice.Add(1)
+		v += ", SYN sent twice"
 	}
 	return v + fmt.Sprintf(", rtt %d ms", k.srttMs)
 }
@@ -166,6 +172,7 @@ func TitanTFOStats() string {
 		"notSafe":      tfoStat.notSafe.Load(),
 		"failed":       tfoStat.failed.Load(),
 		"noAnswer":     tfoStat.noAnswer.Load(),
+		"synTwice":     tfoStat.synTwice.Load(),
 		"recent":       recent,
 	})
 	return string(b)
@@ -265,13 +272,14 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, string, error) {
 		first := b[:min(safe, limit)]
 		ctx, cancel := context.WithTimeout(c.ctx, tfoDialTimeout)
 		conn, err := c.dialer.DialContext(ctx, c.network, c.address, first)
+		dialMs := time.Since(c.start).Milliseconds()
 		cancel()
 		if err == nil {
 			tfoStat.dials.Add(1)
 			// The kernel's record right after the handshake: what went in the SYN.
 			verdict := "no kernel record"
 			if k, ok := tfoKernel(conn); ok {
-				verdict = k.verdict()
+				verdict = k.verdict(dialMs)
 			} else {
 				tfoStat.unchecked.Add(1)
 			}
@@ -281,7 +289,7 @@ func (c *tfoConn) open(b []byte) (stdnet.Conn, string, error) {
 					return nil, "", err
 				}
 			}
-			tfoNote("tfo %s %d+%d B in %d ms: %s", kind, len(first), len(b)-len(first), time.Since(c.start).Milliseconds(), verdict)
+			tfoNote("tfo %s %d+%d B in %d ms: %s", kind, len(first), len(b)-len(first), dialMs, verdict)
 			return conn, kind, nil
 		}
 		tfoStat.failed.Add(1)

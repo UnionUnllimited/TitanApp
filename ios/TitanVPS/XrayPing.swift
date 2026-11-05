@@ -42,9 +42,18 @@ enum XrayPing {
     private static let retryCalls = 2
     /// What failed gets a second, slower try after the rest (as on Android).
     private static let retryTimeout = 6
-    /// A server that answered is asked once more on the spot: DNS, the TLS session and the
-    /// TFO cookie are known by then (as Android's PingService does); the better one counts.
+    /// A server that answered is asked once more in the same call, on the same Xray instance
+    /// (pingBatch's "warmTimeout", the xray-tfo patch of libXray), as Android's second attempt
+    /// on its warm core: a new request over new connections wherever Xray opens them (each with
+    /// its TCP and TFO dial), with the outbound's own state warm, as in a running tunnel (a
+    /// VLESS-encryption 0-RTT ticket, XMUX). The better one counts. (A second call of its own
+    /// started a new instance: only the kernel's TFO cookie and DNS were warm then.)
     private static let warmTimeout = 3
+    /// A list's answer slower than this is measured once more after the list, in the retry
+    /// ([retryCalls] at a time, [retryTimeout], warm included), and the better one is shown, as
+    /// on Android (RECHECK_ABOVE_MS): the first is often just the crowd. One server asked for
+    /// (its own ping button) runs alone already: as there, no recheck.
+    private static let recheckAbove = 1500
 
     private struct Item: Sendable { let json: String; let tag: String }
 
@@ -62,7 +71,9 @@ enum XrayPing {
 
     /// Measures [servers] in the order given, reporting each one's ms (-1: nothing answered)
     /// as soon as it's known, as Happ does. A balancer (АВТО) is measured on its members and
-    /// shown with the first that answers. What fails is tried again, slower, after the rest.
+    /// shown with the first that answers. What fails is tried again, slower, after the rest;
+    /// in a list, so is the member that answered slower than [recheckAbove] (its server shown
+    /// after that, with the better of the two).
     static func pingMany(_ servers: [Server], timeout: Int = 5, onResult: @escaping @MainActor (String, Int, String?) -> Void) async {
         // Our protocol clients (sing-box, mieru) run here for the time of the ping.
         var clients: [Int] = []
@@ -91,17 +102,34 @@ enum XrayPing {
         }
 
         var failed: [Int: String] = [:]
-        await measure(units, timeout: timeout, maxCalls: maxCalls) { server, ms, why in
-            if ms >= 0 { await onResult(servers[server].id, ms, nil) } else { failed[server] = why ?? "" }
+        // A list's slow answers, held for the recheck: the unit that gave it and its ms.
+        let recheck = servers.count > 1
+        var slow: [Int: (unit: Int, ms: Int)] = [:]
+        await measure(units, timeout: timeout, maxCalls: maxCalls) { server, unit, ms, why in
+            if recheck, ms > recheckAbove {
+                slow[server] = (unit: unit, ms: ms)
+            } else if ms >= 0 {
+                await onResult(servers[server].id, ms, nil)
+            } else {
+                failed[server] = why ?? ""
+            }
         }
-        if Task.isCancelled || failed.isEmpty { return }
+        if Task.isCancelled || (failed.isEmpty && slow.isEmpty) { return }
+        // In the list's order: a slow server's member that answered, a failed one's members.
         var retried: [Int: Int] = [:]
-        let again = units.filter { u in
+        let again = units.indices.filter { i in
+            let u = units[i]
+            if let s = slow[u.server] { return s.unit == i }
             guard failed[u.server] != nil, retried[u.server, default: 0] < retryPerServer else { return false }
             retried[u.server, default: 0] += 1
             return true
-        }
-        await measure(again, timeout: retryTimeout, maxCalls: retryCalls) { server, ms, why in
+        }.map { units[$0] }
+        await measure(again, timeout: retryTimeout, maxCalls: retryCalls) { server, _, ms, why in
+            // A slow answer measured again: the better of the two (no answer now: the first).
+            if let first = slow[server] {
+                await onResult(servers[server].id, ms >= 0 ? min(first.ms, ms) : first.ms, nil)
+                return
+            }
             // A failed protocol client says why in its own log.
             let clientLog = ms < 0 && prepared[server]?.log != nil ? prepared[server]?.logTail() : nil
             let reason = why ?? failed[server].flatMap { $0.isEmpty ? nil : $0 }
@@ -122,11 +150,11 @@ enum XrayPing {
     /// Starts [units] in order, one every [startSpacing], at most [maxCalls] at once and
     /// [perServer] of one server. One host gets one probe at a time until it's found dead:
     /// servers behind one entry (a bridge) all timed out pinged together, yet answered one by
-    /// one. [each] gets a server's result once: its first member that answers, or its first
-    /// failure reason when none did. Members of a server already shown aren't started.
-    /// Stopped: nothing new starts.
+    /// one. [each] gets a server's result once (server, unit, ms, reason): its first member
+    /// that answers (that unit), or its first failure reason when none did (the last unit).
+    /// Members of a server already shown aren't started. Stopped: nothing new starts.
     private static func measure(_ units: [Unit], timeout: Int, maxCalls: Int,
-                                each: (Int, Int, String?) async -> Void) async {
+                                each: (Int, Int, Int, String?) async -> Void) async {
         var left: [Int: Int] = [:]
         for u in units { left[u.server, default: 0] += 1 }
         var shown = Set<Int>()
@@ -153,13 +181,8 @@ enum XrayPing {
                     running += 1
                     ticking = true
                     group.addTask {
-                        let first = await probe(item, timeout: timeout)
-                        var ms = first.0
-                        if ms >= 0, !Task.isCancelled {
-                            let warm = await probe(item, timeout: warmTimeout).0
-                            if warm >= 0 { ms = min(ms, warm) }
-                        }
-                        return .done(unit: index, ms: ms, why: first.1)
+                        let (ms, why) = await probe(item, timeout: timeout)
+                        return .done(unit: index, ms: ms, why: why)
                     }
                     group.addTask {
                         try? await Task.sleep(nanoseconds: startSpacing)
@@ -191,12 +214,12 @@ enum XrayPing {
                         shown.insert(server)
                         // Its other members aren't needed any more.
                         pending.removeAll { units[$0].server == server }
-                        await each(server, ms, nil)
+                        await each(server, unit, ms, nil)
                     } else {
                         if reason[server] == nil, let why, !why.isEmpty { reason[server] = why }
                         if left[server, default: 0] <= 0 {
                             shown.insert(server)
-                            await each(server, -1, reason[server])
+                            await each(server, unit, -1, reason[server])
                         }
                     }
                 }
@@ -204,9 +227,10 @@ enum XrayPing {
         }
     }
 
-    /// One call with one probe: its ms (-1: no answer) and the reason of a failure.
+    /// One call with one probe and, if it answered, its warm second on the same instance
+    /// ([warmTimeout]): the better ms (-1: no answer) and the reason of a failure.
     private static func probe(_ item: Item, timeout: Int) async -> (Int, String?) {
-        let result = await run([(item.json, item.tag)], timeout: timeout).first ?? (-1, nil)
+        let result = await run([(item.json, item.tag)], timeout: timeout, warmTimeout: warmTimeout).first ?? (-1, nil)
         return (result.0, result.0 >= 0 ? nil : result.1.map(shortReason))
     }
 
@@ -217,13 +241,16 @@ enum XrayPing {
     }
 
     /// One pingBatch call: ms per (config, outbound tag), -1 for a failure (with Xray's reason).
-    private static func run(_ items: [(String, String)], timeout: Int) async -> [(Int, String?)] {
+    /// With [warmTimeout] (seconds, 0: none) one that answered is probed once more on the same
+    /// instance: "delay" is the better of the two ("delays" has both).
+    private static func run(_ items: [(String, String)], timeout: Int, warmTimeout: Int) async -> [(Int, String?)] {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 var failed = [(Int, String?)](repeating: (-1, nil), count: items.count)
                 let request: [String: Any] = [
                     "apiVersion": 3, "method": "pingBatch",
-                    "payload": ["configs": items.map { ["xrayJson": $0.0, "outboundTag": $0.1] }, "timeout": timeout, "url": url],
+                    "payload": ["configs": items.map { ["xrayJson": $0.0, "outboundTag": $0.1] }, "timeout": timeout,
+                                "warmTimeout": warmTimeout, "url": url],
                 ]
                 guard let data = try? JSONSerialization.data(withJSONObject: request) else { cont.resume(returning: failed); return }
                 let response = LibXrayInvoke(String(decoding: data, as: UTF8.self))

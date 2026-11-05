@@ -1,6 +1,7 @@
 package internet
 
-// Titan patch check: only data that is safe to repeat goes in a TFO SYN.
+// Titan patch check: only data that is safe to repeat goes in a TFO SYN, and a dial whose SYN
+// went twice is told by its time.
 
 import (
 	"context"
@@ -36,6 +37,26 @@ func TestTitanTFOSynPart(t *testing.T) {
 		n, kind := tfoSynPart(c.ctx, c.b)
 		if n != c.n || kind != c.kind {
 			t.Errorf("%s: got %d %q, want %d %q", c.name, n, kind, c.n, c.kind)
+		}
+	}
+}
+
+func TestTitanTFOSynTwice(t *testing.T) {
+	for _, c := range []struct {
+		dialMs int64
+		srttMs uint32
+		twice  bool
+	}{
+		{80, 75, false},    // a dial of one round trip
+		{774, 75, false},   // just under 0.7 s over
+		{775, 75, true},    // 0.7 s over
+		{1090, 80, true},   // the SYN sent again after 1 s
+		{1450, 420, true},  // the same on a slower path
+		{1500, 900, false}, // a loaded path: its RTT is long too
+		{1500, 0, false},   // no RTT known: nothing said
+	} {
+		if got := tfoSynTwice(c.dialMs, c.srttMs); got != c.twice {
+			t.Errorf("dial %d ms, rtt %d ms: got %v, want %v", c.dialMs, c.srttMs, got, c.twice)
 		}
 	}
 }
