@@ -398,10 +398,6 @@ enum Fmt {
         return p.number + " " + p.unit
     }
 
-    static func bytes(_ count: UInt64) -> String {
-        formatBytes(Int64(clamping: count))
-    }
-
     // Made once: the screens call these on every redraw (on the main thread).
     private static let dayFormat: DateFormatter = {
         let f = DateFormatter()

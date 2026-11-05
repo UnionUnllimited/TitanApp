@@ -19,8 +19,6 @@ struct VPNActivityAttributes: ActivityAttributes {
         /// Bytes per second as at statsAt, as Главная's speed line (nil until two looks a moment apart).
         var down: Double?
         var up: Double?
-        /// ↓ + ↑ since the VPN came up.
-        var traffic: Int64?
         /// The latency through the VPN in ms (Latency; not a server's Пинг), measured at most
         /// 2 min before statsAt. Named so by an older build: its state still decodes.
         var ping: Int?
@@ -57,7 +55,7 @@ enum Latency {
     }
 }
 
-/// Speed and traffic as Главная writes them (Fmt.speed in the app is this one too).
+/// Speed as Главная writes it (Fmt.speed in the app is this one too).
 enum TrafficText {
     /// "2.4 МБ/с" as number and unit.
     static func speedParts(_ bytesPerSecond: Double) -> (number: String, unit: String) {
@@ -76,13 +74,5 @@ enum TrafficText {
     static func shortSpeed(_ bytesPerSecond: Double) -> String {
         let p = speedParts(bytesPerSecond)
         return p.number + String(p.unit.prefix(1))
-    }
-
-    /// "120 МБ", "1.4 ГБ" as formatBytes in the app; under a megabyte in КБ (a session's start).
-    static func bytes(_ count: Int64) -> String {
-        let b = Double(max(count, 0))
-        if b >= 1_073_741_824 { return String(format: "%.1f ГБ", b / 1_073_741_824) }
-        if b >= 1_048_576 { return String(format: "%.0f МБ", b / 1_048_576) }
-        return String(format: "%.0f КБ", b / 1024)
     }
 }

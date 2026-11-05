@@ -4,7 +4,7 @@ import NetworkExtension
 import UIKit
 
 /// The Live Activity (TitanWidgets draws it, iOS 18+), with the VPN on and off. On: the server,
-/// «Подключено» with the timer, the speed, the latency and what the session used; "Переключаемся…"
+/// «Подключено» with the timer, the speed and the latency; "Переключаемся…"
 /// while it connects again (another server, a ping's pause, iOS reconnecting), "Подключаемся…"
 /// while it comes on. Off: «Выключено» with the server ⏻ would connect to (a pick in the app
 /// shows there too); ‹ › then only move the pick. At once when turned off in the app (Выкл,
@@ -39,7 +39,7 @@ import UIKit
 /// (HIG, Live Activities), and once the app is left iOS suspends it: nothing updates the
 /// activity then. So the island's speed is what was sent on leaving the app (leaving: the
 /// numbers of that moment), live for 15 s; after that the compact island shows the state's dot,
-/// the expanded one and the Lock Screen the latency and the traffic under «Обновлено в …». A live
+/// the expanded one and the Lock Screen the latency under «Обновлено в …». A live
 /// speed with the app in the background needs ActivityKit push updates from a server
 /// (pushType: .token, NSSupportsLiveActivitiesFrequentUpdates), which this app doesn't have.
 /// While the app is open the activity is seen only under Центр уведомлений pulled down over it
@@ -47,7 +47,7 @@ import UIKit
 /// itself (active), where nothing shows it, only a new latency and one every 10 s, so iOS has no
 /// unseen renders to throttle. And on every VPN change and intent.
 /// Each update carries its time and a stale date 15 s on: once iOS marks it stale the widget
-/// drops the speed and keeps the latency and the traffic under that time, so a frozen speed never
+/// drops the speed and keeps the latency under that time, so a frozen speed never
 /// reads as live. The latency is a warm one (ConnectionCheck: a few requests on one connection
 /// through the tunnel, the first not timed), the newest of Проверить соединение's result and a
 /// probe of our own (at most once a minute while the app is open: a new connection through the
@@ -392,10 +392,8 @@ enum LiveActivityController {
 
     /// The server the activity shows up (with its flag); nil while it isn't.
     private static var runningName: String?
-    /// The utun at the last look, for the speed.
-    private static var lastLook: (name: String, down: UInt32, up: UInt32, at: Date)?
-    /// What the connection that came up at [since] has used.
-    private static var session: (since: Date, down: UInt64, up: UInt64)?
+    /// The utun at the last look, for the speed, and the connection (came up at since) it was of.
+    private static var lastLook: (name: String, down: UInt32, up: UInt32, at: Date, since: Date)?
     private static var speed: (down: Double, up: Double, at: Date)?
     /// The newest latency on a server (by name, with its flag) and when it was measured.
     private static var lastLatency: (server: String, ms: Int, at: Date)?
@@ -412,7 +410,7 @@ enum LiveActivityController {
 
     /// The numbers as the widget writes them: an update goes out only when these change.
     private struct Shown: Equatable {
-        let down, up, traffic: String?
+        let down, up: String?
         let ping: Int?
     }
 
@@ -459,26 +457,23 @@ enum LiveActivityController {
         return now != shownNumbers
     }
 
-    /// The tunnel's counters now: the session's traffic, and the speed since the last look
-    /// (when it was a moment ago). A new connection, or a new interface, counts from the
-    /// interface's own zero.
+    /// The tunnel's counters now: the speed since the last look (when it was a moment ago).
+    /// A new connection, or a new interface, starts over.
     private static func look(since: Date) {
         guard let now = TrafficMonitor.counters() else { return }
         let date = Date()
-        guard let prev = lastLook, prev.name == now.name, let s = session, s.since == since else {
-            lastLook = (now.name, now.down, now.up, date)
-            session = (since, UInt64(now.down), UInt64(now.up))
+        guard let prev = lastLook, prev.name == now.name, prev.since == since else {
+            lastLook = (now.name, now.down, now.up, date, since)
             speed = nil
             return
         }
         let seconds = date.timeIntervalSince(prev.at)
         // A moment after the last (leaving: inactive, then background): its numbers still hold.
         if seconds >= 0 && seconds < 0.5 { return }
-        lastLook = (now.name, now.down, now.up, date)
+        lastLook = (now.name, now.down, now.up, date, since)
         // The counters are 32-bit: a wrapping difference (right unless 4 GB went between two looks).
         let d = UInt64(now.down &- prev.down)
         let u = UInt64(now.up &- prev.up)
-        session = (since, s.down + d, s.up + u)
         if seconds >= 0.5 && seconds <= 5 {
             speed = (Double(d) / seconds, Double(u) / seconds, date)
         } else {
@@ -492,7 +487,6 @@ enum LiveActivityController {
         let (flag, rest) = name.splitFlag
         let now = Date()
         var state = VPNActivityAttributes.ContentState(server: rest, flag: flag, connected: true, phase: .on, since: since)
-        if let s = session, s.since == since { state.traffic = Int64(clamping: s.down + s.up) }
         if let sp = speed, now.timeIntervalSince(sp.at) < 5 {
             state.down = sp.down
             state.up = sp.up
@@ -505,8 +499,7 @@ enum LiveActivityController {
 
     @available(iOS 18.0, *)
     private static func numbers(_ state: VPNActivityAttributes.ContentState) -> Shown {
-        Shown(down: state.down.map(TrafficText.speed), up: state.up.map(TrafficText.speed),
-              traffic: state.traffic.map(TrafficText.bytes), ping: state.ping)
+        Shown(down: state.down.map(TrafficText.speed), up: state.up.map(TrafficText.speed), ping: state.ping)
     }
 
     /// The numbers go stale 15 s after they were read: the widget then hides the speed.

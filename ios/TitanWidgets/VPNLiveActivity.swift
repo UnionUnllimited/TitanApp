@@ -6,10 +6,10 @@ import WidgetKit
 /// The VPN on or off, on the Lock Screen and in the Dynamic Island (the app starts, updates and
 /// ends it: LiveActivity.swift): the server with its flag, ‹ › for the previous and the next one
 /// (SwitchServerIntent, run in the app) and ⏻. On: «Подключено» with the timer, the speed, the
-/// latency (only under 300 ms: Latency) and the session's traffic as Главная shows them, until
-/// they go stale (the app isn't open to send new ones). The island shows it only while the app
-/// isn't open: its speed is the one sent on leaving the app, for 15 s (a live one in the
-/// background would need server pushes).
+/// latency (only under 300 ms: Latency) as Главная shows them, until they go stale (the app
+/// isn't open to send new ones). The island shows it only while the app isn't open: its speed
+/// is the one sent on leaving the app, for 15 s (a live one in the background would need server
+/// pushes).
 /// Off: «Выключено» with the server ⏻ starts; ‹ › only move the pick. No widgetURL: a tap
 /// elsewhere just opens the app (titanvps:// links are for keys).
 struct VPNLiveActivity: Widget {
@@ -183,9 +183,10 @@ private struct StatusLine: View {
     }
 }
 
-/// The numbers while connected, as Главная shows them: ↓ ↑ speed (its speed line), the latency
-/// (only under 300 ms, LatencyLabel), what this session used. Stale (no update for 15 s: the app
-/// isn't open to send one): no speed, the latency and the traffic under the time they were read.
+/// The numbers while connected, as Главная shows them: ↓ ↑ speed (its speed line) and the latency
+/// (only under 300 ms, LatencyLabel). Never what a session used: no screen shows that.
+/// Stale (no update for 15 s: the app isn't open to send one): no speed, the latency under the
+/// time it was read.
 private struct Numbers {
     let state: VPNActivityAttributes.ContentState
     let stale: Bool
@@ -196,14 +197,11 @@ private struct Numbers {
     /// A state an older build sent may hold a server's Пинг (a fresh connection's, often over a
     /// second): shown only under 300 ms all the same.
     var latency: Int? { on ? Latency.shown(state.ping) : nil }
-    var traffic: Int64? { on ? state.traffic.flatMap { $0 > 0 ? $0 : nil } : nil }
 
     var speedText: String? {
         guard let down, let up else { return nil }
         return "↓ \(TrafficText.speed(down))    ↑ \(TrafficText.speed(up))"
     }
-
-    var trafficText: String? { traffic.map { "Потрачено " + TrafficText.bytes($0) } }
 
     /// «Обновлено в 14:05» once stale.
     var asOf: String? {
@@ -211,14 +209,13 @@ private struct Numbers {
         return "Обновлено в " + Clock.time(at)
     }
 
-    var isEmpty: Bool { speedText == nil && latency == nil && traffic == nil }
+    var isEmpty: Bool { speedText == nil && latency == nil }
 
-    /// «Загрузка 3.2 МБ/с, отдача 140 КБ/с, задержка 45 мс, потрачено 120 МБ».
+    /// «Загрузка 3.2 МБ/с, отдача 140 КБ/с, задержка 45 мс».
     var accessibility: String {
         var parts: [String] = []
         if let down, let up { parts.append("загрузка \(TrafficText.speed(down)), отдача \(TrafficText.speed(up))") }
         if let latency { parts.append("задержка \(latency) мс") }
-        if let traffic { parts.append("потрачено " + TrafficText.bytes(traffic)) }
         if let asOf { parts.append(asOf.lowercased()) }
         let text = parts.joined(separator: ", ")
         return text.prefix(1).uppercased() + text.dropFirst()
@@ -237,8 +234,8 @@ private enum Clock {
     static func time(_ date: Date) -> String { format.string(from: date) }
 }
 
-/// The Lock Screen's two lines: the speed (or when a stale one was read), then the latency and
-/// the traffic. Fixed sizes as the rest of the view, one line each, a little smaller if need be:
+/// The Lock Screen's two lines: the speed (or when a stale one was read), then the latency.
+/// Fixed sizes as the rest of the view, one line each, a little smaller if need be:
 /// the system's text size doesn't push them out of the activity's height.
 private struct NumbersLines: View {
     let numbers: Numbers
@@ -254,16 +251,7 @@ private struct NumbersLines: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.white.opacity(0.5))
             }
-            if numbers.latency != nil || numbers.trafficText != nil {
-                HStack(spacing: 8) {
-                    if let latency = numbers.latency { LatencyLabel(ms: latency) }
-                    if let traffic = numbers.trafficText {
-                        Text(traffic)
-                            .font(.system(size: 12, weight: .medium).monospacedDigit())
-                            .foregroundStyle(Color.white.opacity(0.75))
-                    }
-                }
-            }
+            if let latency = numbers.latency { LatencyLabel(ms: latency) }
         }
         .lineLimit(1)
         .minimumScaleFactor(0.75)
@@ -273,25 +261,12 @@ private struct NumbersLines: View {
 }
 
 /// The expanded island's, centred and always on one line: a second would push ‹ ⏻ › past the
-/// island's height (up to 160 pt). Where the whole doesn't fit (MB/s both ways and «Потрачено …»
-/// on a narrow island), the traffic after an ↑↓ icon without the word; then a little smaller.
+/// island's height (up to 160 pt); a little smaller where it doesn't fit.
 private struct NumbersRow: View {
     let numbers: Numbers
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            row(spent: true)
-            row(spent: false)
-        }
-        .lineLimit(1)
-        .minimumScaleFactor(0.75)
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(numbers.accessibility)
-    }
-
-    private func row(spent: Bool) -> some View {
-        HStack(spacing: spent ? 12 : 10) {
+        HStack(spacing: 12) {
             if let speed = numbers.speedText {
                 Text(speed)
                     .font(.system(size: 12, weight: .medium).monospacedDigit())
@@ -302,19 +277,12 @@ private struct NumbersRow: View {
                     .foregroundStyle(Color.white.opacity(0.5))
             }
             if let latency = numbers.latency { LatencyLabel(ms: latency) }
-            if let traffic = numbers.traffic {
-                HStack(spacing: 3) {
-                    if spent {
-                        Text("Потрачено " + TrafficText.bytes(traffic))
-                    } else {
-                        Image(systemName: "arrow.up.arrow.down").font(.system(size: 10, weight: .semibold))
-                        Text(TrafficText.bytes(traffic))
-                    }
-                }
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                .foregroundStyle(Color.white.opacity(0.75))
-            }
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(numbers.accessibility)
     }
 }
 

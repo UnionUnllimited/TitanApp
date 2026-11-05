@@ -2,7 +2,7 @@ import Charts
 import Darwin
 import SwiftUI
 
-/// Speed and traffic of the VPN: the byte counters of our tunnel's interface (the utun with
+/// Speed of the VPN: the byte counters of our tunnel's interface (the utun with
 /// the tunnel's address, see PacketTunnelProvider), read once a second while Главная is on
 /// screen. In = what the tunnel hands to the phone (загрузка), out = what goes into it.
 @MainActor
@@ -16,9 +16,6 @@ final class TrafficMonitor: ObservableObject {
     /// Bytes per second now.
     @Published private(set) var down: Double = 0
     @Published private(set) var up: Double = 0
-    /// Since the tunnel came up (its interface counts from zero).
-    @Published private(set) var sessionDown: UInt64 = 0
-    @Published private(set) var sessionUp: UInt64 = 0
     /// The last [window] seconds, for the chart.
     @Published private(set) var history: [Sample] = []
 
@@ -49,12 +46,10 @@ final class TrafficMonitor: ObservableObject {
         history = []
     }
 
-    /// A new connection: the chart and the totals start over.
+    /// A new connection: the chart starts over.
     func reset() {
         last = nil
         history = []
-        sessionDown = 0
-        sessionUp = 0
         down = 0
         up = 0
     }
@@ -66,17 +61,12 @@ final class TrafficMonitor: ObservableObject {
         // A new tunnel interface, or a long gap (the app was in the background): start over.
         guard let prev = last, prev.name == now.name, date.timeIntervalSince(prev.at) < 3 else {
             if last != nil { history = [] }
-            // First look (or a new tunnel interface): what it counted so far is this session.
-            sessionDown = UInt64(now.down)
-            sessionUp = UInt64(now.up)
             return
         }
         // The counters are 32-bit: they wrap after 4 GB (a wrapping difference handles it).
         let d = UInt64(now.down &- prev.down)
         let u = UInt64(now.up &- prev.up)
         let seconds = max(date.timeIntervalSince(prev.at), 0.2)
-        sessionDown += d
-        sessionUp += u
         down = Double(d) / seconds
         up = Double(u) / seconds
         tick += 1
@@ -85,7 +75,7 @@ final class TrafficMonitor: ObservableObject {
     }
 
     /// The tunnel interface's name and byte counters; nil while there's no tunnel. The Live
-    /// Activity's speed and traffic come from it too (LiveActivityController).
+    /// Activity's speed comes from it too (LiveActivityController).
     nonisolated static func counters() -> (name: String, down: UInt32, up: UInt32)? {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return nil }
