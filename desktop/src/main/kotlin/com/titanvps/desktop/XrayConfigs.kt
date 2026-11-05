@@ -11,6 +11,14 @@ object XrayConfigs {
     private const val INBOUND_KEY = "_titanInboundTags"
     const val SOCKS_TAG = "socks-in"
     const val HTTP_TAG = "http-in"
+    const val ACCESS_LOG = "xray-access.log"
+    const val ERROR_LOG = "xray-error.log"
+    private const val BLOCK_TAG = "titan-block"
+    /** YouTube's QUIC is blocked (as on Android and iPhone): its playback falls back to TCP. */
+    private val YOUTUBE_DOMAINS = listOf(
+        "youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "youtubei.googleapis.com",
+        "youtube.googleapis.com", "ggpht.com", "youtube-nocookie.com",
+    )
     private val SERVICE_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
 
     fun clean(body: String): String = body.removePrefix("﻿").trim()
@@ -20,7 +28,11 @@ object XrayConfigs {
         if (!t.startsWith("[") && !t.startsWith("{")) throw SubscriptionException("Подписка пришла не в формате Xray JSON")
         val configs = if (t.startsWith("[")) JSONArray(t).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
         else listOf(JSONObject(t))
-        return configs.mapIndexedNotNull { i, cfg -> serverFromConfig(cfg, i) }
+        var unlimited = false
+        val servers = configs.mapIndexedNotNull { i, cfg ->
+            serverFromConfig(cfg, i, mayBeUnlimited = !unlimited)?.also { if (it.id == ServerGroups.UNLIMITED_ID) unlimited = true }
+        }
+        return ServerGroups.placeUnlimited(servers)
     }
 
     /**
@@ -45,7 +57,8 @@ object XrayConfigs {
         sockopt.put("tcpFastOpen", true)
     }
 
-    private fun serverFromConfig(src: JSONObject, index: Int): Server? {
+    /** [mayBeUnlimited]: no earlier row was taken as «Безлимитные · все серверы». */
+    private fun serverFromConfig(src: JSONObject, index: Int, mayBeUnlimited: Boolean): Server? {
         val cfg = JSONObject(src.toString())
         val outbounds = cfg.optJSONArray("outbounds") ?: return null
         val proxy = (0 until outbounds.length()).map { outbounds.getJSONObject(it) }
@@ -65,24 +78,43 @@ object XrayConfigs {
         cfg.remove("inbounds")
         dropAllowInsecure(outbounds)
         applyTfo(name, proxy)
-        return Server(id = "json-$index-${name.hashCode()}", name = name, xrayJson = cfg.toString(), proxyTag = proxy.getString("tag"))
+        val json = cfg.toString()
+        val proxyTag = proxy.getString("tag")
+        // «👇БЕЗЛИМИТНЫЕ👇» with a real config (the first such row; another stays a hidden header):
+        // one name on every screen, one id wherever the panel puts it (as on Android and iPhone).
+        if (mayBeUnlimited && ServerGroups.isUnlimitedRow(Server(id = "", name = name, xrayJson = json, proxyTag = proxyTag))) {
+            return Server(id = ServerGroups.UNLIMITED_ID, name = ServerGroups.UNLIMITED_NAME, xrayJson = json, proxyTag = proxyTag)
+        }
+        return Server(id = "json-$index-${name.hashCode()}", name = name, xrayJson = json, proxyTag = proxyTag)
     }
 
     /**
      * Config for "system proxy" mode: local SOCKS + HTTP inbounds on [socksPort]/[httpPort];
      * outbounds, routing (Russian sites → direct etc.) and DNS come from the panel.
+     * [sniffingEnable]: the subscription's `sniffing-enable`; false turns the inbounds' sniffing
+     * off, null or true leave it as always (on). [accessLog]: every connection's line in
+     * xray-access.log, only for Технический режим (as on iPhone: no list of visited sites on disk).
      */
     fun buildProxyConfig(
         serverJson: String, socksPort: Int, httpPort: Int, logDir: String, proxyTag: String? = null, metricsPort: Int = 0,
+        sniffingEnable: Boolean? = null, accessLog: Boolean = false,
     ): String {
         val cfg = JSONObject(serverJson)
-        val sniffing = (cfg.remove(SNIFFING_KEY) as? JSONObject)?.put("enabled", true)
-            ?: JSONObject().put("enabled", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))
-                .put("routeOnly", false)
+        val panelSniffing = cfg.remove(SNIFFING_KEY) as? JSONObject
+        val sniffing = if (sniffingEnable == false) {
+            // «sniffing-enable: 0»: the core sees only the IP a TUN app dialed, so the panel's
+            // domain rules (and the YouTube QUIC block below) no longer match TUN traffic; its IP
+            // rules still do. The system proxy's targets stay names (HTTP CONNECT), as do updates.
+            JSONObject().put("enabled", false)
+        } else {
+            panelSniffing?.put("enabled", true)
+                ?: JSONObject().put("enabled", true).put("destOverride", JSONArray().put("http").put("tls").put("quic"))
+                    .put("routeOnly", false)
+        }
         val oldTags = (cfg.remove(INBOUND_KEY) as? JSONArray)?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty().toSet()
 
         cfg.put("log", JSONObject().put("loglevel", "warning")
-            .put("access", "$logDir/xray-access.log").put("error", "$logDir/xray-error.log"))
+            .put("access", if (accessLog) "$logDir/$ACCESS_LOG" else "none").put("error", "$logDir/$ERROR_LOG"))
         cfg.put("inbounds", JSONArray()
             .put(JSONObject().put("tag", SOCKS_TAG).put("protocol", "socks").put("listen", "127.0.0.1").put("port", socksPort)
                 .put("settings", JSONObject().put("auth", "noauth").put("udp", true)).put("sniffing", JSONObject(sniffing.toString())))
@@ -98,18 +130,31 @@ object XrayConfigs {
             if (list.none { it in oldTags || it == "tun-in" }) continue
             rule.put("inboundTag", JSONArray((list.filterNot { it in oldTags || it == "tun-in" } + SOCKS_TAG + HTTP_TAG).distinct()))
         }
+        val routing = cfg.optJSONObject("routing") ?: JSONObject().also { cfg.put("routing", it) }
+        val old = routing.optJSONArray("rules") ?: JSONArray()
+        val updated = JSONArray()
+        // YouTube over QUIC (UDP 443) breaks playback through proxies («Ошибка воспроизведения»);
+        // blocked, the browser falls back to TCP (as on Android and iPhone). UDP comes only from
+        // the TUN (the system proxy carries none).
+        val outbounds = cfg.optJSONArray("outbounds") ?: JSONArray().also { cfg.put("outbounds", it) }
+        val blockTag = (0 until outbounds.length()).mapNotNull { outbounds.optJSONObject(it) }
+            .firstOrNull { it.optString("protocol") == "blackhole" && it.optString("tag").isNotEmpty() }?.optString("tag")
+            ?: BLOCK_TAG.also { outbounds.put(JSONObject().put("tag", it).put("protocol", "blackhole")) }
+        updated.put(
+            JSONObject().put("type", "field").put("network", "udp").put("port", "443")
+                .put("domain", JSONArray(YOUTUBE_DOMAINS.map { "domain:$it" }))
+                .put("outboundTag", blockTag)
+        )
         // App updates come from GitHub: always through the VPN, whatever the panel routes direct.
         if (proxyTag != null) {
-            val routing = cfg.optJSONObject("routing") ?: JSONObject().also { cfg.put("routing", it) }
-            val old = routing.optJSONArray("rules") ?: JSONArray()
-            val updated = JSONArray().put(
+            updated.put(
                 JSONObject().put("type", "field")
                     .put("domain", JSONArray().put("domain:github.com").put("domain:githubusercontent.com").put("domain:githubassets.com"))
                     .put("outboundTag", proxyTag)
             )
-            for (i in 0 until old.length()) updated.put(old.get(i))
-            routing.put("rules", updated)
         }
+        for (i in 0 until old.length()) updated.put(old.get(i))
+        routing.put("rules", updated)
         if (!cfg.has("dns")) cfg.put("dns", JSONObject().put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8")))
         cfg.getJSONObject("dns").put("queryStrategy", "UseIPv4")
         // Speed and traffic on Главная: byte counters of our inbounds, on a local metrics page.

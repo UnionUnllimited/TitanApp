@@ -529,6 +529,8 @@ private fun Home(state: AppState, sub: Subscription, openSubscription: () -> Uni
         mutableStateOf(state.selected?.let { ServerGroups.groupOf(it, sub.servers) } ?: Group.SERVERS)
     }
     if (groups[page].isNullOrEmpty()) page = Group.SERVERS
+    // The picked server's tab, also when it changes by itself (off a bypass on normal internet).
+    LaunchedEffect(state.selectedId) { state.selected?.let { page = ServerGroups.groupOf(it, sub.servers) } }
     var query by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf(Sort.RECOMMENDED) }
     val servers = groups[page].orEmpty()

@@ -14,6 +14,28 @@ object SubscriptionErrors {
         else -> "Не удалось разобрать подписку. Напишите в поддержку"
     }
 
+    /**
+     * The servers to show from one answer. Null: nothing usable with this User-Agent, the next
+     * one is tried ([last]: none is left, the reason is thrown instead). The panel's stub entries
+     * (device limit, expired…) come with a dummy address, so they are read before such info rows
+     * are hidden (as on Android and iPhone), or their text would never be shown.
+     */
+    fun servers(info: SubscriptionInfo, body: String, last: Boolean): List<Server>? {
+        val all = runCatching { XrayConfigs.serversFromXrayJson(body) }.getOrDefault(emptyList())
+        if (all.isEmpty()) {
+            if (!last) return null
+            throw SubscriptionException(unusable(info, body))
+        }
+        // The panel answers with a stub entry instead of servers (device limit, blocked…).
+        stub(all.map { it.name })?.let { throw SubscriptionException(it) }
+        val servers = all.filterNot(ServerGroups::isHidden)
+        if (servers.isEmpty()) {
+            if (!last) return null
+            throw SubscriptionException("В подписке нет серверов")
+        }
+        return servers
+    }
+
     /** The stub's text when every entry is one (no real server came). */
     fun stub(names: List<String>): String? {
         if (names.isEmpty()) return null

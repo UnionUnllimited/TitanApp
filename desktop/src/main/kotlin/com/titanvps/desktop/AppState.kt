@@ -144,21 +144,28 @@ class AppState {
             loadAccount()
             if (autoConnect) connect()
         }
-        // Напоминания: checked again every half an hour (and after each subscription update).
+        // Every half an hour: the subscription once it is as old as its update interval (the app
+        // lives in the tray from logon for days), then Напоминания (also after each update).
         scope.launch {
             while (true) {
                 kotlinx.coroutines.delay(REMIND_EVERY_MS)
+                subscription?.let { refreshIfStale(it.info.updateIntervalHours * HOUR_MS) }
                 remind()
             }
         }
     }
 
-    private fun persist() = Repository.save(
-        Repository.State(
-            subscription, selectedId, theme, mode, excludedApps, autoConnect, appsMode, vpnApps, techMode,
-            favorites, reminders, reminded,
+    /** One save at a time, of the state as it is then: the last one to run writes the newest. */
+    private val saving = Any()
+
+    private fun persist() = synchronized(saving) {
+        Repository.save(
+            Repository.State(
+                subscription, selectedId, theme, mode, excludedApps, autoConnect, appsMode, vpnApps, techMode,
+                favorites, reminders, reminded,
+            )
         )
-    )
+    }
 
     fun showToast(text: String, kind: Toast.Kind = Toast.Kind.INFO) {
         toast = Toast(text, kind)
@@ -168,11 +175,19 @@ class AppState {
         if (toast?.id == id) toast = null
     }
 
+    /**
+     * Bumped by a new key and by Выйти: a subscription or account fetch begun before it saves
+     * nothing and says nothing (as Android's and iPhone's generation).
+     */
+    private var keyGen = 0
+
     /** Adds the key and connects right away (same as Android and iPhone); on another key while on, reconnects. */
     fun activate(text: String) {
         val url = Links.find(text.trim()) ?: run { showToast("Это не ключ Titan VPS", Toast.Kind.WARNING); return }
         val previous = subscription?.url
-        load(url, silent = false) {
+        // Also while a refresh of the old key is under way: that one gives way.
+        keyGen++
+        load(url, silent = false, supersede = true) {
             showToast("Подписка подключена", Toast.Kind.SUCCESS)
             loadAccount()
             when {
@@ -182,33 +197,68 @@ class AppState {
         }
     }
 
-    /** Обновить подписку: says how it went in a note at the top (silent at start-up). */
+    /**
+     * Обновить подписку: says how it went in a note at the top. [silent] (at start-up, in the
+     * background): no note, and after a failure one more try a bit later (as on iPhone): at logon
+     * the network is often not up yet.
+     */
     fun refresh(silent: Boolean = false) {
         val url = subscription?.url ?: return
-        load(url, silent) {
+        val done = {
             if (!silent) showToast("Подписка обновлена", Toast.Kind.SUCCESS)
             loadAccount()
         }
+        val gen = keyGen
+        load(url, silent, onFail = if (!silent) null else ({
+            scope.launch {
+                kotlinx.coroutines.delay(RETRY_MS)
+                // Signed out or another key meanwhile: not the old one again.
+                if (gen == keyGen && subscription?.url == url) load(url, silent = true, onDone = done)
+            }
+        }), onDone = done)
     }
 
-    private fun load(url: String, silent: Boolean, onDone: () -> Unit = {}) {
-        if (busy) return
+    /**
+     * The subscription again, quietly, if it was fetched longer than [maxAgeMs] ago: the window
+     * opened from the tray (30 min, as Android and iPhone on coming back), and every half an hour
+     * past its update interval. From any thread.
+     */
+    fun refreshIfStale(maxAgeMs: Long) {
+        scope.launch {
+            val s = subscription ?: return@launch
+            if (!busy && System.currentTimeMillis() - s.fetchedAt > maxAgeMs) refresh(silent = true)
+        }
+    }
+
+    /**
+     * Fetches [url]'s subscription. [supersede]: a new key, also while another fetch runs (that
+     * one gives way through [keyGen]); else nothing while one runs. [onFail]: after a failure.
+     */
+    private fun load(url: String, silent: Boolean, supersede: Boolean = false, onFail: (() -> Unit)? = null, onDone: () -> Unit = {}) {
+        if (busy && !supersede) return
+        val gen = keyGen
         busy = true
         scope.launch {
             try {
                 val sub = withContext(Dispatchers.IO) { Repository.fetch(url) }
+                // Выйти or another key while it downloaded: the old key isn't brought back.
+                if (gen != keyGen) return@launch
                 subscription = sub
                 if (sub.servers.none { it.id == selectedId }) selectedId = sub.servers.first().id
                 withContext(Dispatchers.IO) { persist() }
+                if (gen != keyGen) return@launch
                 onDone()
                 remind()
             } catch (e: Exception) {
+                if (gen != keyGen) return@launch
                 if (!silent) {
                     val why = e.message ?: "сервер не ответил"
                     showToast(if (subscription == null) why else "Не удалось обновить подписку: $why", Toast.Kind.WARNING)
                 }
+                onFail?.invoke()
             } finally {
-                busy = false
+                // An overtaken fetch leaves the spinner to the newer one.
+                if (gen == keyGen) busy = false
             }
         }
     }
@@ -285,8 +335,33 @@ class AppState {
             } finally {
                 whitelistChecking = false
             }
+            leaveBypass()
         }
     }
+
+    /**
+     * Normal internet while on (or connecting to) a bypass server, e.g. home Wi-Fi after a phone's
+     * hotspot: over to a regular server with a note, as Android and iPhone do on Wi-Fi, or every
+     * site would spend the bypass GB. Never in Технический режим ([bypassLocked]), nor during an
+     * update's download. Once there, it stays (no way back to the bypass by itself).
+     */
+    private fun leaveBypass() {
+        val sub = subscription ?: return
+        val from = selected ?: return
+        if (!bypassLocked || !vpnOn || !isBypass(from.id)) return
+        if (update is UpdateState.Downloading || update == UpdateState.Installing) return
+        val to = regularFallback(sub) ?: return
+        selectedId = to.id
+        scope.launch(Dispatchers.IO) { persist() }
+        connect()
+        val name = ServerGroups.splitFlag(to.name).second
+        showToast("Интернет работает без белых списков — переключили на «$name», чтобы не тратить ГБ обходов")
+        // The window is often hidden in the tray: the note there too.
+        notifier?.invoke("Обходы сейчас не нужны", "Интернет работает без белых списков. Переключили на «$name», чтобы не тратить ГБ обходов.")
+    }
+
+    /** A regular server in place of a bypass one ([ServerGroups.regularFallback]). */
+    private fun regularFallback(sub: Subscription): Server? = ServerGroups.regularFallback(sub.servers) { pings[it] }
 
     private fun isBypass(id: String): Boolean =
         subscription?.servers?.firstOrNull { it.id == id }?.let { ServerGroups.groupOf(it, subscription!!.servers) == ServerGroups.Group.BYPASS } == true
@@ -405,14 +480,20 @@ class AppState {
     /** Local HTTP inbound of the running core, 0 when off (Технический режим checks through it). */
     val localProxyPort: Int get() = if (vpn is VpnState.Connected) proxyPort else 0
 
+    /** The key [accountLoading] is for: a new key's account doesn't wait for the old one's. */
+    private var accountGen = -1
+
     fun loadAccount() {
         val url = subscription?.url ?: return
-        if (accountLoading) return
+        if (accountLoading && accountGen == keyGen) return
+        val gen = keyGen
+        accountGen = gen
         accountLoading = true
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { Account.fetch(url, proxyPort) } }
-                .onSuccess { account = it }
-            accountLoading = false
+                // Выйти or another key meanwhile: not the old key's account.
+                .onSuccess { if (gen == keyGen) account = it }
+            if (accountGen == gen) accountLoading = false
         }
     }
 
@@ -426,8 +507,7 @@ class AppState {
         var server = selected ?: return
         // A bypass server chosen earlier, while the internet is normal: a regular one instead.
         if (bypassLocked && isBypass(server.id)) {
-            val regular = ServerGroups.split(sub.servers)[ServerGroups.Group.SERVERS].orEmpty()
-                .minByOrNull { s -> pings[s.id]?.takeIf { it >= 0 } ?: Long.MAX_VALUE } ?: return
+            val regular = regularFallback(sub) ?: return
             server = regular
             selectedId = regular.id
             scope.launch(Dispatchers.IO) { persist() }
@@ -456,6 +536,7 @@ class AppState {
                         val keepTun = useTun && tun.isRunning && tunSocks > 0
                         val (fresh, http, metrics) = freePorts(4).filter { it != tunSocks }
                         val logDir = AppPaths.logDir.absolutePath.replace('\\', '/')
+                        startLogsOver()
                         // Naive / Mieru: their own client as a local SOCKS, Xray's proxy outbound
                         // points at it; MASQUE: Xray's own client.
                         plugin?.close()
@@ -466,7 +547,13 @@ class AppState {
                         if ("\"tcpFastOpen\":true" in prepared) Admin.enableTcpFastOpen()
                         step("Подключаемся к серверу…")
                         fun startCore(socks: Int) =
-                            core.start(XrayConfigs.buildProxyConfig(prepared, socks, http, logDir, server.proxyTag, metrics), geo)
+                            core.start(
+                                XrayConfigs.buildProxyConfig(
+                                    prepared, socks, http, logDir, server.proxyTag, metrics,
+                                    sniffingEnable = sub.info.sniffing, accessLog = techMode,
+                                ),
+                                geo,
+                            )
                         var socks = if (keepTun) tunSocks else fresh
                         try {
                             startCore(socks)
@@ -510,6 +597,17 @@ class AppState {
                 vpn = VpnState.Error("Не удалось подключиться. Попробуйте другой сервер или ещё раз")
                 failures += 1
             }
+        }
+    }
+
+    /**
+     * The cores' logs start over with each connect (as on Android; a restart of an exited core
+     * keeps them): they grew for good and kept the sites visited. A running core or sing-box
+     * writes on at the new end. Under [conn].
+     */
+    private fun startLogsOver() {
+        for (name in listOf(XrayConfigs.ACCESS_LOG, XrayConfigs.ERROR_LOG, "sing-box.log")) {
+            runCatching { java.io.File(AppPaths.logDir, name).takeIf { it.exists() }?.writeText("") }
         }
     }
 
@@ -810,6 +908,10 @@ class AppState {
     fun openCabinetUrl(): String = subscription?.info?.webPageUrl ?: Config.TELEGRAM_URL
 
     fun logout() {
+        // A subscription or account fetch under way doesn't sign the old key back in.
+        keyGen++
+        busy = false
+        accountLoading = false
         disconnect()
         traffic.stop()
         subscription = null
@@ -850,6 +952,9 @@ class AppState {
     private companion object {
         const val WHITELIST_EVERY_MS = 2 * 60_000L
         const val REMIND_EVERY_MS = 30 * 60_000L
+        const val HOUR_MS = 60 * 60_000L
+        /** A failed quiet fetch (start-up, background) is tried once more after this. */
+        const val RETRY_MS = 10_000L
         const val DAY = 86_400L
         const val BYPASS_LOCKED_MESSAGE =
             "Обходы нужны только когда интернет работает по белым спискам (открываются ya.ru и vk.com, а google.com — нет). " +

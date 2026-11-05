@@ -647,11 +647,11 @@ fun TitanDialog(
 
 // ------------------------------------------------------------------ servers
 
-/** The flag image in a circle (Windows can't draw flag emoji); АВТО gets a bolt. */
+/** The flag image in a circle (Windows can't draw flag emoji); АВТО and «Безлимитные · все серверы» get a bolt. */
 @Composable
 fun FlagCircle(server: Server, size: Dp) {
     val (flag, name) = remember(server.name) { ServerGroups.splitFlag(server.name) }
-    FlagCircle(ServerGroups.countryCode(flag), "авто" in name.lowercase(), size)
+    FlagCircle(ServerGroups.countryCode(flag), "авто" in name.lowercase() || ServerGroups.isUnlimited(server), size)
 }
 
 @Composable

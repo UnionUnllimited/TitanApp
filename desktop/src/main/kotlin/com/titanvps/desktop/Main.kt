@@ -78,7 +78,12 @@ fun main(args: Array<String>) {
         var trayHintShown by remember { mutableStateOf(false) }
         /** Each request to show the window (tray, second start) brings it to the front, also when already open. */
         var shown by remember { mutableStateOf(0) }
-        val show = { visible = true; shown++ }
+        val show = {
+            visible = true
+            shown++
+            // Opened again after a while (as Android and iPhone on coming back): its days and GB as they are now.
+            state.refreshIfStale(30 * 60_000L)
+        }
         androidx.compose.runtime.LaunchedEffect(Unit) { instance.onShow { show() } }
         val quit = {
             // Turn the system proxy off before quitting, or Windows loses internet.

@@ -26,14 +26,7 @@ object Repository {
         for (ua in Config.USER_AGENTS) for (candidate in listOf(url) + Links.alternates(url)) {
             try {
                 val (info, body) = download(candidate, ua)
-                val servers = runCatching { XrayConfigs.serversFromXrayJson(body) }.getOrDefault(emptyList())
-                    .filterNot(ServerGroups::isHidden)
-                if (servers.isEmpty()) {
-                    if (ua != Config.USER_AGENTS.last()) continue
-                    throw SubscriptionException(SubscriptionErrors.unusable(info, body))
-                }
-                // The panel answers with a stub entry instead of servers (device limit, blocked…).
-                SubscriptionErrors.stub(servers.map { it.name })?.let { throw SubscriptionException(it) }
+                val servers = SubscriptionErrors.servers(info, body, last = ua == Config.USER_AGENTS.last()) ?: continue
                 return Subscription(url, info, servers, System.currentTimeMillis())
             } catch (e: Exception) {
                 if (firstError == null) firstError = e
@@ -98,9 +91,12 @@ object Repository {
             Subscription(
                 url = s.getString("url"),
                 info = SubscriptionInfo(
-                    i.optLong("upload"), i.optLong("download"), i.optLong("total"), i.optLong("expire"),
-                    i.optString("supportUrl").ifEmpty { null }, i.optString("webPageUrl").ifEmpty { null },
-                    i.optString("announce").ifEmpty { null },
+                    uploadBytes = i.optLong("upload"), downloadBytes = i.optLong("download"),
+                    totalBytes = i.optLong("total"), expireAt = i.optLong("expire"),
+                    supportUrl = i.optString("supportUrl").ifEmpty { null }, webPageUrl = i.optString("webPageUrl").ifEmpty { null },
+                    announce = i.optString("announce").ifEmpty { null },
+                    updateIntervalHours = i.optInt("updateHours", SubscriptionInfo.DEFAULT_UPDATE_HOURS),
+                    sniffing = if (i.has("sniffing")) i.optBoolean("sniffing") else null,
                 ),
                 servers = (0 until arr.length()).map { arr.getJSONObject(it) }
                     .map { Server(it.getString("id"), it.getString("name"), it.getString("json"), it.getString("tag")) }
@@ -132,15 +128,40 @@ object Repository {
                     .put("upload", s.info.uploadBytes).put("download", s.info.downloadBytes)
                     .put("total", s.info.totalBytes).put("expire", s.info.expireAt)
                     .put("supportUrl", s.info.supportUrl ?: "").put("webPageUrl", s.info.webPageUrl ?: "")
-                    .put("announce", s.info.announce ?: ""))
+                    .put("announce", s.info.announce ?: "").put("updateHours", s.info.updateIntervalHours)
+                    .apply { s.info.sniffing?.let { put("sniffing", it) } })
                 .put("servers", JSONArray().apply {
                     s.servers.forEach { put(JSONObject().put("id", it.id).put("name", it.name).put("json", it.xrayJson).put("tag", it.proxyTag)) }
                 }))
         }
-        val tmp = File(stateFile.parentFile, "state.json.tmp")
-        tmp.writeText(o.toString())
-        stateFile.delete()
-        tmp.renameTo(stateFile)
+        AtomicFile.write(stateFile, o.toString())
+    }
+}
+
+/** A file replaced in one step: readers find the old text or the new one, never no file. */
+object AtomicFile {
+    /**
+     * Writes [text] next to [target] and moves it in place (MoveFileEx with replace on Windows).
+     * Deleting first lost the file (the saved key) when two saves met, or the rename then failed.
+     * Not for two writers at once (the temporary file is shared): AppState saves one at a time.
+     */
+    fun write(target: File, text: String) {
+        val tmp = File(target.parentFile, "${target.name}.tmp")
+        tmp.writeText(text)
+        var tries = 0
+        while (true) {
+            try {
+                java.nio.file.Files.move(
+                    tmp.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                )
+                return
+            } catch (e: IOException) {
+                // An antivirus reading the old file for a moment: the old one stays meanwhile.
+                if (++tries >= 5) throw e
+                Thread.sleep(50)
+            }
+        }
     }
 }
 
