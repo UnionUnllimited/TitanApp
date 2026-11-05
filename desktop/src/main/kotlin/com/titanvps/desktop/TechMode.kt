@@ -577,7 +577,10 @@ fun TechModePage(state: AppState, onBack: () -> Unit) {
                 TextButton(onClick = { scope.runTcp(state, c) }, enabled = !c.tcpRunning) { Text("Проверить серверы") }
             }
             TechCard("Журнал") {
-                Caption("Логи ядра из ${AppPaths.logDir.absolutePath}, последние 200 строк.")
+                Caption(
+                    "Логи ядра из ${AppPaths.logDir.absolutePath}, последние 200 строк. ping.log — строка об итоге " +
+                        "каждого пинга списка: сколько промахов, сколько перемерено, сколько хостов по одному.",
+                )
                 if (logs.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     logs.forEach { f ->
                         FilterChip(selected = f == logFile, onClick = { logFile = f; reloadLog() }, label = { Text(f.name, fontSize = 12.sp) })

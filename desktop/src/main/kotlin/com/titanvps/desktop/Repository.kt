@@ -147,17 +147,19 @@ object Repository {
 /**
  * Real ping through Xray, like Happ: one core with a SOCKS port per node is started once
  * and kept warm for a minute, shared by every request (the whole list or one server, also
- * while the list is still being measured). A few nodes at a time; results arrive one by one.
+ * while the list is still being measured). A few nodes at a time, one probe at a time per
+ * host a node dials first; results arrive one by one, a list's misses and slow answers once
+ * they were measured again at the end ([PingRun], the same rules as Android).
  */
 val Pinger = PingEngine("ping")
 
-class PingEngine(name: String) {
+class PingEngine(private val name: String) {
     private companion object {
         const val URL = "https://www.gstatic.com/generate_204"
         const val PARALLEL = 6 // more at once crowd each other out on a weak network
-        const val RECHECK_ABOVE_MS = 1500L
         const val KEEP_WARM_MS = 60_000L
-        /** Balancer members measured per server: its ping is the best of them. */
+        const val MAX_PROBES = 200
+        /** Balancer members measured per server: in a list its ping is the best of them. */
         const val MAX_MEMBERS = 30
     }
 
@@ -166,16 +168,18 @@ class PingEngine(name: String) {
         val ports: Map<String, Int>,
         val serverKeys: Map<String, List<String>>,
         val plugins: List<PluginProcess> = emptyList(),
-        /** Probes over UDP (Hysteria, TUIC, MASQUE over H3): the only ones measured twice. */
+        /** Probes over UDP (Hysteria, TUIC, MASQUE over H3): counted apart in a list's line in ping.log. */
         val udp: Set<String> = emptySet(),
         /** Probes through a protocol client still starting: measured once it is up. */
         val ready: Map<String, java.util.concurrent.Future<*>> = emptyMap(),
+        /** The host each probe dials first: one probe at a time per host ([PingRun.run]). */
+        val hosts: Map<String, String> = emptyMap(),
     )
 
     private val core = XrayProcess(name)
     private val listPool = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL) { r -> Thread(r).apply { isDaemon = true } }
     private val singlePool = java.util.concurrent.Executors.newCachedThreadPool { r -> Thread(r).apply { isDaemon = true } }
-    private val recheckPool = java.util.concurrent.Executors.newFixedThreadPool(3) { r -> Thread(r).apply { isDaemon = true } }
+    private val recheckPool = java.util.concurrent.Executors.newFixedThreadPool(PingRun.RECHECK_PARALLEL) { r -> Thread(r).apply { isDaemon = true } }
     private val startPool = java.util.concurrent.Executors.newFixedThreadPool(8) { r -> Thread(r).apply { isDaemon = true } }
     private val timer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r).apply { isDaemon = true } }
     private val active = java.util.concurrent.atomic.AtomicInteger()
@@ -195,15 +199,32 @@ class PingEngine(name: String) {
     /**
      * Measures [targets] in that order ([all] = every server, for the shared core).
      * [onStart] when a server starts being measured, [onResult] with ms or -1 (timeout).
+     * [maxMembers]: balancer members measured per server (null: [MAX_MEMBERS]); [recheck]:
+     * false, a list's misses and slow answers aren't measured again at the end (only UDP's
+     * get a second attempt at once). Android's whitelist watcher asks for both; nothing on
+     * Windows does yet (Главная's Пинг and a row's ping use the defaults).
      */
-    fun ping(all: List<Server>, targets: List<String>, onStart: (List<String>) -> Unit, onResult: (String, Long) -> Unit) {
+    fun ping(
+        all: List<Server>,
+        targets: List<String>,
+        onStart: (List<String>) -> Unit,
+        onResult: (String, Long) -> Unit,
+        maxMembers: Int? = null,
+        recheck: Boolean = true,
+    ) {
         synchronized(this) { idleStop?.cancel(false); idleStop = null }
         val gen = generation.get()
+        val startedAt = System.nanoTime()
         active.incrementAndGet()
         try {
             val s = acquireSession(all, targets)
             try {
-                measure(s, targets, targets.size == 1, onStart, onResult) { generation.get() != gen }
+                val single = targets.size == 1
+                val run = measure(s, targets, single, PingRun.maxMembers(maxMembers, MAX_MEMBERS), recheck, onStart, onResult) {
+                    generation.get() != gen
+                }
+                // A list's line in Технический режим: how much its first pass missed, how much the recheck found.
+                if (!single && recheck) note(run.line((System.nanoTime() - startedAt) / 1_000_000))
             } finally {
                 sessionLock.readLock().unlock()
             }
@@ -273,22 +294,29 @@ class PingEngine(name: String) {
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
         val udp = HashSet<String>()
+        val hosts = HashMap<String, String>()
         val serverKeys = servers.associate { s ->
             val json = jsonOf.getValue(s.id)
+            val endpoint = Plugins.endpoint(s)
             // TUIC (sing-box client) and MASQUE over H3 run over UDP whatever the outbound says.
-            val serverUdp = Plugins.endpoint(s)?.let { it.kind == Plugins.Kind.TUIC || (it.kind == Plugins.Kind.MASQUE && !it.http2) } == true
+            val serverUdp = endpoint?.let { it.kind == Plugins.Kind.TUIC || (it.kind == Plugins.Kind.MASQUE && !it.http2) } == true
+            // Its proxy outbound replaced by the protocol's client (or Xray's MASQUE): that dials the real server.
+            val client = endpoint?.takeIf { json != s.xrayJson }
             s.id to XrayConfigs.pingTags(json, s.proxyTag, MAX_MEMBERS).mapNotNull { tag ->
                 val key = XrayConfigs.endpointKey(json, tag) ?: return@mapNotNull null
-                if (key !in probes && probes.size < 200) probes[key] = Probe(json, tag)
+                if (key !in probes && probes.size < MAX_PROBES) probes[key] = Probe(json, tag)
                 if (key in probes && (serverUdp || isUdp(json, tag))) udp += key
                 startOf[s.id]?.let { if (key in probes) ready[key] = it }
+                // From the server's own config: through a protocol client the probe dials that
+                // client's server, not the local SOCKS [json] points at (loopback: no rule).
+                if (key in probes && key !in hosts) XrayConfigs.entryHost(s, tag, client)?.let { hosts[key] = it }
                 key.takeIf { it in probes }
             }.distinct()
         }
         val keys = probes.keys.toList()
         val ports = if (keys.isEmpty()) emptyList() else freePorts(keys.size)
         if (keys.isNotEmpty()) core.start(XrayConfigs.buildPingConfig(keys.map { probes.getValue(it).let { p -> p.json to p.tag } }, ports))
-        return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp, ready).also { session = it }
+        return Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp, ready, hosts).also { session = it }
     }
 
     /** Hysteria, QUIC, mKCP… outbounds: they go over UDP. */
@@ -300,73 +328,44 @@ class PingEngine(name: String) {
         return protocol in setOf("hysteria", "hysteria2", "tuic", "wireguard") || network in setOf("hysteria", "quic", "kcp", "mkcp")
     }
 
+    /**
+     * Every server is measured on up to [maxMembers] members of its balancer; in a list a
+     * server's ping is its best member, what the balancer itself would pick; one server asked
+     * for, its first member that answers ([PingRun.run]). [maxMembers] limits only what this
+     * request measures: the core keeps every member warm.
+     */
     private fun measure(
-        s: Session, targets: List<String>, single: Boolean,
+        s: Session, targets: List<String>, single: Boolean, maxMembers: Int, recheck: Boolean,
         onStart: (List<String>) -> Unit, onResult: (String, Long) -> Unit, cancelled: () -> Boolean,
-    ) {
-        val best = HashMap<String, Long>()
-        val remaining = HashMap<String, Int>()
-        val started = HashSet<String>()
-        val byKey = LinkedHashMap<String, MutableList<String>>()
-        targets.forEach { id ->
-            val keys = s.serverKeys[id].orEmpty()
-            remaining[id] = keys.size
-            keys.forEach { byKey.getOrPut(it) { mutableListOf() }.add(id) }
-        }
-        targets.filter { remaining[it] == 0 }.forEach { onResult(it, -1) }
-        val lock = Any()
-        fun report(key: String, ms: Long) = synchronized(lock) {
-            for (id in byKey.getValue(key)) {
-                if (ms >= 0 && (best[id] ?: -1L).let { it < 0 || ms < it }) best[id] = ms
-                remaining[id] = remaining.getValue(id) - 1
-                if (remaining[id] == 0) onResult(id, best[id] ?: -1L)
-            }
-        }
-        val recheck = java.util.Collections.synchronizedMap(LinkedHashMap<String, Long>())
-        val pool = if (single) singlePool else listPool
-        byKey.map { (key, ids) ->
-            pool.submit {
-                if (cancelled()) return@submit
-                synchronized(lock) { ids.filter { started.add(it) }.takeIf { it.isNotEmpty() }?.let(onStart) }
-                // Through a protocol client: once it is up (it didn't start: no answer).
-                s.ready[key]?.let { start ->
-                    if (runCatching { start.get(30, TimeUnit.SECONDS) }.isFailure) { report(key, -1); return@submit }
-                }
-                val port = s.ports.getValue(key)
-                // One cold attempt (a dead server costs 4 s); if it answered, a second one
-                // and the better of the two.
-                var ms = timed(port, 4)
-                if (ms >= 0) ms = bestOf(ms, timed(port, 3))
-                // In a full run a bad result over UDP (Hysteria, TUIC) is often just the crowd:
-                // measured again alone once the list is done. TCP results stand as they are.
-                if (!single && key in s.udp && (ms < 0 || ms > RECHECK_ABOVE_MS)) recheck[key] = ms else report(key, ms)
-            }
-        }.forEach { runCatching { it.get() } }
-        if (cancelled()) return
-        // A few at a time, one attempt each; keep the better of the two runs. Not needed when
-        // every server using it already has a good result (e.g. another balancer member).
-        val (needed, settled) = recheck.toList().partition { (key, _) ->
-            synchronized(lock) { byKey.getValue(key).any { (best[it] ?: -1L) < 0 } }
-        }
-        settled.forEach { (key, first) -> report(key, first) }
-        needed.map { (key, first) ->
-            recheckPool.submit { if (!cancelled()) report(key, bestOf(first, timed(s.ports.getValue(key), 6))) }
-        }.forEach { runCatching { it.get() } }
-    }
-
-    private fun bestOf(a: Long, b: Long): Long = when {
-        a < 0 -> b
-        b < 0 -> a
-        else -> minOf(a, b)
-    }
+    ): PingRun.Summary = PingRun.run(
+        targets = targets,
+        keysOf = { s.serverKeys[it].orEmpty() },
+        single = single,
+        pool = if (single) singlePool else listPool,
+        recheckPool = recheckPool,
+        measure = { key, timeoutSec, _ -> timed(s.ports.getValue(key), timeoutSec) },
+        // The rows show the ms (or «таймаут»), not why: the reason stays in PingRun.
+        result = { id, ms, _ -> onResult(id, ms) },
+        started = onStart,
+        ready = { s.ready[it] },
+        udp = s.udp,
+        cancelled = cancelled,
+        maxMembers = maxMembers,
+        recheck = recheck,
+        // A single request has no limit of its own (its pool grows), but one per host too: a
+        // balancer's members behind one entry are the same burst as a list's. It is shown at
+        // its first member that answers, so one at a time doesn't add up every member's time.
+        hosts = s.hosts,
+        parallel = if (single) Int.MAX_VALUE else PARALLEL,
+    )
 
     /** One request on a fresh connection (TCP, TLS and the proxy handshake included). */
-    private fun timed(port: Int, timeoutSec: Long): Long {
+    private fun timed(port: Int, timeoutSec: Int): Long {
         val client = OkHttpClient.Builder()
             .proxy(java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port)))
-            .connectTimeout(timeoutSec, TimeUnit.SECONDS)
-            .readTimeout(timeoutSec, TimeUnit.SECONDS)
-            .callTimeout(timeoutSec, TimeUnit.SECONDS) // the whole attempt, not per phase
+            .connectTimeout(timeoutSec.toLong(), TimeUnit.SECONDS)
+            .readTimeout(timeoutSec.toLong(), TimeUnit.SECONDS)
+            .callTimeout(timeoutSec.toLong(), TimeUnit.SECONDS) // the whole attempt, not per phase
             .retryOnConnectionFailure(false)
             .build()
         return try {
@@ -378,6 +377,18 @@ class PingEngine(name: String) {
         } finally {
             client.connectionPool.evictAll()
             client.dispatcher.executorService.shutdown()
+        }
+    }
+
+    /**
+     * One line in ping.log (Технический режим → Журнал), no server names or addresses; the
+     * file starts over past 64 KB.
+     */
+    private fun note(line: String) {
+        runCatching {
+            val f = File(AppPaths.logDir, "$name.log")
+            if (f.length() > 64 * 1024) f.writeText("")
+            f.appendText("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())} $line\n")
         }
     }
 }
