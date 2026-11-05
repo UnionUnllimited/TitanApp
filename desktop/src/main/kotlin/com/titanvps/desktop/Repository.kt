@@ -81,10 +81,23 @@ object Repository {
         val reminders: Boolean = true,
         /** Reminders already shown ("<expire>:<days>", "traffic:<total>"), each once. */
         val reminded: Set<String> = emptySet(),
+        /**
+         * The app quit to install an update while the VPN was on: the next start connects
+         * again (as Android after its update), once.
+         */
+        val reconnectAfterUpdate: Boolean = false,
     )
 
-    fun load(): State {
-        val o = runCatching { JSONObject(stateFile.readText()) }.getOrNull() ?: return State(null, null, "system")
+    fun load(): State = runCatching { stateFile.readText() }.getOrNull()?.let(StateJson::decode) ?: State(null, null, "system")
+
+    fun save(state: State) = AtomicFile.write(stateFile, StateJson.encode(state))
+}
+
+/** state.json's text ([Repository.State]), apart from the file. */
+internal object StateJson {
+    /** state.json's text as [Repository.State]; null when it isn't JSON. */
+    fun decode(text: String): Repository.State? {
+        val o = runCatching { JSONObject(text) }.getOrNull() ?: return null
         val sub = o.optJSONObject("subscription")?.let { s ->
             val i = s.getJSONObject("info")
             val arr = s.getJSONArray("servers")
@@ -106,14 +119,15 @@ object Repository {
             )
         }
         fun names(key: String) = o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
-        return State(
+        return Repository.State(
             sub, o.optString("selected").ifEmpty { null }, o.optString("theme", "system"), o.optString("mode", "proxy"),
             names("excludedApps"), o.optBoolean("autoConnect", false), o.optString("appsMode", "exclude"), names("vpnApps"),
             o.optBoolean("techMode", false), names("favorites"), o.optBoolean("reminders", true), names("reminded"),
+            o.optBoolean("reconnectAfterUpdate", false),
         )
     }
 
-    fun save(state: State) {
+    fun encode(state: Repository.State): String {
         val o = JSONObject().put("theme", state.theme).put("selected", state.selectedId ?: "")
             .put("mode", state.mode).put("excludedApps", JSONArray(state.excludedApps.sorted()))
             .put("autoConnect", state.autoConnect)
@@ -121,6 +135,7 @@ object Repository {
             .put("techMode", state.techMode)
             .put("favorites", JSONArray(state.favorites.sorted())).put("reminders", state.reminders)
             .put("reminded", JSONArray(state.reminded.sorted()))
+        if (state.reconnectAfterUpdate) o.put("reconnectAfterUpdate", true)
         state.subscription?.let { s ->
             o.put("subscription", JSONObject()
                 .put("url", s.url).put("fetchedAt", s.fetchedAt)
@@ -134,7 +149,7 @@ object Repository {
                     s.servers.forEach { put(JSONObject().put("id", it.id).put("name", it.name).put("json", it.xrayJson).put("tag", it.proxyTag)) }
                 }))
         }
-        AtomicFile.write(stateFile, o.toString())
+        return o.toString()
     }
 }
 

@@ -16,8 +16,16 @@ import java.util.concurrent.TimeUnit
 object Updater {
     data class Release(val build: Int, val name: String, val url: String)
 
-    private const val RELEASES = "https://api.github.com/repos/UnionUnllimited/TitanApp/releases?per_page=30"
+    private const val RELEASES = "https://api.github.com/repos/UnionUnllimited/TitanApp/releases"
     private const val ASSET = "titan-vps-setup.exe"
+    /**
+     * The list comes newest commit first, every app's builds together (iOS, Android's tests,
+     * win-test-*): a day of them pushed the last windows-<n> off one page of 30, and the
+     * update was missed. GitHub gives at most 100 a page.
+     */
+    const val PER_PAGE = 100
+    const val MAX_PAGES = 3
+    private val TAG = Regex("windows-(\\d{1,9})")
 
     /** "1.0.<build>" from jpackage; 0 when run from the IDE. */
     val currentBuild: Int
@@ -29,28 +37,52 @@ object Updater {
         .readTimeout(readSec, TimeUnit.SECONDS)
         .build()
 
-    /** Newest Windows release, or null if this build is the latest. */
+    /**
+     * Newest Windows release, or null if this build is the latest. Throws an [java.io.IOException]
+     * when GitHub can't be reached through the VPN, any other exception when it answered
+     * with an error (an HTTP status, a page that isn't the list).
+     */
     fun findNewer(proxyPort: Int): Release? {
-        val body = client(proxyPort).newCall(
-            Request.Builder().url(RELEASES).header("User-Agent", Config.TITAN_UA).header("Accept", "application/vnd.github+json").build()
-        ).execute().use { r ->
-            if (!r.isSuccessful) error("HTTP ${r.code}")
-            r.body.string()
+        val client = client(proxyPort)
+        val newest = newestWindows { page ->
+            client.newCall(
+                Request.Builder().url("$RELEASES?per_page=$PER_PAGE&page=$page")
+                    .header("User-Agent", Config.TITAN_UA).header("Accept", "application/vnd.github+json").build()
+            ).execute().use { r ->
+                if (!r.isSuccessful) error("HTTP ${r.code}")
+                r.body.string()
+            }
+        } ?: return null
+        return newest.takeIf { it.build > currentBuild }
+    }
+
+    /**
+     * The newest windows-<build> release with our installer, reading [page] (1, 2, …: the
+     * list's pages of [PER_PAGE], newest first) until one has any: its highest build. At most
+     * [MAX_PAGES], and not past the last page. Test builds (win-test-<n>) never count.
+     */
+    internal fun newestWindows(page: (Int) -> String): Release? {
+        for (n in 1..MAX_PAGES) {
+            val arr = JSONArray(page(n))
+            windowsReleases(arr).maxByOrNull { it.build }?.let { return it }
+            if (arr.length() < PER_PAGE) break
         }
-        val arr = JSONArray(body)
-        val newest = (0 until arr.length()).map { arr.getJSONObject(it) }
-            .filter { !it.optBoolean("draft") && it.optString("tag_name").startsWith("windows-") }
+        return null
+    }
+
+    /** The windows-<build> releases of one page that carry [ASSET] (no drafts). */
+    internal fun windowsReleases(arr: JSONArray): List<Release> =
+        (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+            .filter { !it.optBoolean("draft") }
             .mapNotNull { rel ->
-                val build = rel.optString("tag_name").removePrefix("windows-").toIntOrNull() ?: return@mapNotNull null
+                val build = TAG.matchEntire(rel.optString("tag_name"))?.groupValues?.get(1)?.toIntOrNull() ?: return@mapNotNull null
                 val assets = rel.optJSONArray("assets") ?: return@mapNotNull null
-                val url = (0 until assets.length()).map { assets.getJSONObject(it) }
+                val url = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }
                     .firstOrNull { it.optString("name") == ASSET }?.optString("browser_download_url")
+                    ?.takeIf { it.isNotEmpty() }
                     ?: return@mapNotNull null
                 Release(build, rel.optString("name"), url)
             }
-            .maxByOrNull { it.build } ?: return null
-        return newest.takeIf { it.build > currentBuild }
-    }
 
     fun download(release: Release, proxyPort: Int, onProgress: (Float) -> Unit): File {
         val dir = File(System.getProperty("java.io.tmpdir"), "TitanVPS-update").apply { mkdirs() }
@@ -85,20 +117,35 @@ object Updater {
      * new version is up.
      */
     fun installAndRestart(setup: File) {
-        val pid = ProcessHandle.current().pid()
-        val coreDir = AppPaths.coreDir.absolutePath
         // Where the installer puts the app (DefaultDirName in titan.iss); else this exe.
         val installed = File(System.getenv("LOCALAPPDATA") ?: "", "Programs\\Titan VPS\\Titan VPS.exe")
         val exe = installed.takeIf { it.isFile }?.absolutePath
             ?: ProcessHandle.current().info().command().orElse(null)
-        fun q(path: String) = "'" + path.replace("'", "''") + "'" // PowerShell single quotes
         // Our logo for the window (the app's resources are gone once it quits).
         val logo = File(setup.parentFile, "titan-logo.png")
         runCatching { Updater::class.java.getResourceAsStream("/logo.png")?.use { input -> logo.outputStream().use { input.copyTo(it) } } }
         val script = File(setup.parentFile, "update.ps1")
         script.writeText(
             "\uFEFF" + // UTF-8 with BOM: Windows PowerShell reads Cyrillic paths right
-                """
+                updateScript(ProcessHandle.current().pid(), AppPaths.coreDir.absolutePath, exe, logo.absolutePath, setup.absolutePath),
+            Charsets.UTF_8,
+        )
+        ProcessBuilder("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script.absolutePath)
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+    }
+
+    /** How long the script waits for the app to quit, then for the installer, before it gives up. */
+    const val WAIT_MINUTES = 15
+
+    /**
+     * The update script: waits for the app (process [pid]) to quit, stops our cores in
+     * [coreDir], runs [setup] silently, then makes sure [exe] (the installed app) is running.
+     */
+    internal fun updateScript(pid: Long, coreDir: String, exe: String?, logo: String, setup: String): String {
+        fun q(path: String) = "'" + path.replace("'", "''") + "'" // PowerShell single quotes
+        return """
                 ${'$'}ErrorActionPreference = 'SilentlyContinue'
                 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
                 # Sharp at any display scale (else Windows stretches the window and blurs it), and
@@ -129,7 +176,7 @@ object Updater {
                 ${'$'}edge = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(40, 48, 64))
                 ${'$'}form.Add_Paint({ ${'$'}_.Graphics.DrawRectangle(${'$'}edge, 0, 0, ${'$'}form.ClientSize.Width - 1, ${'$'}form.ClientSize.Height - 1) })
                 # Titan's icon in the taskbar; the logo scaled smoothly to its exact size.
-                ${'$'}src = [System.Drawing.Image]::FromFile(${q(logo.absolutePath)})
+                ${'$'}src = [System.Drawing.Image]::FromFile(${q(logo)})
                 ${'$'}appIcon = ${if (exe != null) "[System.Drawing.Icon]::ExtractAssociatedIcon(${q(exe)})" else "${'$'}null"}
                 if (-not ${'$'}appIcon -and ${'$'}src) { ${'$'}appIcon = [System.Drawing.Icon]::FromHandle((New-Object System.Drawing.Bitmap(${'$'}src, 64, 64)).GetHicon()) }
                 if (${'$'}appIcon) { ${'$'}form.Icon = ${'$'}appIcon }
@@ -184,13 +231,21 @@ object Updater {
                     ${'$'}end = (Get-Date).AddSeconds(${'$'}sec)
                     do { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 15 } while ((Get-Date) -lt ${'$'}end)
                 }
+                # Never waits for good: past this the window goes and the app is left as it is.
+                ${'$'}deadline = (Get-Date).AddMinutes($WAIT_MINUTES)
                 # Wait for the app to quit, then make sure none of our xray.exe keep files
                 # locked: a locked file makes the installer hang.
-                while (Get-Process -Id $pid -ErrorAction SilentlyContinue) { Pump 0.5 }
+                while ((Get-Process -Id $pid -ErrorAction SilentlyContinue) -and (Get-Date) -lt ${'$'}deadline) { Pump 0.5 }
+                if (Get-Process -Id $pid -ErrorAction SilentlyContinue) { ${'$'}form.Close(); exit }
                 Get-Process xray, sing-box | Where-Object { ${'$'}_.Path -like ${q("$coreDir*")} } | Stop-Process -Force
                 Pump 1
-                ${'$'}setup = Start-Process -FilePath ${q(setup.absolutePath)} -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS' -PassThru
-                while (-not ${'$'}setup.HasExited) { Pump 0.5 }
+                # Null when Windows wouldn't start it (an antivirus took it): nothing was installed,
+                # the old version opens again below.
+                ${'$'}setup = Start-Process -FilePath ${q(setup)} -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS' -PassThru
+                while (${'$'}setup -and -not ${'$'}setup.HasExited -and (Get-Date) -lt ${'$'}deadline) { Pump 0.5 }
+                # Still installing (hung, or a message hidden under this window): the app isn't
+                # started over files being replaced.
+                if (${'$'}setup -and -not ${'$'}setup.HasExited) { ${'$'}form.Close(); exit }
                 Pump 3
                 """.trimIndent() + "\n" +
                 // The installer should start the new version itself, but doesn't always.
@@ -204,12 +259,6 @@ object Updater {
                     Pump 0.3
                 }
                 ${'$'}form.Close()
-                """.trimIndent() + "\n",
-            Charsets.UTF_8,
-        )
-        ProcessBuilder("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script.absolutePath)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
-            .start()
+                """.trimIndent() + "\n"
     }
 }

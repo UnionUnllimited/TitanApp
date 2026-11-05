@@ -324,3 +324,44 @@ internal object PingRun {
         return Gate(waited, down)
     }
 }
+
+/**
+ * Which measurement may still change the servers on screen (as iPhone's ping-all hold). Пинг
+ * starts a list run and overtakes the one before; Стоп and Выйти stop whatever is measuring
+ * then (the engine skips its queued probes). Its probes already in flight still end, up to
+ * ~7 s later (longer behind a protocol client), by then often under a newer Пинг: a list run
+ * stopped or overtaken writes nothing more, no «таймаут» for what it didn't reach and clears
+ * no spinners. One server's ping keeps a result that comes after Стоп (it was measured), but
+ * gives no «таймаут» for what Стоп cut short. On the UI thread.
+ */
+internal class PingRuns {
+    /** One measurement: its list run (null: one server) and how many stops came before it. */
+    class Ticket internal constructor(val run: Int?, internal val stops: Int)
+
+    private var latestRun = 0
+    private var stops = 0
+
+    /** Пинг: a new list run; any earlier one is overtaken. */
+    fun startList(): Ticket = Ticket(++latestRun, stops)
+
+    /** One server's ping (also while a list run goes on). */
+    fun startOne(): Ticket = Ticket(null, stops)
+
+    /** Стоп, Выйти: everything measuring now is stopped. */
+    fun stop() { stops++ }
+
+    /** Stopped since [t] began: what it didn't reach keeps its old value (or none), no spinner comes back. */
+    fun stopped(t: Ticket): Boolean = stops != t.stops
+
+    /** [t]'s results may still land: a list run while it is the latest and not stopped; one server's always. */
+    fun owns(t: Ticket): Boolean = t.run == null || (t.run == latestRun && !stopped(t))
+
+    /**
+     * [t] may still set and clear spinners and give «таймаут» to what it didn't reach: not once
+     * stopped (Стоп cleared every spinner; those on the rows since are a newer run's).
+     */
+    fun spins(t: Ticket): Boolean = owns(t) && !stopped(t)
+
+    /** No newer Пинг came after [t]'s: its end ends «Стоп» on the button. */
+    fun isLatest(t: Ticket): Boolean = t.run == latestRun
+}

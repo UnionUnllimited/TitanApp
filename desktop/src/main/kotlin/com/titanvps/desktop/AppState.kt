@@ -112,6 +112,10 @@ class AppState {
     private var proxyPort = 0
     private var updateJob: kotlinx.coroutines.Job? = null
     private var notifiedBuild = 0
+    /** Bumped by each check or install and by closing the dialog: one closed meanwhile does nothing more. */
+    private var updateGen = 0
+    /** Saved as the app quits for an update with the VPN on: the next start connects again. */
+    @Volatile private var reconnectAfterUpdate = false
 
     val selected: Server? get() = subscription?.let { s -> s.servers.firstOrNull { it.id == selectedId } ?: s.servers.firstOrNull() }
 
@@ -142,8 +146,10 @@ class AppState {
         if (subscription != null) {
             refresh(silent = true)
             loadAccount()
-            if (autoConnect) connect()
+            // Also once after an in-app update that quit with the VPN on (as Android does).
+            if (autoConnect || st.reconnectAfterUpdate) connect()
         }
+        if (st.reconnectAfterUpdate) scope.launch(Dispatchers.IO) { persist() }
         // Every half an hour: the subscription once it is as old as its update interval (the app
         // lives in the tray from logon for days), then Напоминания (also after each update).
         scope.launch {
@@ -162,7 +168,7 @@ class AppState {
         Repository.save(
             Repository.State(
                 subscription, selectedId, theme, mode, excludedApps, autoConnect, appsMode, vpnApps, techMode,
-                favorites, reminders, reminded,
+                favorites, reminders, reminded, reconnectAfterUpdate,
             )
         )
     }
@@ -185,6 +191,8 @@ class AppState {
     fun activate(text: String) {
         val url = Links.find(text.trim()) ?: run { showToast("Это не ключ Titan VPS", Toast.Kind.WARNING); return }
         val previous = subscription?.url
+        // The old key's Пинг ends: its results wouldn't land any more ([ping]), nor clear its spinners.
+        stopPing()
         // Also while a refresh of the old key is under way: that one gives way.
         keyGen++
         load(url, silent = false, supersede = true) {
@@ -739,43 +747,62 @@ class AppState {
         }
     }
 
-    /** "Обновление приложения": turns the VPN on if needed (GitHub only through it), then checks. */
+    /**
+     * "Обновление приложения": turns the VPN on if needed (GitHub only through it), then checks.
+     * The dialog can be closed meanwhile (as on Android): the check then shows nothing more.
+     */
     fun checkUpdate() {
         if (update is UpdateState.Downloading || update == UpdateState.Installing) return
         updateDialog = true
+        val gen = ++updateGen
         scope.launch {
-            if (!ensureVpn()) { update = UpdateState.Error("Не удалось включить VPN. Попробуйте ещё раз"); return@launch }
+            if (!ensureVpn(gen)) {
+                if (gen == updateGen) update = UpdateState.Error("Не удалось включить VPN. Попробуйте ещё раз")
+                return@launch
+            }
             update = UpdateState.Checking
-            update = runCatching { viaVpn { withContext(Dispatchers.IO) { Updater.findNewer(proxyPort) } } }
+            val result = runCatching { viaVpn(gen) { withContext(Dispatchers.IO) { Updater.findNewer(proxyPort) } } }
                 .fold({ it?.let(UpdateState::Available) ?: UpdateState.UpToDate }, { UpdateState.Error("Не удалось проверить обновление") })
+            if (gen == updateGen) update = result
         }
     }
 
     fun installUpdate() {
         val release = (update as? UpdateState.Available)?.release ?: return
+        val gen = ++updateGen
         scope.launch {
-            if (!ensureVpn()) { update = UpdateState.Error("Не удалось включить VPN. Попробуйте ещё раз"); return@launch }
+            if (!ensureVpn(gen)) {
+                if (gen == updateGen) update = UpdateState.Error("Не удалось включить VPN. Попробуйте ещё раз")
+                return@launch
+            }
             update = UpdateState.Downloading(0f)
             try {
-                val msi = viaVpn {
+                val msi = viaVpn(gen) {
                     withContext(Dispatchers.IO) {
                         Updater.download(release, proxyPort) { p -> scope.launch { update = UpdateState.Downloading(p) } }
                     }
                 }
                 update = UpdateState.Installing
+                // The download went through the VPN: it was on (also if turned on for it, as on Android).
+                val wasOn = vpnOn
                 withContext(Dispatchers.IO) {
                     Updater.installAndRestart(msi)
+                    // Once the script runs (it waits for this app to quit): the version that opens
+                    // next, the new one or this one if the install fails, connects again.
+                    reconnectAfterUpdate = wasOn
+                    runCatching { persist() }
                     shutdown()
                 }
                 kotlin.system.exitProcess(0)
             } catch (e: Exception) {
-                update = UpdateState.Error("Не удалось скачать обновление. Попробуйте ещё раз")
+                if (gen == updateGen) update = UpdateState.Error("Не удалось скачать обновление. Попробуйте ещё раз")
             }
         }
     }
 
     fun dismissUpdate() {
         updateDialog = false
+        updateGen++
         if (update !is UpdateState.Available && update !is UpdateState.Downloading && update != UpdateState.Installing) update = UpdateState.Idle
     }
 
@@ -784,20 +811,26 @@ class AppState {
         get() = subscription?.servers?.firstOrNull { it.name.contains("авто", ignoreCase = true) }
 
     /**
-     * [block] over the VPN; if it fails on the picked server, once more through АВТО
-     * (a dead server picked must not keep the app from updating).
+     * [block] over the VPN; if GitHub can't be reached through the picked server, once more
+     * through АВТО (a dead server picked must not keep the app from updating). Not when GitHub
+     * answered (an error status: its limit per address, a failure on its side), the server
+     * works then; nor from a bypass server (whitelist mode: АВТО wouldn't open anything); nor
+     * once the dialog was closed ([gen]).
      */
-    private suspend fun <T> viaVpn(block: suspend () -> T): T = try {
+    private suspend fun <T> viaVpn(gen: Int, block: suspend () -> T): T = try {
         block()
-    } catch (e: Exception) {
+    } catch (e: java.io.IOException) {
         val auto = autoServer
-        if (auto == null || selectedId == auto.id || vpn !is VpnState.Connected) throw e
+        val from = selected?.id
+        if (auto == null || from == null || from == auto.id || isBypass(from) || vpn !is VpnState.Connected || gen != updateGen) throw e
         select(auto.id) // reconnects
-        if (!ensureVpn()) throw e
+        if (!ensureVpn(gen)) throw e
         block()
     }
 
-    private suspend fun ensureVpn(): Boolean {
+    /** The VPN on for an update; false when it couldn't be, or the dialog was closed ([gen]). */
+    private suspend fun ensureVpn(gen: Int): Boolean {
+        if (gen != updateGen) return false
         if (vpn is VpnState.Connected) return true
         if (subscription == null) return false
         update = UpdateState.ConnectingVpn
@@ -808,20 +841,25 @@ class AppState {
                 scope.launch(Dispatchers.IO) { persist() }
             }
         }
-        if (vpn != VpnState.Connecting) connect()
+        if (vpn != VpnState.Connecting) {
+            connect()
+            // Not started (TUN asks for administrator rights first): no 45 s wait for nothing.
+            if (vpn != VpnState.Connecting && vpn !is VpnState.Connected) return false
+        }
         repeat(90) {
+            // Closed meanwhile: nothing goes on behind it (no download, no install).
+            if (gen != updateGen || vpn is VpnState.Error) return false
             if (vpn is VpnState.Connected) return true
-            if (vpn is VpnState.Error) return false
             kotlinx.coroutines.delay(500)
         }
-        return vpn is VpnState.Connected
+        return gen == updateGen && vpn is VpnState.Connected
     }
 
     /** Servers being measured right now (spinner, or the old value dimmed). */
     var measuring by mutableStateOf<Set<String>>(emptySet()); private set
 
-    @Volatile private var pingStopped = false
-    private var pingRun = 0
+    /** Which Пинг (or one server's ping) may still change the rows: a stopped or overtaken one doesn't. */
+    private val pingRuns = PingRuns()
     /** Servers in the running Пинг: how much of it is done (the ring on Стоп). */
     private var pingTotal by mutableIntStateOf(0)
     val pingProgress: Float
@@ -834,7 +872,6 @@ class AppState {
     fun pingAll(firstIds: List<String> = emptyList()) {
         val servers = subscription?.servers ?: return
         if (pinging) { stopPing(); return }
-        pingStopped = false
         val ids = servers.map { it.id }
         // A new run measures everything again, also servers stopped by hand before.
         stoppedIds.clear()
@@ -842,14 +879,14 @@ class AppState {
         measuring = measuring + ids
         pingTotal = ids.size
         pinging = true
-        val run = ++pingRun
+        val run = pingRuns.startList()
         // A stopped run finishing late mustn't end a newer one.
-        ping(servers, firstIds.filter { it in ids } + ids.filter { it !in firstIds }) { if (run == pingRun) pinging = false }
+        ping(servers, firstIds.filter { it in ids } + ids.filter { it !in firstIds }, run) { if (pingRuns.isLatest(run)) pinging = false }
     }
 
     /** Stops measuring: servers not measured yet keep their old value (or none). */
     fun stopPing() {
-        pingStopped = true
+        pingRuns.stop()
         Pinger.cancel()
         pinging = false
         measuring = emptySet()
@@ -872,33 +909,44 @@ class AppState {
         }
         stoppedIds -= id
         measuring = measuring + id
-        ping(servers, listOf(id)) {}
+        ping(servers, listOf(id), pingRuns.startOne()) {}
     }
 
-    private fun ping(servers: List<Server>, targets: List<String>, onDone: () -> Unit) {
+    /**
+     * Measures [targets] as [ticket] ([PingRuns]): once a list run is stopped or overtaken, its
+     * late results, «таймаут» and cleared spinners don't land on the newer run; nothing begun
+     * under another key (Выйти, a new key: [keyGen]) lands at all.
+     */
+    private fun ping(servers: List<Server>, targets: List<String>, ticket: PingRuns.Ticket, onDone: () -> Unit) {
+        val gen = keyGen
+        val owns = { gen == keyGen && pingRuns.owns(ticket) }
+        val spins = { gen == keyGen && pingRuns.spins(ticket) }
         scope.launch {
             val answered = HashSet<String>()
             try {
                 withContext(Dispatchers.IO) {
                     Pinger.ping(
                         servers, targets,
-                        onStart = { ids -> if (!pingStopped) scope.launch { measuring = measuring + (ids - stoppedIds) } },
+                        onStart = { ids -> scope.launch { if (spins()) measuring = measuring + (ids - stoppedIds) } },
                         onResult = { id, ms ->
                             scope.launch {
                                 answered += id
+                                if (!owns()) return@launch
                                 if (id !in stoppedIds) pings[id] = ms
-                                measuring = measuring - id
+                                if (spins()) measuring = measuring - id
                             }
                         },
                     )
                 }
             } catch (e: Exception) {
-                if (targets.size > 1) showToast("Не удалось проверить пинг. Попробуйте ещё раз", Toast.Kind.WARNING)
+                if (targets.size > 1 && owns()) showToast("Не удалось проверить пинг. Попробуйте ещё раз", Toast.Kind.WARNING)
             } finally {
                 // Let queued results land first.
                 kotlinx.coroutines.yield()
-                if (!pingStopped) targets.filter { it !in answered && it !in pings && it !in stoppedIds }.forEach { pings[it] = -1 }
-                measuring = measuring - targets.toSet()
+                if (spins()) {
+                    targets.filter { it !in answered && it !in pings && it !in stoppedIds }.forEach { pings[it] = -1 }
+                    measuring = measuring - targets.toSet()
+                }
                 onDone()
             }
         }
@@ -908,6 +956,9 @@ class AppState {
     fun openCabinetUrl(): String = subscription?.info?.webPageUrl ?: Config.TELEGRAM_URL
 
     fun logout() {
+        // A running Пинг ends here (as on Android and iPhone): no «Стоп» on the next key's
+        // Главная, no old results on its list.
+        stopPing()
         // A subscription or account fetch under way doesn't sign the old key back in.
         keyGen++
         busy = false

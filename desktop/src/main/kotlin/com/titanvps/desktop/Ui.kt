@@ -255,6 +255,9 @@ private fun AdminDialog(state: AppState) {
 private fun UpdateDialog(state: AppState) {
     val u = state.update
     val busy = u == UpdateState.ConnectingVpn || u == UpdateState.Checking || u is UpdateState.Downloading || u == UpdateState.Installing
+    // Only the download and the install hold the dialog; turning the VPN on and the check can
+    // be left (as on Android), the VPN then stays on.
+    val locked = u is UpdateState.Downloading || u == UpdateState.Installing
     TitanDialog(
         { state.dismissUpdate() }, "Обновление приложения",
         when (u) {
@@ -273,14 +276,14 @@ private fun UpdateDialog(state: AppState) {
             UpdateState.UpToDate -> Palette.colors.green
             else -> Brand
         },
-        dismissible = !busy,
+        dismissible = !locked,
         content = if (!busy) null else {
             {
                 if (u is UpdateState.Downloading) GradientBar(u.progress)
                 else Box(Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(Palette.colors.track).shimmer(true, Brand, 1200))
             }
         },
-        buttons = if (busy) null else {
+        buttons = if (locked) null else {
             {
                 when (u) {
                     is UpdateState.Available -> PrimaryButton("Обновить", { state.installUpdate() }, icon = Icons.Default.SystemUpdate, height = 48.dp)
