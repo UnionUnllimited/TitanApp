@@ -9,6 +9,7 @@ BASE="${GEO_BASE_URL:-https://github.com/runetfreedom/russia-v2ray-rules-dat/rel
 
 mkdir -p "$DEST"
 for f in geoip.dat geosite.dat; do
-  curl -fL --retry 3 -o "$DEST/$f" "$BASE/$f"
+  # GitHub's release downloads sometimes answer 504 for a minute: wait it out.
+  curl -fL --retry 6 --retry-delay 15 --retry-connrefused -o "$DEST/$f" "$BASE/$f"
 done
 ls -lh "$DEST"/*.dat
