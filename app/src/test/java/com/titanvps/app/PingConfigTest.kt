@@ -3,6 +3,7 @@ package com.titanvps.app
 import com.titanvps.app.core.PingConfig
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PingConfigTest {
@@ -25,5 +26,29 @@ class PingConfigTest {
         val rules = cfg.getJSONObject("routing").getJSONArray("rules")
         assertEquals("p1-proxy", rules.getJSONObject(1).getString("outboundTag"))
         assertEquals("in1", rules.getJSONObject(1).getJSONArray("inboundTag").getString(0))
+    }
+
+    @Test
+    fun theHostAProbeDialsFirst() {
+        // Its own server, lower case.
+        val vless = """{"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"A.Example","port":443,"users":[{"id":"u"}]}]}}]}"""
+        assertEquals("a.example", PingConfig.dialHost(vless, "proxy"))
+        // A chain: its first hop (the entry), past a fragment's freedom that has no server.
+        val chain = """{"outbounds":[
+            {"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"exit.example","port":443}]},"streamSettings":{"sockopt":{"dialerProxy":"entry"}}},
+            {"tag":"entry","protocol":"shadowsocks","settings":{"servers":[{"address":"192.0.2.10","port":8388}]},"streamSettings":{"sockopt":{"dialerProxy":"frag"}}},
+            {"tag":"frag","protocol":"freedom","settings":{"fragment":{"packets":"tlshello"}}}]}"""
+        assertEquals("192.0.2.10", PingConfig.dialHost(chain, "proxy"))
+        assertEquals("192.0.2.10", PingConfig.dialHost(chain, "entry"))
+        // The address in the settings themselves (Hysteria 2; MASQUE as rewritten).
+        val flat = """{"outbounds":[{"tag":"proxy","protocol":"hysteria","settings":{"address":"b.example","port":443}}]}"""
+        assertEquals("b.example", PingConfig.dialHost(flat, "proxy"))
+        // None: a protocol client's local SOCKS, a loop without a server, no such outbound.
+        val local = """{"outbounds":[{"tag":"proxy","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":1080}]}}]}"""
+        assertNull(PingConfig.dialHost(local, "proxy"))
+        val loop = """{"outbounds":[{"tag":"a","protocol":"freedom","streamSettings":{"sockopt":{"dialerProxy":"b"}}},{"tag":"b","protocol":"freedom","streamSettings":{"sockopt":{"dialerProxy":"a"}}}]}"""
+        assertNull(PingConfig.dialHost(loop, "a"))
+        assertNull(PingConfig.dialHost(vless, "other"))
+        assertNull(PingConfig.dialHost("not json", "proxy"))
     }
 }

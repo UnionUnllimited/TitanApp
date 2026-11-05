@@ -24,9 +24,22 @@ class PingRunTest {
     /** Single-threaded by default: the keys are measured in order, so each case is the same every time. */
     private fun pool(threads: Int = 1) = Executors.newFixedThreadPool(threads).also { pools += it }
 
-    /** A fake ping core: each key answers from its script, one value per attempt (-1 = no answer). */
-    private class Fake(script: Map<String, List<Long>>) {
+    /**
+     * A fake ping core: each key answers from its script, one value per attempt (-1 = no answer).
+     * An attempt that [takes] time is counted in flight meanwhile, under its host ([hosts], else
+     * the key itself), in the first pass or in the recheck (its 6 s attempts).
+     */
+    private class Fake(
+        script: Map<String, List<Long>>,
+        private val hosts: Map<String, String> = emptyMap(),
+        private val takes: (String) -> Long = { 0L },
+    ) {
         private val left = script.mapValues { ArrayDeque(it.value) }
+        private val inFlight = HashMap<String, Int>()
+        /** Most attempts in flight at once: "first <host>" / "recheck <host>", "first *" / "recheck *" for all. */
+        val peak = ConcurrentHashMap<String, Int>()
+        /** "start k" / "end k" of each attempt that takes time, in order. */
+        val spans: MutableList<String> = Collections.synchronizedList(mutableListOf())
         /** (key, seconds given) per attempt, in order. */
         val calls: MutableList<Pair<String, Int>> = Collections.synchronizedList(mutableListOf())
         /** Attempts and results in order: "measure k" / "result id". */
@@ -37,6 +50,20 @@ class PingRunTest {
             calls += key to timeoutSec
             log += "measure $key"
             val r = synchronized(left) { left.getValue(key).removeFirstOrNull() } ?: error("$key: no attempt left")
+            val ms = takes(key)
+            if (ms > 0) {
+                val phase = if (timeoutSec == PingRun.RECHECK_TIMEOUT_SEC) "recheck" else "first"
+                val names = listOf("$phase ${hosts[key] ?: key}", "$phase *")
+                synchronized(inFlight) {
+                    spans += "start $key"
+                    names.forEach { n -> inFlight[n] = (inFlight[n] ?: 0) + 1; peak.merge(n, inFlight.getValue(n), ::maxOf) }
+                }
+                Thread.sleep(ms)
+                synchronized(inFlight) {
+                    spans += "end $key"
+                    names.forEach { n -> inFlight[n] = inFlight.getValue(n) - 1 }
+                }
+            }
             if (r < 0) onError("таймаут")
             return r
         }
@@ -242,9 +269,11 @@ class PingRunTest {
         val summary = run(fake, mapOf("U" to listOf("u"), "T" to listOf("t"), "G" to listOf("g")), udp = setOf("u"))
         assertEquals(PingRun.Summary(anyOk = true, servers = 3, probes = 3, missed = 2, missedUdp = 1, rechecked = 2, turnedGood = 1), summary)
         assertEquals(
-            "ping: 3 servers, 3 probes, 2 missed or slow on the first pass (1 over UDP), 2 measured again, 1 of them good, 12.3 s",
+            "ping: 3 servers, 3 probes, 2 missed or slow on the first pass (1 over UDP), 2 measured again, 1 of them good, " +
+                "one at a time on 0 hosts, 0 given up, 12.3 s",
             summary.line(12_345),
         )
+        assertTrue(summary.copy(gatedHosts = 2, gaveUp = 1).line(1_000).contains(", one at a time on 2 hosts, 1 given up, 1.0 s"))
         assertTrue(summary.copy(stopped = true).line(1_000).endsWith("1.0 s, stopped"))
     }
 
@@ -390,5 +419,163 @@ class PingRunTest {
         assertEquals(null, fake.results["A"])
         assertEquals(listOf(PingRun.TIMEOUT_SEC), fake.callsOf("a"))
         assertTrue(summary.stopped)
+    }
+
+    /**
+     * A run whose attempts take time on [threads] threads, [parallel] keys at once in the first
+     * pass (the list pool's size), and more recheck threads than [PingRun.RECHECK_PARALLEL]: the
+     * limits under test are PingRun's own.
+     */
+    private fun runTimed(
+        fake: Fake,
+        servers: Map<String, List<String>>,
+        hosts: Map<String, String>,
+        single: Boolean = false,
+        parallel: Int = 6,
+        ready: (String) -> java.util.concurrent.Future<*>? = { null },
+        started: (List<String>) -> Unit = {},
+    ): PingRun.Summary = PingRun.run(
+        targets = servers.keys.toList(), keysOf = { servers.getValue(it) }, single = single,
+        pool = pool(if (single) 16 else parallel), recheckPool = pool(6), measure = fake::measure, result = fake::result,
+        started = started, ready = ready, hosts = hosts, parallel = if (single) Int.MAX_VALUE else parallel,
+    )
+
+    /** One row per key, in that order. */
+    private fun rows(vararg keys: String) = keys.associate { it.uppercase() to listOf(it) }
+
+    @Test
+    fun aHostGetsOneProbeAtATimeAndOtherHostsGoOnBeside() {
+        // h1..h4 behind one entry; o1..o4 a host each; u1, u2 with no host known (no rule for them).
+        val hosts = mapOf("h1" to "a.example", "h2" to "a.example", "h3" to "a.example", "h4" to "a.example") +
+            (1..4).associate { "o$it" to "192.0.2.$it" }
+        val keys = listOf("u1", "u2", "h1", "o1", "h2", "o2", "h3", "o3", "h4", "o4")
+        val fake = Fake(keys.associateWith { listOf(100L, 90L) }, hosts + mapOf("u1" to "unknown", "u2" to "unknown")) { 40L }
+        val summary = runTimed(fake, rows(*keys.toTypedArray()), hosts)
+        keys.forEach { assertEquals(90L to null, fake.results[it.uppercase()]) }
+        assertEquals(1, fake.peak["first a.example"])
+        // The rest beside it, within the list's six at once; the two with no host side by side.
+        assertTrue(fake.peak.getValue("first *") in 4..6)
+        assertEquals(2, fake.peak["first unknown"])
+        assertEquals(1, summary.gatedHosts)
+        assertEquals(0, summary.gaveUp)
+    }
+
+    @Test
+    fun aHostThatFailedTwiceWithoutAnAnswerIsGivenUp() {
+        // b: down, every key. a: answers first, then its dead ones. c: one miss, then an answer.
+        val hosts = (1..5).associate { "d$it" to "b.example" } + (1..4).associate { "a$it" to "a.example" } +
+            (1..4).associate { "c$it" to "192.0.2.3" }
+        val fake = Fake(
+            (1..5).associate { "d$it" to listOf(-1L, -1L) } +
+                mapOf("a1" to listOf(100L, 90L), "a2" to listOf(-1L, 120L), "a3" to listOf(-1L, -1L), "a4" to listOf(-1L, -1L)) +
+                mapOf("c1" to listOf(-1L, -1L), "c2" to listOf(100L, 90L), "c3" to listOf(-1L, -1L), "c4" to listOf(-1L, -1L)),
+            hosts,
+        ) { 40L }
+        val keys = (1..5).map { "d$it" } + (1..4).map { "a$it" } + (1..4).map { "c$it" }
+        val summary = runTimed(fake, rows(*keys.toTypedArray()), hosts, parallel = 13)
+        // b: two misses one after the other, then the other three at once, still measured (not failed).
+        val first = fake.spans.filter { it.endsWith("d1") || it.endsWith("d2") || it.endsWith("d3") }.take(5)
+        assertEquals(listOf("start d1", "end d1", "start d2", "end d2", "start d3"), first)
+        assertEquals(3, fake.peak["first b.example"])
+        (1..5).forEach { assertEquals(PingRun.TIMEOUT_SEC, fake.callsOf("d$it").first()) }
+        // An entry that answered keeps one at a time, its dead servers too; one miss isn't enough.
+        assertEquals(1, fake.peak["first a.example"])
+        assertEquals(1, fake.peak["first 192.0.2.3"])
+        assertEquals(-1L to "таймаут", fake.results["D3"])
+        assertEquals(120L to null, fake.results["A2"])
+        assertEquals(90L to null, fake.results["C2"])
+        // The recheck counts misses afresh: b given up again, two at a time. a and c answered
+        // in the first pass: one at a time still, c's dead ones too.
+        assertEquals(1, fake.peak["recheck a.example"])
+        assertEquals(1, fake.peak["recheck 192.0.2.3"])
+        assertEquals(2, fake.peak["recheck b.example"])
+        assertEquals(2, fake.peak["recheck *"])
+        assertEquals(3, summary.gatedHosts)
+        assertEquals(1, summary.gaveUp)
+    }
+
+    @Test
+    fun anEntryThatAnsweredIsNotGivenUpInTheRecheck() {
+        // h1 answers; h2, h3 dead; h4, h5 slow, then good. The recheck starts with h2 and h3:
+        // two misses, yet the entry answered before, so h4 and h5 still go one at a time.
+        val hosts = (1..5).associate { "h$it" to "a.example" }
+        val fake = Fake(
+            mapOf("h1" to listOf(100L, 90L), "h2" to listOf(-1L, -1L), "h3" to listOf(-1L, -1L)) +
+                mapOf("h4" to listOf(2000L, 1900L, 100L), "h5" to listOf(2000L, 1900L, 100L)),
+            hosts,
+        ) { 30L }
+        val summary = runTimed(fake, rows("h1", "h2", "h3", "h4", "h5"), hosts)
+        assertEquals(listOf("h2", "h3", "h4", "h5"), fake.calls.filter { it.second == PingRun.RECHECK_TIMEOUT_SEC }.map { it.first })
+        assertEquals(1, fake.peak["first a.example"])
+        assertEquals(1, fake.peak["recheck a.example"])
+        assertEquals(100L to null, fake.results["H5"])
+        assertEquals(-1L to "таймаут", fake.results["H3"])
+        assertEquals(0, summary.gaveUp)
+    }
+
+    @Test
+    fun theRecheckGoesTwoAtATimeOnePerHost() {
+        // Slow on the first pass (2 s), good in the recheck: x1..x3 behind one entry, y1, v1 a
+        // host each, u1 none; z1 good at once. x2 and x3 come last in the recheck, one after the other.
+        val hosts = mapOf("x1" to "a.example", "x2" to "a.example", "x3" to "a.example", "y1" to "b.example", "v1" to "192.0.2.9")
+        val slow = listOf("x1", "x2", "x3", "y1", "v1", "u1")
+        val fake = Fake(slow.associateWith { listOf(2000L, 1900L, 100L) } + mapOf("z1" to listOf(100L, 90L)), hosts) { 30L }
+        val summary = runTimed(fake, rows(*(slow + "z1").toTypedArray()), hosts)
+        slow.forEach { assertEquals(100L to null, fake.results[it.uppercase()]) }
+        slow.forEach { assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.SECOND_TIMEOUT_SEC, PingRun.RECHECK_TIMEOUT_SEC), fake.callsOf(it)) }
+        assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.SECOND_TIMEOUT_SEC), fake.callsOf("z1"))
+        // Two at a time (as iOS), whatever the pool; one per host.
+        assertEquals(2, fake.peak["recheck *"])
+        assertEquals(1, fake.peak["recheck a.example"])
+        assertEquals(1, fake.peak["first a.example"])
+        assertEquals(6, summary.rechecked)
+        assertEquals(6, summary.turnedGood)
+    }
+
+    @Test
+    fun aKeyWaitingForItsHostGoesBeforeTheRestOfTheList() {
+        // Two at a time; A and B behind one entry. B waits for A, then starts before D.
+        val hosts = mapOf("a" to "a.example", "b" to "a.example", "c" to "192.0.2.3", "d" to "192.0.2.4")
+        val fake = Fake(listOf("a", "b", "c", "d").associateWith { listOf(100L, 90L) }, hosts) { if (it == "c") 150L else 20L }
+        val started = Collections.synchronizedList(mutableListOf<String>())
+        runTimed(fake, rows("a", "b", "c", "d"), hosts, parallel = 2, started = { started += it })
+        // A and C side by side (either may tell first), then B, then D.
+        assertEquals(setOf("A", "C"), started.take(2).toSet())
+        assertEquals(listOf("B", "D"), started.drop(2))
+        assertEquals(1, fake.peak["first a.example"])
+    }
+
+    @Test
+    fun aSingleRequestHoldsItsMembersToOnePerHostToo() {
+        // АВТО tapped: four members behind one entry, one elsewhere beside them; no recheck.
+        val hosts = (1..4).associate { "m$it" to "a.example" } + mapOf("m5" to "192.0.2.5")
+        val fake = Fake(
+            mapOf("m1" to listOf(300L, 280L), "m2" to listOf(-1L), "m3" to listOf(200L, 190L), "m4" to listOf(250L, 240L), "m5" to listOf(400L, 390L)),
+            hosts,
+        ) { 30L }
+        runTimed(fake, mapOf("AUTO" to listOf("m1", "m2", "m3", "m4", "m5")), hosts, single = true)
+        assertEquals(190L to null, fake.results["AUTO"])
+        assertEquals(1, fake.peak["first a.example"])
+        assertEquals(2, fake.peak["first *"])
+        assertEquals(listOf(PingRun.TIMEOUT_SEC), fake.callsOf("m2"))
+        // One server of one node: as before, two attempts.
+        val one = Fake(mapOf("k" to listOf(300L, 280L)), mapOf("k" to "a.example")) { 10L }
+        runTimed(one, mapOf("K" to listOf("k")), mapOf("k" to "a.example"), single = true)
+        assertEquals(280L to null, one.results["K"])
+        assertEquals(listOf(PingRun.TIMEOUT_SEC, PingRun.SECOND_TIMEOUT_SEC), one.callsOf("k"))
+    }
+
+    @Test
+    fun aProtocolClientThatDidNotStartSaysNothingAboutItsHost() {
+        // p1, p2: their client didn't start; p3, p4 still one at a time behind their server.
+        val hosts = (1..4).associate { "p$it" to "a.example" }
+        val fake = Fake(mapOf("p3" to listOf(100L, 90L), "p4" to listOf(100L, 90L)), hosts) { 30L }
+        runTimed(
+            fake, rows("p1", "p2", "p3", "p4"), hosts,
+            ready = { if (it == "p1" || it == "p2") CompletableFuture.failedFuture<Unit>(IllegalStateException("exited")) else null },
+        )
+        assertEquals(-1L to "клиент протокола не запустился", fake.results["P1"])
+        assertEquals(90L to null, fake.results["P4"])
+        assertEquals(1, fake.peak["first a.example"])
     }
 }

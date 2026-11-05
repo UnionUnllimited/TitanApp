@@ -7,6 +7,8 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * How [PingService] measures one request, apart from Android and the core: it is handed one
@@ -18,16 +20,24 @@ internal object PingRun {
     const val TIMEOUT_SEC = 4
     /** The second attempt, only after an answer (the first handshake is often the slow part). */
     const val SECOND_TIMEOUT_SEC = 3
-    /** A list's miss or slow answer, measured again alone once the list is done. */
+    /** A list's miss or slow answer, measured again once the list is done. */
     const val RECHECK_TIMEOUT_SEC = 6
     const val RECHECK_ABOVE_MS = 1500L
+    /** The recheck: two at a time, as a ping by hand (alone, a server that is up answers). */
+    const val RECHECK_PARALLEL = 2
+    /**
+     * A host that failed this often without ever answering is likely down: its other probes
+     * stop waiting for one another ([run]).
+     */
+    const val HOST_GIVE_UP = 2
 
     /**
      * In a list run (not [single]) a miss or an answer slower than [RECHECK_ABOVE_MS] is
-     * measured again alone once the list is done, over TCP as over UDP: the first attempt is
-     * cold and crowded (6 at once, often on a core just started, beside the phone's own new
-     * connections while the VPN is on), and as the last word it showed 3000+ ms or «таймаут»
-     * for servers that answered normally on the next Пинг. One server asked for runs alone.
+     * measured again once the list is done ([RECHECK_PARALLEL] at a time), over TCP as over
+     * UDP: the first attempt is cold and crowded (6 at once, often on a core just started,
+     * beside the phone's own new connections while the VPN is on), and as the last word it
+     * showed 3000+ ms or «таймаут» for servers that answered normally on the next Пинг. One
+     * server asked for runs alone.
      * A request can ask for no recheck ([recheck]); then only UDP gets a second chance
      * ([run]).
      */
@@ -68,12 +78,20 @@ internal object PingRun {
         val turnedGood: Int = 0,
         /** Stopped by hand before the end. */
         val stopped: Boolean = false,
+        /** Hosts whose probes waited for one another (one at a time per host), in either pass. */
+        val gatedHosts: Int = 0,
+        /** Hosts given up as down ([HOST_GIVE_UP] misses, no answer) in either pass. */
+        val gaveUp: Int = 0,
     ) {
         fun line(elapsedMs: Long): String =
             "ping: $servers servers, $probes probes, $missed missed or slow on the first pass ($missedUdp over UDP), " +
                 "$rechecked measured again, $turnedGood of them good, " +
+                "one at a time on $gatedHosts hosts, $gaveUp given up, " +
                 String.format(Locale.US, "%.1f s", elapsedMs / 1000.0) + if (stopped) ", stopped" else ""
     }
+
+    /** What the one-probe-per-host rule did in a pass: hosts held to it, hosts given up as down. */
+    private class Gate(val waited: Set<String>, val down: Set<String>)
 
     /**
      * Every server is measured on its keys (a balancer: its members, the first [maxMembers]);
@@ -85,6 +103,17 @@ internal object PingRun {
      * UDP; [recheck]: false, no recheck at the end of a list either (the request's "recheck"),
      * only a bad result over UDP of a server measured on that key alone is measured once
      * more right away.
+     *
+     * [hosts]: the host a key dials first (none: no rule for it). A host gets one probe at a
+     * time, in both passes and in a single request too, until it has failed [HOST_GIVE_UP]
+     * times without ever answering: servers behind one entry that doesn't take several new
+     * connections at once all timed out pinged together, yet answered one by one (as on iOS).
+     * Unlike iOS, the recheck remembers the hosts that answered in the first pass: an entry
+     * whose first servers measured again are dead is still up, and given up it took the rest
+     * of its servers all at once again.
+     * [parallel]: keys measured at once in the first pass (the list pool's size; the recheck:
+     * [RECHECK_PARALLEL]), so a key whose host was busy starts as soon as it's free, ahead of
+     * those below it.
      */
     fun run(
         targets: List<String>,
@@ -100,6 +129,8 @@ internal object PingRun {
         cancelled: () -> Boolean = { false },
         maxMembers: Int = Int.MAX_VALUE,
         recheck: Boolean = true,
+        hosts: Map<String, String> = emptyMap(),
+        parallel: Int = Int.MAX_VALUE,
     ): Summary {
         val keys = targets.associateWith { keysOf(it).take(maxMembers) }
         val best = HashMap<String, Long>()
@@ -161,62 +192,138 @@ internal object PingRun {
 
         val missed = AtomicInteger()
         val missedUdp = AtomicInteger()
-        // Keys go into the pool in the order of the servers asked for, so the list fills top-down.
-        serversByKey.map { (key, ids) ->
-            pool.submit {
-                if (cancelled()) return@submit
-                synchronized(lock) {
-                    val fresh = ids.filter { startedIds.add(it) }
-                    if (fresh.isNotEmpty()) started(fresh)
-                }
-                // Through a protocol client: once it is up (it didn't start: no answer).
-                ready(key)?.let { start ->
-                    if (runCatching { start.get(30, TimeUnit.SECONDS) }.isFailure) {
-                        report(key, -1L, "клиент протокола не запустился")
-                        return@submit
-                    }
-                }
-                var error: String? = null
-                var r = measureKey(key) { error = it }
-                // No recheck at the end (the watcher's lists): a miss or slow answer over UDP
-                // (Hysteria, TUIC: often just the crowd) is measured once more alone at once, on
-                // this thread, never behind Главная's rechecks. Only for a server of its own: a
-                // balancer has its other members, and each dead one measured again would take
-                // the watcher's look past its time limit.
-                if (!recheck && !single && key in udp && (r < 0 || r > RECHECK_ABOVE_MS) &&
-                    serversByKey.getValue(key).any { keys.getValue(it).size == 1 }
-                ) {
-                    r = bestOf(r, measure(key, RECHECK_TIMEOUT_SEC) { error = it })
-                }
-                val again = needsRecheck(single || !recheck, r)
-                if (again) {
-                    missed.incrementAndGet()
-                    if (key in udp) missedUdp.incrementAndGet()
-                }
-                // A bad result waits for the recheck at the end, unless its servers are done anyway.
-                if (again && !settled(key)) hold(key, r, error) else report(key, r, error)
+        /** Hosts that answered in this run: never given up. */
+        val answered = HashSet<String>()
+        // Keys start in the order of the servers asked for, so the list fills top-down.
+        val firstPass = gated(serversByKey.keys.toList(), hosts, parallel, pool, cancelled, answered) { key ->
+            val ids = serversByKey.getValue(key)
+            if (cancelled()) return@gated null
+            synchronized(lock) {
+                val fresh = ids.filter { startedIds.add(it) }
+                if (fresh.isNotEmpty()) started(fresh)
             }
-        }.forEach { runCatching { it.get() } }
-        val summary = Summary(false, targets.size, serversByKey.size, missed.get(), missedUdp.get())
+            // Through a protocol client: once it is up (it didn't start: no answer, and nothing
+            // about its host).
+            ready(key)?.let { start ->
+                if (runCatching { start.get(30, TimeUnit.SECONDS) }.isFailure) {
+                    report(key, -1L, "клиент протокола не запустился")
+                    return@gated null
+                }
+            }
+            var error: String? = null
+            var r = measureKey(key) { error = it }
+            // No recheck at the end (the watcher's lists): a miss or slow answer over UDP
+            // (Hysteria, TUIC: often just the crowd) is measured once more alone at once, on
+            // this thread, never behind Главная's rechecks. Only for a server of its own: a
+            // balancer has its other members, and each dead one measured again would take
+            // the watcher's look past its time limit.
+            if (!recheck && !single && key in udp && (r < 0 || r > RECHECK_ABOVE_MS) &&
+                serversByKey.getValue(key).any { keys.getValue(it).size == 1 }
+            ) {
+                r = bestOf(r, measure(key, RECHECK_TIMEOUT_SEC) { error = it })
+            }
+            val again = needsRecheck(single || !recheck, r)
+            if (again) {
+                missed.incrementAndGet()
+                if (key in udp) missedUdp.incrementAndGet()
+            }
+            // A bad result waits for the recheck at the end, unless its servers are done anyway.
+            if (again && !settled(key)) hold(key, r, error) else report(key, r, error)
+            r >= 0
+        }
+        val summary = Summary(
+            false, targets.size, serversByKey.size, missed.get(), missedUdp.get(),
+            gatedHosts = firstPass.waited.size, gaveUp = firstPass.down.size,
+        )
         if (cancelled()) return summary.copy(anyOk = best.isNotEmpty(), stopped = true)
-        // A few at a time, one attempt each; keep the better of the two runs. Not needed when
+        // Two at a time, one attempt each; keep the better of the two runs. Not needed when
         // every server using it already has a good result (e.g. another balancer member).
         val (needed, done) = firstRun.toList().partition { (key, _) -> !settled(key) }
         done.forEach { (key, first) -> report(key, first, recheckError[key]) }
+        val firstOf = needed.toMap()
         val rechecked = AtomicInteger()
         val turnedGood = AtomicInteger()
-        needed.map { (key, first) ->
-            recheckPool.submit {
-                if (cancelled()) return@submit
-                var error: String? = null
-                val again = measure(key, RECHECK_TIMEOUT_SEC) { error = it }
-                rechecked.incrementAndGet()
-                if (again in 0..RECHECK_ABOVE_MS) turnedGood.incrementAndGet()
-                report(key, bestOf(first, again), error ?: recheckError[key])
-            }
-        }.forEach { runCatching { it.get() } }
+        // One per host here too, as by hand; the first pass's misses don't count against a host.
+        val recheckPass = gated(needed.map { it.first }, hosts, RECHECK_PARALLEL, recheckPool, cancelled, answered) { key ->
+            if (cancelled()) return@gated null
+            var error: String? = null
+            val again = measure(key, RECHECK_TIMEOUT_SEC) { error = it }
+            rechecked.incrementAndGet()
+            if (again in 0..RECHECK_ABOVE_MS) turnedGood.incrementAndGet()
+            report(key, bestOf(firstOf.getValue(key), again), error ?: recheckError[key])
+            again >= 0
+        }
         return summary.copy(
             anyOk = best.isNotEmpty(), rechecked = rechecked.get(), turnedGood = turnedGood.get(), stopped = cancelled(),
+            gatedHosts = (firstPass.waited + recheckPass.waited).size, gaveUp = (firstPass.down + recheckPass.down).size,
         )
+    }
+
+    /**
+     * Runs [work] on [keys] in [pool], in that order, at most [parallel] at once and one at a
+     * time per host ([hosts]; a key without one isn't held): a key whose host is busy waits,
+     * the keys below it go ahead. Once a host has failed [HOST_GIVE_UP] times here and never
+     * answered ([answered]: hosts that did, in this run; updated), its keys start without
+     * waiting for one another (as iOS: they're measured, not failed; one dead server behind
+     * a live entry isn't enough). [work]: whether the key answered, null when it tells nothing
+     * about the host. Stopped: nothing new starts; returns once what started is done.
+     */
+    private fun gated(
+        keys: List<String>,
+        hosts: Map<String, String>,
+        parallel: Int,
+        pool: ExecutorService,
+        cancelled: () -> Boolean,
+        answered: MutableSet<String>,
+        work: (String) -> Boolean?,
+    ): Gate {
+        val gate = ReentrantLock()
+        val finished = gate.newCondition()
+        val pending = keys.toMutableList()
+        val busy = HashMap<String, Int>()
+        val fails = HashMap<String, Int>()
+        val down = HashSet<String>()
+        val waited = HashSet<String>()
+        var running = 0
+        gate.withLock {
+            while (true) {
+                val next = pending.iterator()
+                while (running < parallel && !cancelled() && next.hasNext()) {
+                    val key = next.next()
+                    val host = hosts[key]
+                    if (host != null && host !in down && (busy[host] ?: 0) > 0) {
+                        waited += host
+                        continue
+                    }
+                    next.remove()
+                    if (host != null) busy[host] = (busy[host] ?: 0) + 1
+                    running++
+                    pool.submit {
+                        var ok: Boolean? = null
+                        try {
+                            ok = work(key)
+                        } finally {
+                            gate.withLock {
+                                running--
+                                if (host != null) {
+                                    busy[host] = busy.getValue(host) - 1
+                                    if (ok == true) {
+                                        answered += host
+                                        down -= host
+                                    } else if (ok == false && host !in answered) {
+                                        fails[host] = (fails[host] ?: 0) + 1
+                                        if (fails.getValue(host) >= HOST_GIVE_UP) down += host
+                                    }
+                                }
+                                finished.signal()
+                            }
+                        }
+                    }
+                }
+                if (running == 0 && (pending.isEmpty() || cancelled())) break
+                finished.await()
+            }
+        }
+        return Gate(waited, down)
     }
 }

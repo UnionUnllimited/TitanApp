@@ -67,4 +67,27 @@ object PingConfig {
             .put("routing", JSONObject().put("domainStrategy", "AsIs").put("rules", rules))
             .toString()
     }
+
+    /**
+     * The host a probe through [tag] dials first (lower case), for the ping's one probe at a
+     * time per host ([PingRun.run]): the server of the last outbound of its dialerProxy chain
+     * that has one (a chain's first hop; a fragment's freedom has none, the hop before it
+     * dials), else its own. Null when there's none, or it's this phone (a protocol client's
+     * local SOCKS: its own server is the host, see [Plugins.endpoint]).
+     */
+    fun dialHost(xrayJson: String, tag: String): String? {
+        val src = runCatching { JSONObject(xrayJson).optJSONArray("outbounds") }.getOrNull() ?: return null
+        val byTag = (0 until src.length()).mapNotNull { src.optJSONObject(it) }.associateBy { it.optString("tag") }
+        var host: String? = null
+        val seen = HashSet<String>()
+        var next: String? = tag
+        while (next != null && seen.add(next)) {
+            val ob = byTag[next] ?: break
+            val settings = ob.optJSONObject("settings")
+            val server = settings?.optJSONArray("vnext")?.optJSONObject(0) ?: settings?.optJSONArray("servers")?.optJSONObject(0) ?: settings
+            server?.optString("address")?.takeIf { it.isNotEmpty() }?.let { host = it.lowercase() }
+            next = ob.optJSONObject("streamSettings")?.optJSONObject("sockopt")?.optString("dialerProxy")?.takeIf { it.isNotEmpty() }
+        }
+        return host?.takeUnless { it == "localhost" || it == "::1" || it.startsWith("127.") }
+    }
 }

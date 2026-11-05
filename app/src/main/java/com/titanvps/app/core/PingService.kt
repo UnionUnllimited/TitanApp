@@ -28,7 +28,8 @@ import java.util.concurrent.TimeUnit
  * while the list is still being measured) starts measuring right away. Servers are
  * measured in the order asked, a few at a time, and each result is reported as soon as
  * it's ready; in Главная's list, a miss or a slow answer only after it was measured again
- * alone at the end ([PingRun]). Falls back to libXray's pingBatch if the core can't start.
+ * at the end. One probe at a time per host it dials first ([PingRun]). Falls back to
+ * libXray's pingBatch if the core can't start.
  */
 class PingService : Service() {
 
@@ -46,12 +47,14 @@ class PingService : Service() {
         val udp: Set<String> = emptySet(),
         /** Probes through a protocol client still starting: measured once it is up. */
         val ready: Map<String, java.util.concurrent.Future<*>> = emptyMap(),
+        /** The host each probe dials first: one probe at a time per host ([PingRun.run]). */
+        val hosts: Map<String, String> = emptyMap(),
     )
 
     private val requests = Executors.newCachedThreadPool()
     private val listPool: ExecutorService = Executors.newFixedThreadPool(PARALLEL)
     private val singlePool: ExecutorService = Executors.newCachedThreadPool()
-    private val recheckPool: ExecutorService = Executors.newFixedThreadPool(RECHECK_PARALLEL)
+    private val recheckPool: ExecutorService = Executors.newFixedThreadPool(PingRun.RECHECK_PARALLEL)
     private val startPool: ExecutorService = Executors.newFixedThreadPool(8)
     private val main = Handler(Looper.getMainLooper())
     private val coreLock = Any()
@@ -158,6 +161,7 @@ class PingService : Service() {
         data class Probe(val json: String, val tag: String)
         val probes = LinkedHashMap<String, Probe>()
         val udp = HashSet<String>()
+        val hosts = HashMap<String, String>()
         val serverKeys = servers.associate { item ->
             val json = jsonOf.getValue(item.getString("id"))
             // TUIC (sing-box client) and MASQUE over H3 run over UDP whatever the outbound says.
@@ -168,6 +172,9 @@ class PingService : Service() {
                 if (key !in probes && probes.size < MAX_PROBES) probes[key] = Probe(json, tag)
                 if (key in probes && (serverUdp || isUdp(json, tag))) udp += key
                 startOf[item.getString("id")]?.let { if (key in probes) ready[key] = it }
+                // From the server's own config: through a protocol client the probe dials that
+                // client's server (still in its outbound there), not the local SOCKS [json] points at.
+                if (key in probes && key !in hosts) PingConfig.dialHost(item.getString("json"), tag)?.let { hosts[key] = it }
                 key.takeIf { it in probes }
             }.distinct()
         }
@@ -179,7 +186,7 @@ class PingService : Service() {
             plugins.forEach { runCatching { it.close() } }
             throw e
         }
-        Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp, ready).also { session = it }
+        Session(sigs, keys.zip(ports).toMap(), serverKeys, plugins, udp, ready, hosts).also { session = it }
     }
 
     /**
@@ -231,6 +238,10 @@ class PingService : Service() {
         cancelled = cancelled,
         maxMembers = maxMembers,
         recheck = recheck,
+        // A single request has no limit of its own (its pool grows), but one per host too: a
+        // balancer's members behind one entry are the same burst as a list's.
+        hosts = s.hosts,
+        parallel = if (single) Int.MAX_VALUE else PARALLEL,
     )
 
     /** Hysteria, QUIC, mKCP… outbounds: they go over UDP. */
@@ -334,7 +345,6 @@ class PingService : Service() {
         const val RESULT_STARTED = 2
         const val RESULT_DONE = 0
         private const val PING_URL = "https://www.gstatic.com/generate_204"
-        private const val RECHECK_PARALLEL = 3
         private const val RETRY_TIMEOUT_SEC = 10 // pingBatch fallback
         private const val PARALLEL = 6 // more at once crowd each other out on a weak mobile network
         private const val MAX_PROBES = 200
