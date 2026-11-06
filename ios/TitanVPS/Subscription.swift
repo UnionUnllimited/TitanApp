@@ -284,6 +284,11 @@ enum SubscriptionAPI {
     /// "tfo" dial with TFO.
     static func applyTfo(_ name: String, _ proxy: inout [String: Any]) {
         guard name.lowercased().contains("tfo") || ((proxy["titan"] as? String) ?? "").lowercased().contains("tfo") else { return }
+        tfoOn(&proxy)
+    }
+
+    /// TCP Fast Open on the outbound's dial, marker or not (Технический режим, Techniques).
+    static func tfoOn(_ proxy: inout [String: Any]) {
         var stream = proxy["streamSettings"] as? [String: Any] ?? [:]
         var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
         sockopt["tcpFastOpen"] = true
@@ -298,8 +303,13 @@ enum SubscriptionAPI {
     /// handshake. The server inbound must be "auto" or "packet-up"; a stream-up-only inbound answers
     /// packet-up with 400. Marker-gated, so the stream-up production servers are untouched.
     static func applyPacketUp(_ name: String, _ outbound: inout [String: Any]) {
-        guard name.lowercased().contains("pktup") || ((outbound["titan"] as? String) ?? "").lowercased().contains("pktup"),
-              var stream = outbound["streamSettings"] as? [String: Any],
+        guard name.lowercased().contains("pktup") || ((outbound["titan"] as? String) ?? "").lowercased().contains("pktup") else { return }
+        packetUpOn(&outbound)
+    }
+
+    /// XHTTP packet-up over TFO, marker or not (Технический режим, Techniques).
+    static func packetUpOn(_ outbound: inout [String: Any]) {
+        guard var stream = outbound["streamSettings"] as? [String: Any],
               ["xhttp", "splithttp"].contains((stream["network"] as? String) ?? "") else { return }
         // Packet-up rides a SYN only over TFO.
         var sockopt = stream["sockopt"] as? [String: Any] ?? [:]
@@ -309,6 +319,25 @@ enum SubscriptionAPI {
         var xhttp = stream[key] as? [String: Any] ?? [:]
         xhttp["mode"] = "packet-up"
         if var extra = xhttp["extra"] as? [String: Any] { extra["mode"] = "packet-up"; xhttp["extra"] = extra }
+        stream[key] = xhttp
+        outbound["streamSettings"] = stream
+    }
+
+    /// Технический режим's «Короткие запросы XHTTP» off: an XHTTP upload that would go in
+    /// packet-up (set so, or "auto" without REALITY, which Xray's client makes packet-up) streams
+    /// up instead. TFO stays as it is (its own switch).
+    static func packetUpOff(_ outbound: inout [String: Any]) {
+        guard var stream = outbound["streamSettings"] as? [String: Any],
+              ["xhttp", "splithttp"].contains((stream["network"] as? String) ?? "") else { return }
+        let reality = (stream["security"] as? String) == "reality"
+        func streamUp(_ s: inout [String: Any]) {
+            let mode = (s["mode"] as? String) ?? ""
+            if mode == "packet-up" || (!reality && (mode.isEmpty || mode == "auto")) { s["mode"] = "stream-up" }
+        }
+        let key = stream["xhttpSettings"] != nil ? "xhttpSettings" : "splithttpSettings"
+        var xhttp = stream[key] as? [String: Any] ?? [:]
+        streamUp(&xhttp)
+        if var extra = xhttp["extra"] as? [String: Any], extra["mode"] != nil { streamUp(&extra); xhttp["extra"] = extra }
         stream[key] = xhttp
         outbound["streamSettings"] = stream
     }

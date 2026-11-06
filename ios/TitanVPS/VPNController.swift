@@ -300,10 +300,11 @@ final class VPNController: ObservableObject {
 
     /// What a profile's config was built from: the subscription's server as it was then (its
     /// «sniffing-enable: 0» too: parseServers marks the server's config), and the XrayRunConfig
-    /// that built it.
+    /// that built it, and Технический режим's techniques for it if any (Techniques).
     nonisolated static func source(_ server: Server) -> String {
-        SHA256.hash(data: Data((server.xrayJson ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
-            + "-v\(XrayRunConfig.version)"
+        let techniques = TechniqueStore.of(server.name)
+        return SHA256.hash(data: Data((server.xrayJson ?? "").utf8)).map { String(format: "%02x", $0) }.joined()
+            + "-v\(XrayRunConfig.version)" + (techniques.isEmpty ? "" : "-t\(techniques.signature)")
     }
 
     /// The profile's config isn't what this build makes of its server as the subscription has it

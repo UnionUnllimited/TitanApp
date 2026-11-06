@@ -403,6 +403,32 @@ tcpdump -nr /root/t.pcap -vv 'src host <IP клиента> and tcp[tcpflags] & t
 nstat -az TcpExtTCPFastOpenPassive TcpExtTCPFastOpenPassiveFail TcpExtTCPFastOpenCookieReqd
 ```
 
+## Приёмы против блокировок (iOS)
+
+- «Технический режим» → «Приёмы против блокировок»: на выбранном сервере вручную включить или
+  выключить TCP Fast Open, короткие запросы XHTTP (packet-up) и дробление ClientHello — чтобы
+  проверить ноду, которую режут. Только на этом устройстве: `UserDefaults` `titanTechniques`,
+  ключ — имя сервера с флагом, как в списке (переживает обновление подписки), «Сбросить все»
+  очищает. Строки таких серверов в списке подписаны «приёмы», в отчёте — строка на сервер.
+- Применяются в `Plugins.prepare` (`Techniques.apply`, `ios/TitanVPS/Techniques.swift`) — то есть
+  в подключении, пинге списка (и тёплой второй попытке), «Проверить соединение» и профиле VPN
+  (Пункт управления, «Не отключать VPN»); выбор входит в `VPNController.source`, так что профиль
+  пересобирается. Без выбора конфиг байт в байт прежний. Действует со следующего подключения
+  (в карточке есть «Переподключить», если выбран подключённый сервер).
+- TFO «Вкл» = метка «tfo» (`tfoOn`, затем `fitXhttpInSyn`), «Выкл» = `dropTfo` на выходе прокси.
+  Короткие запросы «Вкл» = метка «pktup» (`packetUpOn`, только XHTTP); «Выкл» — режим stream-up
+  вместо packet-up (и вместо «auto» без REALITY, который клиент Xray делает packet-up), TFO не
+  трогает. Если выбраны оба, TFO решает его переключатель.
+- Дробление: выход `{"tag":"frag","protocol":"freedom","settings":{"fragment":{"packets":"tlshello",…}}}`
+  в конце списка и `sockopt.dialerProxy = "frag"` у прокси; остальные `sockopt` прокси (TFO и пр.)
+  копируются во `frag` — TCP-дайл теперь его, и первый кусок с TFO уходит в SYN. Пресеты: «Мелко»
+  10-30 Б / 5-10 мс, «Средне» 50-100 / 10-20, «Разбить TLS-запись» 100-200 / 0 — при интервале 0
+  Xray v26.9.30 (`FragmentWriter`) склеивает записи в одну запись в сокет: режется только
+  TLS-запись, не TCP-сегменты. Пинг libXray (`preparePingOutbounds`) берёт `frag` по `dialerProxy`.
+- Не подходит (карточка так и пишет): серверам-плагинам (sing-box / mieru / MASQUE) — все три;
+  UDP (mKCP, XHTTP на HTTP/3, Hysteria, WireGuard) — TFO и дробление; дробление — и прокси,
+  у которого панель уже задала `dialerProxy`; короткие запросы — всему, кроме XHTTP.
+
 ## Память туннеля на iOS
 
 iOS даёт туннелю (Packet Tunnel Extension) около 50 МБ `phys_footprint` и при превышении молча

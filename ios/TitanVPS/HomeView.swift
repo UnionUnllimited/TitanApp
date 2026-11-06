@@ -5,6 +5,8 @@ struct HomeView: View {
     @EnvironmentObject var vpn: VPNController
     /// Why a ping or a check failed is shown in Технический режим only.
     @AppStorage(TechMode.key) private var techMode = false
+    /// Технический режим's techniques per server (TechniqueStore): their rows say «приёмы».
+    @AppStorage(TechniqueStore.key) private var techniquesData = Data()
     @State private var page: ServerGroup = .servers
     @State private var wifiInfo = false
     /// The Выкл | Вкл knob or a server row is being dragged sideways: the page stays still.
@@ -370,6 +372,7 @@ struct HomeView: View {
             // Read once for the list, not per row.
             let selectedId = store.selected?.id
             let wifiLock = store.bypassLockedOnWifi
+            let tricked = Set(TechniqueStore.decode(techniquesData).keys)
             // Favourites first, in the subscription's order otherwise.
             let items = groups[page] ?? groups[.servers] ?? []
             ForEach(ServerGroup.ordered(items, favorites: store.favorites)) { s in
@@ -378,7 +381,7 @@ struct HomeView: View {
                 ServerListRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
                               unsupported: store.unsupported.contains(s.id), error: techMode ? store.pingErrors[s.id] : nil,
                               limited: page == .bypass && ServerGroup.isLimited(s), favorite: store.isFavorite(s),
-                              locked: locked, selected: s.id == selectedId,
+                              locked: locked, selected: s.id == selectedId, tricks: tricked.contains(s.name),
                               onPick: { pick(s) }, onLocked: { Haptics.warning(); wifiInfo = true },
                               onPing: { store.pingOne(s) }, onFavorite: { store.toggleFavorite(s) },
                               onHold: { holdingDrag = $0 })
@@ -534,6 +537,8 @@ struct ServerListRow: View, Equatable {
     let pending, unsupported: Bool
     let error: String?
     let limited, favorite, locked, selected: Bool
+    /// Технический режим has techniques on for it (Techniques).
+    let tricks: Bool
     let onPick: () -> Void
     let onLocked: () -> Void
     let onPing: () -> Void
@@ -545,7 +550,7 @@ struct ServerListRow: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.server == b.server && a.ping == b.ping && a.pending == b.pending && a.unsupported == b.unsupported
             && a.error == b.error && a.limited == b.limited && a.favorite == b.favorite
-            && a.locked == b.locked && a.selected == b.selected
+            && a.locked == b.locked && a.selected == b.selected && a.tricks == b.tricks
     }
 
     var body: some View {
@@ -560,7 +565,7 @@ struct ServerListRow: View, Equatable {
         ) {
             ServerRow(server: server, ping: ping, pending: pending, unsupported: unsupported,
                       onPing: onPing, error: error, limited: limited, favorite: favorite, locked: locked,
-                      selected: selected) {
+                      selected: selected, tricks: tricks) {
                 if locked { onLocked(); return }
                 onPick()
             }
@@ -596,6 +601,8 @@ struct ServerRow: View {
     /// A bypass server while on Wi-Fi: dimmed, a tap explains why.
     var locked: Bool = false
     let selected: Bool
+    /// Технический режим has techniques on for it: «приёмы» beside the line under the name.
+    var tricks: Bool = false
     let onTap: () -> Void
 
     var body: some View {
@@ -608,9 +615,12 @@ struct ServerRow: View {
                         if favorite { Image(systemName: "star.fill").font(.scaled(11)).foregroundStyle(.yellow) }
                         MarqueeText(text: name, font: .scaled(16, weight: .semibold))
                     }
-                    Text(unsupported ? "Пока не работает на iPhone" : limited ? "Лимитный · расходует ГБ" : "Безлимит")
-                        .font(.scaled(11))
-                        .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
+                    HStack(spacing: 6) {
+                        Text(unsupported ? "Пока не работает на iPhone" : limited ? "Лимитный · расходует ГБ" : "Безлимит")
+                            .font(.scaled(11))
+                            .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
+                        if tricks { Text("приёмы").font(.scaled(11)).foregroundStyle(.secondary) }
+                    }
                     if let error, ping == -1, !pending {
                         // The whole text: long press → Скопировать ошибку.
                         Text(error).font(.scaled(10)).foregroundStyle(.red.opacity(0.8)).lineLimit(3)

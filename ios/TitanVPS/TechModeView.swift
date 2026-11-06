@@ -282,6 +282,11 @@ struct TechModeView: View {
     @State private var mem: TunnelMemory?
     @Environment(\.scenePhase) private var scenePhase
     @State private var copied = false
+    /// «Приёмы против блокировок»: every server's (TechniqueStore), the picked one's name, the search.
+    @AppStorage(TechniqueStore.key) private var techniquesData = Data()
+    @State private var trickServer: String?
+    @State private var trickSearch = ""
+    @State private var reconnecting = false
 
     private static let stampFormat: DateFormatter = {
         let f = DateFormatter()
@@ -314,6 +319,7 @@ struct TechModeView: View {
                     Button { Task { await refreshTFO() } } label: { Text("Обновить").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
                 }
+                tricksCard
                 card("Dynamic Island", islandRows, caption: Self.islandCaption)
                 card("Память туннеля", memRows,
                      caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 8 МБ до лимита Go сначала возвращает свободную память; если не хватило (за 3 МБ до лимита — сразу), туннель перезапускает Xray, не выключая VPN, но только если это освободит хотя бы 3 МБ сверх того, что было после прошлого запуска Xray (в журнале — когда новый Xray проверил серверы, через 5–25 с после перезапуска). Перезапуски, которые не держатся, идут всё реже (до раза в 4 мин), у самого лимита — уже через 10 с после прошлого. При смене сети Xray перезапускается не чаще раза в 20 с; та же сеть после паузы короче 15 с с тем же адресом — без перезапуска. Обновляется каждые 2 с.")
@@ -492,6 +498,132 @@ struct TechModeView: View {
         return Array(lines.suffix(200))
     }
 
+    // MARK: - Techniques
+
+    /// The servers the list shows (not the panel's headers and notices).
+    private var trickServers: [Server] {
+        (store.subscription?.servers ?? []).filter { !ServerGroup.isHidden($0) }
+    }
+
+    /// One line per server with techniques on, for the report.
+    private var trickRows: [(String, String)] {
+        let map = TechniqueStore.decode(techniquesData)
+        guard !map.isEmpty else { return [("Серверы", "нет")] }
+        return map.keys.sorted().map { ($0, map[$0]?.summary ?? "") }
+    }
+
+    /// «Приёмы против блокировок»: what to turn on or off on one server (Techniques), to try a
+    /// node that is blocked. Stored on this device only; the config changes at the next connect.
+    private var tricksCard: some View {
+        let servers = trickServers
+        let map = TechniqueStore.decode(techniquesData)
+        let query = trickSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        // The picked one stays in the menu whatever the search.
+        let shown = query.isEmpty ? servers : servers.filter { $0.name == trickServer || $0.name.lowercased().contains(query) }
+        let server = servers.first { $0.name == trickServer }
+        return Card {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Приёмы против блокировок").fontWeight(.semibold)
+                if servers.isEmpty {
+                    Text("Нет серверов: добавьте ключ подписки").font(.scaled(13)).foregroundStyle(.secondary)
+                } else {
+                    TextField("Поиск сервера", text: $trickSearch)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    Picker("Сервер", selection: $trickServer) {
+                        Text("Выберите сервер").tag(String?.none)
+                        ForEach(shown) { s in
+                            Text(map[s.name] == nil ? s.name : "\(s.name) · приёмы").tag(String?.some(s.name))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    if let server { trickControls(server) }
+                }
+                if !map.isEmpty {
+                    Button(role: .destructive) { saveTricks([:]) } label: {
+                        Text("Сбросить все").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(16)
+        }
+        .onAppear {
+            if trickServer == nil, let picked = store.selected?.name, servers.contains(where: { $0.name == picked }) {
+                trickServer = picked
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func trickControls(_ server: Server) -> some View {
+        let fit = Techniques.fit(server)
+        let switches: [(Techniques.Switch, String)] = Techniques.Switch.allCases.map { ($0, $0.title) }
+        let frags: [(Techniques.Frag, String)] = Techniques.Frag.allCases.map { ($0, $0.title) }
+        trickRow("TCP Fast Open", caption: "ClientHello уходит в первом пакете SYN", fits: fit.tfo,
+                 trickBinding(server.name, \.tfo), switches)
+        trickRow("Короткие запросы XHTTP", caption: "Загрузка идёт короткими запросами, ни одно соединение не доходит до порога",
+                 fits: fit.pktup, trickBinding(server.name, \.pktup), switches)
+        trickRow("Дробление ClientHello", caption: "Первый пакет режется на куски, DPI не видит имя сайта целиком",
+                 fits: fit.frag, trickBinding(server.name, \.frag), frags)
+        Text("Применится при следующем подключении").font(.scaled(12)).foregroundStyle(.secondary)
+        if vpn.isConnected, store.selected?.name == server.name {
+            Button {
+                reconnecting = true
+                Task {
+                    await vpn.switchTo(server)
+                    reconnecting = false
+                }
+            } label: {
+                Text("Переподключить").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(reconnecting)
+        }
+    }
+
+    private func trickRow<V: Hashable>(_ title: String, caption: String, fits: Bool,
+                                       _ selection: Binding<V>, _ options: [(V, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title).font(.scaled(14, weight: .medium))
+                Spacer(minLength: 8)
+                if fits {
+                    Picker(title, selection: selection) {
+                        ForEach(Array(options.enumerated()), id: \.offset) { item in
+                            Text(item.element.1).tag(item.element.0)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+            Text(fits ? caption : "не подходит для этого сервера").font(.scaled(12)).foregroundStyle(.secondary)
+        }
+    }
+
+    private func trickBinding<V>(_ name: String, _ key: WritableKeyPath<Techniques, V>) -> Binding<V> {
+        Binding(
+            get: { (TechniqueStore.decode(techniquesData)[name] ?? Techniques())[keyPath: key] },
+            set: { value in
+                var map = TechniqueStore.decode(techniquesData)
+                var t = map[name] ?? Techniques()
+                t[keyPath: key] = value
+                map[name] = t
+                saveTricks(map)
+            })
+    }
+
+    private func saveTricks(_ map: [String: Techniques]) {
+        techniquesData = TechniqueStore.encode(map)
+        // VPN off: the profile iOS starts by itself (Не отключать VPN, iOS Settings) follows now;
+        // while on, the next connect builds it.
+        if let servers = store.subscription?.servers {
+            let picked = store.selected
+            Task { await vpn.refreshProfile(servers, picked: picked) }
+        }
+    }
+
     private var journalCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 8) {
@@ -544,6 +676,7 @@ struct TechModeView: View {
         add("Доступ (\(accessRoute ?? appRoute))", accessRows)
         add("Серверы" + (tcpNote.map { " (\($0))" } ?? ""), serverRows)
         add("TCP Fast Open", tfoRows)
+        add("Приёмы против блокировок", trickRows)
         add("Dynamic Island", islandRows)
         add("Память туннеля", memRows)
         out += "\n== Журнал ==\n" + (journal.isEmpty ? "пусто" : journal.joined(separator: "\n")) + "\n"

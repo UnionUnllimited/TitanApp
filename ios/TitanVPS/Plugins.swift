@@ -158,7 +158,11 @@ enum Plugins {
         guard let json = server.xrayJson, let tag = server.proxyTag else {
             throw SubscriptionError(message: "Обновите подписку: потяните список серверов вниз")
         }
-        guard let ep = endpoint(server) else { return PreparedServer(json: json, plugin: nil) }
+        // Технический режим's «Приёмы против блокировок» for this server (Techniques): Xray's own
+        // servers only; none, the config as it is.
+        guard let ep = endpoint(server) else {
+            return PreparedServer(json: Techniques.apply(TechniqueStore.of(server.name), json: json, tag: tag), plugin: nil)
+        }
         guard ep.kind.supportedOnIOS else {
             throw SubscriptionError(message: "\(ep.kind.title) пока не работает на iPhone. Выберите другой сервер")
         }
