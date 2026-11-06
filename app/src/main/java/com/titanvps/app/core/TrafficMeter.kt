@@ -54,15 +54,12 @@ object TrafficMeter {
     }
 
     /**
-     * One connection's numbers for the VPN notification, from the counters at its connect
-     * ([start]): what it has used (a core restart keeps the connection, and the count), and
-     * the speed between two looks a moment apart (none across a longer gap, the screen off).
+     * One connection's speed for the VPN notification, from the counters at its connect
+     * ([start]): between two looks a moment apart (none across a longer gap, the screen off).
+     * The traffic a session used is shown nowhere.
      */
     class Session(start: Totals) {
         private var last = start
-        /** Down + up since the connect. */
-        var used = 0L
-            private set
         private var speed: Sample? = null
 
         fun look(now: Totals) {
@@ -72,7 +69,6 @@ object TrafficMeter {
             // Counters that went back (reset) count from where they are now.
             val down = max(0L, now.rx - last.rx)
             val up = max(0L, now.tx - last.tx)
-            used += down + up
             speed = if (ms in MIN_GAP_MS..MAX_GAP_MS) Sample(now.atMillis, down * 1000.0 / ms, up * 1000.0 / ms) else null
             last = now
         }

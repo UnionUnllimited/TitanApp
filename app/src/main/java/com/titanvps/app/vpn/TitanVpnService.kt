@@ -1297,11 +1297,10 @@ class TitanVpnService : VpnService() {
         val latency: String?,
         /** [latency] under 120 ms: green. */
         val fast: Boolean,
-        val spent: String?,
         /** The Live Update's chip (only when [promoted]). */
         val chip: String?,
     ) {
-        val more: String? get() = listOfNotNull(latency, spent).joinToString(" · ").ifEmpty { null }
+        val more: String? get() = latency
     }
 
     /** Under the monitor. */
@@ -1326,7 +1325,6 @@ class TitanVpnService : VpnService() {
         var text = statusText(live, name)
         var latency: String? = null
         var fast = false
-        var spent: String? = null
         var chip = if (promoted) name?.let { Flags.codeOf(it)?.uppercase() } ?: "VPN" else null
         if (live && name != null && status == Status.CONNECTED) {
             val now = SystemClock.elapsedRealtime()
@@ -1339,15 +1337,13 @@ class TitanVpnService : VpnService() {
                 latency = getString(R.string.notification_ms, ms)
                 fast = ms < ConnectionCheck.FAST_MS
             }
-            // Fmt.bytes counts in МБ: «Потрачено 0 МБ» isn't said.
-            if (m != null && m.used >= SPENT_MIN) spent = getString(R.string.notification_spent, Fmt.bytes(m.used))
             if (promoted) when {
                 speed != null && speed.down >= CHIP_SPEED_MIN -> chip = "↓" + shortSpeed(speed.down)
                 latency != null -> chip = latency
             }
         }
         val steps = live && canStep()
-        return Content(status, name, live, promoted, colorized = true, steps, night, text, latency, fast, spent, chip)
+        return Content(status, name, live, promoted, colorized = true, steps, night, text, latency, fast, chip)
     }
 
     /**
@@ -1495,9 +1491,7 @@ class TitanVpnService : VpnService() {
                 else -> GREEN_DAY
             }
             if (c.fast) out.setSpan(ForegroundColorSpan(green), start, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            if (c.spent != null) out.append(" · ")
         }
-        c.spent?.let { out.append(it) }
         return out
     }
 
@@ -1666,8 +1660,6 @@ class TitanVpnService : VpnService() {
         private const val PROBE_EVERY_MS = 60_000L
         /** Nor sooner than this after a core start. */
         private const val PROBE_SETTLE_MS = 5_000L
-        /** «Потрачено» from a megabyte. */
-        private const val SPENT_MIN = 1_048_576L
         /** The Live Update's chip shows ↓ from this speed (bytes a second), else the latency. */
         private const val CHIP_SPEED_MIN = 10 * 1024.0
         /** The flag's size in the notification (it shows at about 48 dp). */

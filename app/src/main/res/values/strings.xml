@@ -13,9 +13,8 @@
     <string name="notification_status_connected">Подключено</string>
     <string name="notification_switching">Переключаемся…</string>
     <string name="notification_reconnecting">Переподключаемся…</string>
-    <!-- Expanded while connected: «45 мс · Потрачено 120 МБ». -->
+    <!-- Expanded while connected: «45 мс». -->
     <string name="notification_ms">%1$d мс</string>
-    <string name="notification_spent">Потрачено %1$s</string>
     <!-- While the VPN is off: the picked server, ‹ Включить ›, in a channel of its own. -->
     <string name="notification_off_channel">VPN выключен</string>
     <string name="notification_status_off">Выключено</string>
