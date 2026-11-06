@@ -26,6 +26,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let plugin = (options?["plugin"] as? String)
             ?? ((protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["plugin"] as? String)
         let by = Self.startedBy(options)
+        // iOS's own VPN switch turned the VPN off with Не отключать VPN on, and on demand starts it
+        // again in the same boot: on demand goes off, this start doesn't run (holdOnDemand). Any
+        // start uses the stop's mark up; one from a boot before (a power-off) starts as ever.
+        let userStop = Self.takeUserStop()
+        if #available(iOS 17.0, *), let userStop, case .system(onDemand: true) = by, Self.sameBoot(userStop) {
+            holdOnDemand(completionHandler)
+            return
+        }
         setTunnelNetworkSettings(Self.networkSettings()) { [weak self] error in
             guard let self else { return }
             if let error {
@@ -57,11 +65,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         log.info("stop: \(reason.rawValue, privacy: .public)")
-        // Turned off by the user: Не отключать VPN off with it if iOS's own switch did it (holdOnDemand).
-        let held = OnDemandHold()
-        if #available(iOS 17.0, *), reason == .userInitiated { Self.holdOnDemand(held) }
+        // Turned off by the user: maybe iOS's own switch with Не отключать VPN on (checkOnDemand).
+        var check: ProfileWork<Bool>?
+        if #available(iOS 17.0, *), reason == .userInitiated { check = Self.checkOnDemand() }
         // On the network queue: a restart under way ends first, and none starts after.
-        queue.async { [self] in
+        queue.async { [self, check] in
             stopped = true
             pendingRestart?.cancel()
             pendingRestart = nil
@@ -73,11 +81,22 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             pressure = nil
             pendingAfter?.cancel()
             pendingAfter = nil
-            // The profile saved before the tunnel goes: iOS may end the process once the stop is
+            // The profile read before the tunnel goes: iOS may end the process once the stop is
             // over. Xray still forwards meanwhile. 3 s at most: a load from the extension that never
             // answered was seen after an off in iOS Settings (Apple Developer Forums 688076), and
-            // the VPN would stay «disconnecting» until iOS killed us.
-            let outcome = held.wait(seconds: 3)
+            // the VPN would stay «disconnecting» until iOS killed us. The mark is written here, not
+            // by a late load: a start after this stop must find it or never.
+            var outcome: String?
+            if let check {
+                switch check.wait(seconds: 3) {
+                case true?:
+                    let boot = Self.bootTime
+                    if boot != 0 { try? Data(String(boot).utf8).write(to: Self.userStopURL, options: .atomic) }
+                    outcome = "«Не отключать VPN» включён: следующий запуск по запросу до перезагрузки отклонится"
+                case false?: break
+                case nil: outcome = "«Не отключать VPN»: настройки VPN не ответили за 3 с"
+                }
+            }
             running = nil
             _ = Self.invoke("stopXray")
             // Its pooled connections closed now, not when the process goes.
@@ -127,79 +146,147 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// the next start by that switch gives it back. In the extension's own caches, as the journal.
     private static let heldURL = dir.appendingPathComponent("ondemand-held")
 
-    /// The profile's save in holdOnDemand, which stop waits for: what the journal says of it.
-    private final class OnDemandHold {
+    /// Left by a stop by the user with on demand still on (checkOnDemand), used up by the next
+    /// start: the boot it came in (bootTime).
+    private static let userStopURL = dir.appendingPathComponent("user-stop")
+
+    /// Work on the VPN profile from the extension, which a stop or a start waits for, a few
+    /// seconds at most: a load from the extension that never answered was seen after an off in
+    /// iOS Settings (Apple Developer Forums 688076).
+    private final class ProfileWork<Value> {
         private let done = DispatchSemaphore(value: 0)
-        private var asked = false
-        private var text: String?
+        private var value: Value?
 
-        func begin() { asked = true }
-
-        func finish(_ text: String?) {
-            self.text = text
+        func finish(_ value: Value) {
+            self.value = value
             done.signal()
         }
 
-        /// The journal's line; nil if nothing was asked or nothing changed.
-        func wait(seconds: Double) -> String? {
-            guard asked else { return nil }
-            guard done.wait(timeout: .now() + seconds) == .success else {
-                return "«Не отключать VPN»: настройки VPN не ответили за \(Int(seconds)) с"
-            }
-            return text
+        /// What it came to; nil if it didn't end within [seconds].
+        func wait(seconds: Double) -> Value? {
+            done.wait(timeout: .now() + seconds) == .success ? value : nil
         }
     }
 
-    /// Turned off by the user (NEProviderStopReason.userInitiated) with on demand still on in the
-    /// profile: it goes off. Every stop of ours saves it off before stopping the tunnel
+    /// Turned off by the user (NEProviderStopReason.userInitiated): whether on demand is still on
+    /// in the profile. Every stop of ours saves it off before stopping the tunnel
     /// (VPNController.holdOnDemand, TunnelSwitch.stop), so on here means iOS's own switch:
     /// Пункт управления's VPN or Настройки → VPN, which run no code of the app. Left on, its
     /// Connect rule starts the VPN again at the next connection ("Users are unable to turn off the
     /// VPN from Control Center's stock VPN toggle or the system Settings app, as the onDemand rule
     /// causes the VPN to turn itself back on as soon as a network request is made", Apple
     /// Developer Forums 832054; the same in Algo's docs), and iOS doesn't turn on demand off
-    /// itself. Any other reason (a network change, a failure, sleep, an app update, a kill)
-    /// keeps it: iOS brings the VPN back then.
-    /// Apple documents the configuration API for the app only (DTS, forums 731233: "can only be
-    /// used by the container app"); DuckDuckGo's VPN does exactly this in its tunnel since April
-    /// 2024 (BrowserServicesKit #790: "so that users can toggle the VPN from Settings.app and it
-    /// doesn't immediately re-enable itself due to on-demand"), on iOS 17+ only: on 16 the load
-    /// "can raise an Objective-C exception". That iOS's switch in Пункт управления stops with
-    /// userInitiated as Settings does is ours to see in the journal («остановлен: выключен»).
-    /// A failed save leaves things as before: the VPN comes back, the journal says why.
+    /// itself. Only read here: a power-off or a reboot may stop the tunnel with userInitiated too
+    /// (DTS on macOS, forums 750354: "Shut downs are user initiates after all", no API tells them
+    /// apart), and on demand saved off then would keep the VPN off after the boot with nothing of
+    /// ours left to run. So stop leaves a mark with the boot (userStopURL), and the decision is
+    /// holdOnDemand's at on demand's next start, in the same boot only.
     @available(iOS 17.0, *)
-    private static func holdOnDemand(_ hold: OnDemandHold) {
-        hold.begin()
+    private static func checkOnDemand() -> ProfileWork<Bool> {
+        let work = ProfileWork<Bool>()
         Task {
-            guard let m = try? await NETunnelProviderManager.loadAllFromPreferences().first, m.isOnDemandEnabled else {
-                hold.finish(nil)
+            let m = try? await NETunnelProviderManager.loadAllFromPreferences().first
+            work.finish(m?.isOnDemandEnabled == true)
+        }
+        return work
+    }
+
+    /// The stop's mark (checkOnDemand), taken by any start; nil if there was none.
+    private static func takeUserStop() -> Int? {
+        guard let text = try? String(contentsOf: userStopURL, encoding: .utf8) else { return nil }
+        try? FileManager.default.removeItem(at: userStopURL)
+        return Int(text)
+    }
+
+    /// When the phone booted (kern.boottime, s; 0 if unread): a stop before a power-off or a
+    /// reboot has another boot's.
+    private static var bootTime: Int {
+        var mib: [Int32] = [CTL_KERN, KERN_BOOTTIME]
+        var tv = timeval()
+        var size = MemoryLayout<timeval>.size
+        return sysctl(&mib, 2, &tv, &size, nil, 0) == 0 ? Int(tv.tv_sec) : 0
+    }
+
+    /// [boot] is this boot's. A few seconds either way: a change of the phone's time moves
+    /// kern.boottime with it. A reboot moves it by the uptime the stop came at and the boot.
+    private static func sameBoot(_ boot: Int) -> Bool {
+        let now = bootTime
+        return boot != 0 && now != 0 && abs(now - boot) <= 10
+    }
+
+    /// Started by on demand, in the same boot, right after iOS's own switch turned the VPN off
+    /// with on demand on (checkOnDemand's mark): that is the user's off, which on demand would
+    /// undo. On demand is saved off and the start refused (the switch shows «Подключение» for a
+    /// moment). A start after a reboot never comes here: the VPN comes back then, whatever stop
+    /// reason iOS gave at the power-off.
+    /// Apple documents the configuration API for the app only (DTS, forums 731233: "can only be
+    /// used by the container app"); DuckDuckGo's VPN saves on demand off from its tunnel (at the
+    /// stop) since April 2024 (BrowserServicesKit #790: "so that users can toggle the VPN from
+    /// Settings.app and it doesn't immediately re-enable itself due to on-demand"), on iOS 17+
+    /// only: on 16 the load "can raise an Objective-C exception". Relies on iOS's "is-on-demand"
+    /// (StartedBy): without it the start counts as the switch's, and the VPN comes back as before.
+    /// A failed save leaves things as before as well: on demand's next start runs.
+    @available(iOS 17.0, *)
+    private func holdOnDemand(_ completionHandler: @escaping (Error?) -> Void) {
+        let work = ProfileWork<String>()
+        Task {
+            guard let m = try? await NETunnelProviderManager.loadAllFromPreferences().first else {
+                work.finish("«Не отключать VPN» не снят: настройки VPN не прочитаны")
+                return
+            }
+            guard m.isOnDemandEnabled else {
+                work.finish("«Не отключать VPN» уже снят")
                 return
             }
             m.isOnDemandEnabled = false
             do {
                 try await m.saveToPreferences()
                 try? Data().write(to: Self.heldURL, options: .atomic)
-                hold.finish("«Не отключать VPN» снят до следующего включения: VPN выключили в системе")
+                work.finish("«Не отключать VPN» снят до следующего включения: VPN выключили в системе")
             } catch {
-                hold.finish("«Не отключать VPN» не снят: \(error.localizedDescription)")
+                work.finish("«Не отключать VPN» не снят: \(error.localizedDescription)")
             }
         }
+        // Answered once the save is done: iOS would else try on demand again at once.
+        queue.async { [self] in
+            note("не запущен по запросу: VPN выключили в системе")
+            note(work.wait(seconds: 3) ?? "«Не отключать VPN»: настройки VPN не ответили за 3 с")
+            completionHandler(Self.error("VPN выключен в системе", code: Self.declinedCode))
+        }
     }
+
+    /// The error of a start holdOnDemand refused: the app shows Выкл for it, no error.
+    private static let declinedCode = 2
+
+    /// This session started with on demand off by holdOnDemand, and it isn't seen on again yet
+    /// (giveOnDemandBack): VPNController.switchedOffInSettings asks ("onDemandHeld"), so that the
+    /// hold isn't taken for «Подключать по запросу» switched off in iOS Settings. On the queue.
+    private var onDemandHeld = false
 
     /// Up again after holdOnDemand: on demand back as it was, now that the VPN is up (never for a
     /// start that failed, which on demand would repeat). Started by iOS's own switch: that's the
     /// user turning it on, as DuckDuckGo turns on demand on for a start from Settings. By the app
-    /// or our switch: they set it themselves (Не отключать VPN as switched in the app). Started
-    /// by on demand: it is on already. On the network queue.
+    /// or our switch: they set it themselves (Не отключать VPN as switched in the app), only
+    /// looked at. Started by on demand: it is on already. On the network queue.
     private func giveOnDemandBack(_ by: StartedBy) {
         guard FileManager.default.fileExists(atPath: Self.heldURL.path) else { return }
         try? FileManager.default.removeItem(at: Self.heldURL)
-        guard case .system = by, #available(iOS 17.0, *) else { return }
+        guard #available(iOS 17.0, *) else { return }
+        // Before completionHandler's block ends: no message of the app's is answered before this.
+        onDemandHeld = true
+        let bySystem: Bool
+        if case .system = by { bySystem = true } else { bySystem = false }
         Task { [weak self] in
-            guard let m = try? await NETunnelProviderManager.loadAllFromPreferences().first, !m.isOnDemandEnabled else { return }
+            guard let m = try? await NETunnelProviderManager.loadAllFromPreferences().first else { return }
+            guard !m.isOnDemandEnabled else {
+                self?.queue.async { self?.onDemandHeld = false }
+                return
+            }
+            guard bySystem else { return }
             m.isOnDemandEnabled = true
             let saved = (try? await m.saveToPreferences()) != nil
             self?.queue.async {
+                if saved { self?.onDemandHeld = false }
                 self?.note(saved ? "«Не отключать VPN» снова включён: VPN включили в системе"
                     : "«Не отключать VPN» не включён снова: настройки VPN не сохранились")
             }
@@ -209,7 +296,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pluginHandle: Int?
 
     /// Технический режим asks what the tunnel's TCP Fast Open dials did ("tfoStats": the
-    /// kernel's record of each one, from the xray-tfo patch) and its memory ("mem").
+    /// kernel's record of each one, from the xray-tfo patch) and its memory ("mem"); the app
+    /// whether on demand is held off in this session ("onDemandHeld").
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         switch String(decoding: messageData, as: UTF8.self) {
         case "tfoStats":
@@ -217,6 +305,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         case "mem":
             // On the queue: the counters are its.
             queue.async { [self] in completionHandler?(memoryReport()) }
+        case "onDemandHeld":
+            queue.async { [self] in completionHandler?(Data("{\"held\":\(onDemandHeld)}".utf8)) }
         default:
             completionHandler?(nil)
         }
@@ -1033,8 +1123,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         return (obj["error"] as? String) ?? "\(method) failed"
     }
 
-    private static func error(_ text: String) -> NSError {
-        NSError(domain: "com.titanvps.ios.tunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+    private static func error(_ text: String, code: Int = 1) -> NSError {
+        NSError(domain: "com.titanvps.ios.tunnel", code: code, userInfo: [NSLocalizedDescriptionKey: text])
     }
 }
 
