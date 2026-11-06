@@ -314,6 +314,7 @@ struct TechModeView: View {
                     Button { Task { await refreshTFO() } } label: { Text("Обновить").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
                 }
+                card("Dynamic Island", islandRows, caption: Self.islandCaption)
                 card("Память туннеля", memRows,
                      caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 8 МБ до лимита Go сначала возвращает свободную память; если не хватило (за 3 МБ до лимита — сразу), туннель перезапускает Xray, не выключая VPN, но только если это освободит хотя бы 3 МБ сверх того, что было после прошлого запуска Xray (в журнале — когда новый Xray проверил серверы, через 5–25 с после перезапуска). Перезапуски, которые не держатся, идут всё реже (до раза в 4 мин), у самого лимита — уже через 10 с после прошлого. При смене сети Xray перезапускается не чаще раза в 20 с; та же сеть после паузы короче 15 с с тем же адресом — без перезапуска. Обновляется каждые 2 с.")
                 journalCard
@@ -471,6 +472,11 @@ struct TechModeView: View {
         return rows
     }
 
+    /// The Live Activity now and its journal (LiveActivityController.diagnostics).
+    private var islandRows: [(String, String)] { LiveActivityController.diagnostics }
+
+    private static let islandCaption = "iOS сама завершает Live Activity через 8 часов после запуска и сразу убирает её из Dynamic Island (на экране блокировки карточка остаётся ещё до 4 часов). Запустить новую приложение может, только пока открыто, или по нажатию на Titan VPS в Пункте управления, Siri и кнопки Live Activity, поэтому при открытии приложения Live Activity старше часа заменяется новой. «Завершена iOS» примерно через 8 часов после запуска — это и есть лимит; «убрана с экрана блокировки» — её смахнули или прошли ещё 4 часа. Время — когда приложение это заметило."
+
     private var memRows: [(String, String)] {
         mem?.rows(stamp: stamp) ?? [("Туннель", vpn.isOn ? "туннель не ответил" : "VPN выключен")]
     }
@@ -538,6 +544,7 @@ struct TechModeView: View {
         add("Доступ (\(accessRoute ?? appRoute))", accessRows)
         add("Серверы" + (tcpNote.map { " (\($0))" } ?? ""), serverRows)
         add("TCP Fast Open", tfoRows)
+        add("Dynamic Island", islandRows)
         add("Память туннеля", memRows)
         out += "\n== Журнал ==\n" + (journal.isEmpty ? "пусто" : journal.joined(separator: "\n")) + "\n"
         return out

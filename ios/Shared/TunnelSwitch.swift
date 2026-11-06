@@ -5,8 +5,8 @@ import NetworkExtension
 /// Turns the VPN on and off without the app's screen: Пункт управления, Siri, Команды and the
 /// Live Activity's buttons (their intents run in the app's process); TitanWidgets reads the
 /// toggle's state with it. It works with the VPN profile the app saved when it last connected:
-/// its providerConfiguration has that server's config, so the tunnel starts with no options,
-/// as it does from iOS Settings.
+/// its providerConfiguration has that server's config, so the tunnel starts with no config in
+/// the options, as it does from iOS Settings (only "by", which tells the tunnel the start is ours).
 enum TunnelSwitch {
     /// A server to run instead of the profile's last one (the server picked in the app).
     struct Target {
@@ -84,6 +84,7 @@ enum TunnelSwitch {
         }
         if let onDemand, m.isOnDemandEnabled != onDemand {
             m.isOnDemandEnabled = onDemand
+            noteSaved(onDemand)
             changed = true
         }
         // iOS turns our profile off when another VPN app connects.
@@ -102,9 +103,10 @@ enum TunnelSwitch {
             guard m.connection.status == .disconnecting else { break }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
-        // No options: the tunnel takes the config from the profile. Не отключать VPN may have
-        // started it on the save already.
-        if !isOn(m.connection.status) { try m.connection.startVPNTunnel() }
+        // The tunnel takes the config from the profile; "by" tells it the start is ours, not iOS's
+        // own switch (PacketTunnelProvider.giveOnDemandBack: on demand is set here). Не отключать
+        // VPN may have started it on the save already.
+        if !isOn(m.connection.status) { try m.connection.startVPNTunnel(options: ["by": "switch" as NSString]) }
         try await waitUntilUp(m)
         return name
     }
@@ -112,11 +114,30 @@ enum TunnelSwitch {
     /// Off, and on demand with it (turned off by hand: Не отключать VPN must not bring it back).
     static func stop() async {
         guard let m = try? await manager() else { return }
-        if m.isOnDemandEnabled {
-            m.isOnDemandEnabled = false
-            try? await m.saveToPreferences()
-        }
+        if m.isOnDemandEnabled { await saveOnDemand(false, m) }
         m.connection.stopVPNTunnel()
+    }
+
+    /// The profile's on demand as the app last saved it (VPNController.switchedOffInSettings tells
+    /// iOS Settings' «Подключать по запросу» by it). Noted before each save, so a save of ours
+    /// is never taken for someone else's; in the app's own defaults (intents run in its process).
+    static let savedKey = "onDemandSaved"
+
+    static func noteSaved(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: savedKey)
+    }
+
+    /// On demand saved as [on], once more from the profile as it is now if that failed (a copy
+    /// saved over meanwhile): an off that isn't saved has iOS start the VPN again at once. Never
+    /// more than twice. False if neither took.
+    @discardableResult
+    static func saveOnDemand(_ on: Bool, _ m: NETunnelProviderManager) async -> Bool {
+        noteSaved(on)
+        m.isOnDemandEnabled = on
+        if (try? await m.saveToPreferences()) != nil { return true }
+        try? await m.loadFromPreferences()
+        m.isOnDemandEnabled = on
+        return (try? await m.saveToPreferences()) != nil
     }
 
     /// After stop, before start on another server: up to 5 s until the old session is down
@@ -161,8 +182,7 @@ enum TunnelSwitch {
     private static func giveUpOnDemand(_ m: NETunnelProviderManager) async {
         try? await m.loadFromPreferences()
         guard m.isOnDemandEnabled else { return }
-        m.isOnDemandEnabled = false
-        try? await m.saveToPreferences()
+        await saveOnDemand(false, m)
     }
 
     private static func lastError(_ connection: NEVPNConnection) async -> TunnelSwitchError {

@@ -25,6 +25,7 @@ final class VPNController: ObservableObject {
     private let connectTime = BackgroundTime("VPN connect")
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
+    private var configObserver: NSObjectProtocol?
     /// The profile's first load: an intent may come right at launch.
     private var loading: Task<Void, Never>?
     /// Bumped by each connect and each stop of ours: a failed start acts only if none came since.
@@ -51,7 +52,10 @@ final class VPNController: ObservableObject {
 
     /// Настройки → Не отключать VPN (on unless turned off there): VPN On Demand, so iOS itself
     /// brings the VPN back after a network change, a failure or a restart of the phone, until
-    /// it is turned off by hand.
+    /// it is turned off by hand: in the app, with Titan VPS in Пункт управления, Siri or ⏻ (each
+    /// saves on demand off first), or with iOS's own VPN switch (on iOS 17+ the tunnel turns on
+    /// demand off then: PacketTunnelProvider.holdOnDemand). «Подключать по запросу» switched off
+    /// in iOS Settings while up turns it off here too (switchedOffInSettings).
     nonisolated static let keepAliveKey = "keepAlive"
     nonisolated static var keepAlive: Bool { UserDefaults.standard.object(forKey: keepAliveKey) as? Bool ?? true }
     /// Технический режим lets bypass servers run on Wi-Fi (and on demand start them there).
@@ -94,6 +98,9 @@ final class VPNController: ObservableObject {
     private func load() async {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
         manager = managers.first
+        // Before update: once it says connected, RootView has the profile's on demand set as Не
+        // отключать VPN is (setKeepAlive).
+        if let m = manager, switchedOffInSettings(m) { adoptSettingsOff() }
         observe()
         update()
     }
@@ -102,6 +109,12 @@ final class VPNController: ObservableObject {
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.update() }
+        }
+        // The profile saved by anyone (iOS Settings too, as WireGuard watches for its on demand):
+        // reconcileOnDemand. Ours as well, which it tells apart.
+        guard configObserver == nil else { return }
+        configObserver = NotificationCenter.default.addObserver(forName: .NEVPNConfigurationChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.reconcileOnDemand() }
         }
     }
 
@@ -146,8 +159,7 @@ final class VPNController: ObservableObject {
         Task {
             try? await m.loadFromPreferences()
             guard attempt == attempts, m.isOnDemandEnabled else { return }
-            m.isOnDemandEnabled = false
-            try? await m.saveToPreferences()
+            await TunnelSwitch.saveOnDemand(false, m)
         }
     }
 
@@ -205,6 +217,7 @@ final class VPNController: ObservableObject {
             // meanwhile: iOS would start it on the save.
             m.onDemandRules = TunnelSwitch.onDemandRules(server.name, bypassOnWifi: Self.bypassOnWifi)
             m.isOnDemandEnabled = wantOn && Self.keepAlive
+            TunnelSwitch.noteSaved(m.isOnDemandEnabled)
             // Still wanted: Подключаемся… again if a late status of the tunnel stopped before (a
             // switch) put it off meanwhile. Выкл or a ping's pause meanwhile keep theirs.
             if wantOn { state = .connecting }
@@ -216,10 +229,7 @@ final class VPNController: ObservableObject {
             // Turned off (or paused for a ping) while the config was built or the profile saved:
             // stay off.
             guard wantOn else {
-                if m.isOnDemandEnabled {
-                    m.isOnDemandEnabled = false
-                    try? await m.saveToPreferences()
-                }
+                if m.isOnDemandEnabled { await TunnelSwitch.saveOnDemand(false, m) }
                 // Не отключать VPN may have started it on the save already.
                 m.connection.stopVPNTunnel()
                 state = .off
@@ -244,6 +254,7 @@ final class VPNController: ObservableObject {
             // connect): as switched now.
             while wantOn, m.isOnDemandEnabled != Self.keepAlive {
                 m.isOnDemandEnabled = Self.keepAlive
+                TunnelSwitch.noteSaved(Self.keepAlive)
                 try? await m.saveToPreferences()
             }
         } catch {
@@ -276,13 +287,13 @@ final class VPNController: ObservableObject {
     }
 
     /// On demand off in the profile as saved now (see connect), before the tunnel is stopped:
-    /// else iOS starts it again at once.
+    /// else iOS starts it again at once. Saved again if that failed (TunnelSwitch.saveOnDemand);
+    /// were both to fail, the tunnel turns it off on iOS 17+ (it finds it on at a stop by hand).
     private func holdOnDemand(_ m: NETunnelProviderManager) async {
         holds += 1
         try? await m.loadFromPreferences()
         guard m.isOnDemandEnabled else { return }
-        m.isOnDemandEnabled = false
-        try? await m.saveToPreferences()
+        await TunnelSwitch.saveOnDemand(false, m)
     }
 
     /// What a profile's config was built from: the subscription's server as it was then (its
@@ -366,6 +377,13 @@ final class VPNController: ObservableObject {
         let offs = offsByHand
         Task {
             try? await m.loadFromPreferences()
+            // «Подключать по запросу» switched off in iOS Settings while up: not turned on again
+            // here, Не отключать VPN goes off instead (a reconnect on a new network came through
+            // here as well, and undid the switch).
+            if on, switchedOffInSettings(m) {
+                adoptSettingsOff()
+                return
+            }
             var provider: [String: Any]?
             if on, let proto = m.protocolConfiguration as? NETunnelProviderProtocol,
                let server = servers.first(where: { $0.name == proto.serverAddress }),
@@ -383,6 +401,7 @@ final class VPNController: ObservableObject {
             guard m.isOnDemandEnabled != on || provider != nil,
                   !on || (isOn && connectsInFlight == 0 && Self.keepAlive && holds == held && offsByHand == offs) else { return }
             m.isOnDemandEnabled = on
+            TunnelSwitch.noteSaved(on)
             if on, let proto = m.protocolConfiguration as? NETunnelProviderProtocol {
                 // A profile saved before this switch existed: the rules for its server too.
                 if let name = proto.serverAddress {
@@ -397,6 +416,54 @@ final class VPNController: ObservableObject {
             }
             try? await m.saveToPreferences()
         }
+    }
+
+    // MARK: «Подключать по запросу» in iOS Settings
+
+    /// The session (its connectedDate) the profile was last seen in with on demand on, the VPN up.
+    private static let seenOnKey = "onDemandSeenOn"
+
+    /// After a load of [m]: «Подключать по запросу» (Настройки → VPN → (i) Titan VPS) switched off
+    /// in iOS while the VPN was up, which is iOS's own way to keep an always-on VPN off (Algo's
+    /// docs: "To disable the VPN you'll need to disable 'Connect On Demand'"). The app turned it on
+    /// again at the next connected it saw, a reconnect on a new network too (setKeepAlive), so the
+    /// VPN kept coming back (Tailscale #18292 had the same). Told by the profile alone: on demand
+    /// off, the VPN still up in the session it was seen on in, and the last save of ours on.
+    /// Each off of ours notes its save first (TunnelSwitch.noteSaved), the tunnel's own off at a
+    /// stop by iOS's VPN switch comes with the VPN going down, and a connect or a ping's pause of
+    /// ours under way leaves it be. Notes the session when on demand is seen on.
+    private func switchedOffInSettings(_ m: NETunnelProviderManager) -> Bool {
+        let connection = m.connection
+        guard connection.status == .connected, let since = connection.connectedDate else { return false }
+        let session = since.timeIntervalSince1970
+        let defaults = UserDefaults.standard
+        guard !m.isOnDemandEnabled else {
+            defaults.set(session, forKey: Self.seenOnKey)
+            return false
+        }
+        guard Self.keepAlive, connectsInFlight == 0, AppStore.current?.vpnPaused != true,
+              defaults.object(forKey: TunnelSwitch.savedKey) as? Bool == true,
+              let seen = defaults.object(forKey: Self.seenOnKey) as? Double, abs(seen - session) < 1 else { return false }
+        return true
+    }
+
+    /// Не отключать VPN off, as iOS Settings has it now (Настройки's switch follows: @AppStorage).
+    /// The next on from the app, Пункт управления or Siri goes by it. The profile's off is taken
+    /// as ours from here: Не отключать VPN switched on again in the app saves it on, and isn't
+    /// taken for iOS Settings' off once more.
+    private func adoptSettingsOff() {
+        TunnelSwitch.noteSaved(false)
+        UserDefaults.standard.set(false, forKey: Self.keepAliveKey)
+        AppStore.current?.showToast("«Не отключать VPN» выключен: в Настройках iOS выключили «Подключать по запросу»")
+    }
+
+    /// Back in the app (RootView) and on each save of the profile: on demand switched off in iOS
+    /// Settings meanwhile turns Не отключать VPN off here too. Not while a connect of ours saves.
+    /// A copy of its own: a load into the app's manager could land amid a save of another's.
+    func reconcileOnDemand() async {
+        guard manager != nil, connectsInFlight == 0,
+              let m = try? await NETunnelProviderManager.loadAllFromPreferences().first else { return }
+        if switchedOffInSettings(m) { adoptSettingsOff() }
     }
 
     /// Turns the tunnel off for a ping: through it nearly every probe times out (the app's own

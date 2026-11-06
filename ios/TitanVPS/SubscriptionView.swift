@@ -366,7 +366,7 @@ struct ProfileView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Не отключать VPN").font(.scaled(16, weight: .medium))
                                         .lineLimit(1).minimumScaleFactor(0.75)
-                                    Text("Сам переподключится при смене Wi‑Fi и мобильной сети, после сбоя и перезагрузки")
+                                    Text(keepAliveNote)
                                         .font(.scaled(12)).foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
@@ -582,6 +582,15 @@ struct ProfileView: View {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             _ = await UIApplication.shared.open(support)
         }
+    }
+
+    /// Не отключать VPN's line. On iOS 16 the tunnel can't turn on demand off when the VPN is
+    /// switched off in iOS Settings (PacketTunnelProvider.holdOnDemand needs iOS 17), so iOS turns
+    /// it on again: where to turn it off, then.
+    private var keepAliveNote: String {
+        let note = "Сам переподключится при смене Wi‑Fi и мобильной сети, после сбоя и перезагрузки"
+        if #available(iOS 17.0, *) { return note }
+        return note + ". Выключайте VPN в приложении: выключенный в Настройках iOS, он включится снова"
     }
 
     /// Dynamic Island: the Live Activity, the VPN on or off (on by default). Off ends it at once;

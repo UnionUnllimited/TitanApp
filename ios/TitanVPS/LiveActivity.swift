@@ -18,10 +18,25 @@ import UIKit
 /// stale a minute on (settleLimit): an outcome never seen reads «Состояние неизвестно», not a
 /// connect with no end.
 /// It ends only when Настройки → Dynamic Island is turned off, on Выйти, or with no key; one the
-/// system ended (after 8 h) or that was swiped away comes back, on or off, when the app is
-/// opened (sync), or with the next ⏻, ‹ ›, Пункт управления or Siri (a LiveActivityIntent may
-/// start one in the background). Each VPN change also has Пункт управления read its toggle
-/// again. Called from RootView and from those intents.
+/// system ended or that was swiped away comes back, on or off, when the app is opened (sync), or
+/// with the next ⏻, ‹ ›, Пункт управления or Siri (a LiveActivityIntent may start one in the
+/// background). Each VPN change also has Пункт управления read its toggle again. Called from
+/// RootView and from those intents.
+///
+/// iOS ends one 8 h after it was started, updated or not, and takes it off the island at once
+/// ("After the eight-hour limit, the system automatically ends the Live Activity, and
+/// immediately removes it from the Dynamic Island", ActivityKit's docs; LoopFollow #659 logged
+/// it ended 8 h after its start while updated every 5 min). With Не отключать VPN the VPN runs
+/// for days without the app being opened, and a new one can't be started then: only from the
+/// app in the foreground (a request from a scene not foregroundActive failed with `visibility`,
+/// LoopFollow #611) or in a LiveActivityIntent's perform. So it is renewed whenever that is
+/// allowed: in the app, one started an hour or more before (renewInApp: nothing shows it there,
+/// so the swap isn't seen, and the island has 7 h or more once the app is left); in an intent,
+/// one started 6 h or more before (renewInIntent: the island is on screen then, the swap is seen
+/// once). The new one is requested first and the old one ended only once it is there, as
+/// LoopFollow renews at 7.5 h (#539). An app not opened for 8 h still loses it: only an
+/// ActivityKit push from a server (push-to-start) could start one then, and there is none. A
+/// change seen with neither (in background time) updates the one shown, never starts one.
 ///
 /// Who sends the numbers: the app, not the tunnel. Activity (iOS 16.1+) is documented as what
 /// starts, updates and ends a Live Activity "from within your app"; whatever an extension may
@@ -82,15 +97,25 @@ enum LiveActivityController {
         guard #available(iOS 18.0, *) else { return }
         generation += 1
         let gen = generation
-        held { await apply(state, server: server, paused: paused, gen: gen) }
+        // Right after the app is opened: the change it missed while away (the VPN turned off in
+        // iOS meanwhile), which takes over sync's work. As sync's, at once: after apply's wait for
+        // a switch's drop the app may be left already, and iOS starts none in the background.
+        let opened = Date().timeIntervalSince(syncedAt) < 2
+        held { await apply(state, server: server, paused: paused, gen: gen, opened: opened) }
     }
+
+    /// The last sync (the app opened).
+    private static var syncedAt = Date.distantPast
 
     /// At launch and each time the app is opened: the activity and the toggle follow the VPN
     /// again, on or off. It may have changed meanwhile, the app can't start an activity in the
-    /// background (connected after leaving the app), and the system ends one after 8 h.
+    /// background (connected after leaving the app), and the system ends one after 8 h: one
+    /// started an hour or more before is renewed here (put), so the island lasts 7 h or more
+    /// from the last time the app was opened.
     static func sync(_ state: VPNController.State, server: String?, paused: Bool) {
         VPNControl.reload()
         guard #available(iOS 18.0, *) else { return }
+        syncedAt = Date()
         generation += 1
         let gen = generation
         held { await apply(state, server: server, paused: paused, gen: gen, opened: true) }
@@ -107,7 +132,7 @@ enum LiveActivityController {
         held {
             // Выйти: the key is gone by now, and signedOut ends it.
             guard enabled, hasKey else { return }
-            await showOff(start: false)
+            await showOff(intent: false)
         }
     }
 
@@ -132,6 +157,11 @@ enum LiveActivityController {
         generation += 1
         let gen = generation
         guard let since = await TunnelSwitch.connectedSince() else {
+            // None shown (ended after 8 h, swiped away): "Подключаемся…" now, while the intent
+            // still runs. follow can't start one: it runs after the intent has returned.
+            if live() == nil, enabled, hasKey {
+                await showConnecting(fromOffOnly: false, staleDate: Date().addingTimeInterval(settleLimit), intent: true)
+            }
             // After the intent returns, in background time (Siri isn't kept waiting): iOS would
             // else suspend the app with the activity still saying "Подключаемся…".
             let time = BackgroundTime("Live Activity: VPN settling")
@@ -142,15 +172,17 @@ enum LiveActivityController {
             }
             return
         }
-        await apply(.connected(since: since), server: nil, paused: false, gen: gen)
+        await apply(.connected(since: since), server: nil, paused: false, gen: gen, intent: true)
     }
 
     /// Being turned on without the app's screen: «Выключено» becomes "Подключаемся…" at once
-    /// (the tunnel takes a few seconds). Shown on: left as it is.
+    /// (the tunnel takes a few seconds), and none shown (ended after 8 h, swiped away) starts one
+    /// saying so, on the server picked (the one turnOn starts). Shown on: left as it is.
     static func comingOn() async {
         guard #available(iOS 18.0, *), enabled, hasKey else { return }
         generation += 1
-        await showConnecting(fromOffOnly: true, staleDate: Date().addingTimeInterval(settleLimit))
+        await showConnecting(fromOffOnly: true, staleDate: Date().addingTimeInterval(settleLimit), intent: true,
+                             named: VPNIntents.pickedName)
     }
 
     /// The activity's ‹ › picked another server: its name at once, "Переключаемся…" until it
@@ -171,7 +203,7 @@ enum LiveActivityController {
         guard #available(iOS 18.0, *) else { return }
         generation += 1
         guard enabled, hasKey else { return await endEvery() }
-        await showOff(start: true)
+        await showOff(intent: true)
     }
 
     /// ‹ › while off moved the pick: the activity shows it (⏻ connects to it). One left saying
@@ -181,7 +213,7 @@ enum LiveActivityController {
         guard #available(iOS 18.0, *) else { return }
         generation += 1
         guard enabled, hasKey else { return await endEvery() }
-        await showOff(start: true)
+        await showOff(intent: true)
     }
 
     /// The pick changed in the app with the VPN off (Главная, a refreshed subscription,
@@ -191,7 +223,7 @@ enum LiveActivityController {
     static func pickChanged() async {
         guard #available(iOS 18.0, *), enabled, hasKey else { return }
         guard !(await TunnelSwitch.isOn()), live()?.content.state.shown == .off else { return }
-        await showOff(start: false)
+        await showOff(intent: false)
     }
 
     /// Leaving the app (inactive, then background) with the VPN up: the numbers of this moment,
@@ -243,8 +275,10 @@ enum LiveActivityController {
         Task { await endEvery() }
     }
 
+    /// intent: from a LiveActivityIntent's perform (iOS lets it start one in the background).
     @available(iOS 18.0, *)
-    private static func apply(_ state: VPNController.State, server: String?, paused: Bool, gen: Int, opened: Bool = false) async {
+    private static func apply(_ state: VPNController.State, server: String?, paused: Bool, gen: Int, opened: Bool = false,
+                              intent: Bool = false) async {
         // Turned off in Настройки, or no key: none at all.
         guard enabled, hasKey else { return await endEvery() }
         switch state {
@@ -252,46 +286,39 @@ enum LiveActivityController {
             // The server the tunnel runs: it may have been started from iOS Settings.
             let name = await TunnelSwitch.serverName() ?? server ?? "Titan VPS"
             guard gen == generation else { return }
-            await showOn(name, since: since)
+            await showOn(name, since: since, intent: intent)
         case .connecting:
             // The app's own connect, or iOS reconnecting (a network change, on demand after the
             // tunnel fell): no background time holds the app until it is up (connect gives its
             // own back once the start is asked for), so leaving follows it; never seen to
-            // settle, it goes stale as an intent's does.
-            await showConnecting(fromOffOnly: false, staleDate: Date().addingTimeInterval(settleLimit))
+            // settle, it goes stale as an intent's does. One started for it (none shown) names
+            // the app's pick while its own connect runs (the profile still has the server before).
+            await showConnecting(fromOffOnly: false, staleDate: Date().addingTimeInterval(settleLimit), intent: intent,
+                                 named: VPNController.current?.connectsUnderWay == true ? server : nil)
         case .disconnecting where paused, .off where paused:
             // Off for a ping: the app brings it back (pauseTime). No stale date, a Пинг may run
             // longer than settleLimit.
-            await showConnecting(fromOffOnly: false, staleDate: nil)
+            await showConnecting(fromOffOnly: false, staleDate: nil, intent: intent, named: server)
         case .disconnecting, .off, .error:
             // Another server: off for a moment, then on again; the activity stays on through it.
-            // Opened with the VPN off: at once.
-            if !opened || state == .disconnecting { try? await Task.sleep(nanoseconds: 2_500_000_000) }
+            // Opened with the VPN off: at once (the profile's look below sees iOS bringing it
+            // back), so a start isn't left to the background if the app is left at once.
+            if !opened { try? await Task.sleep(nanoseconds: 2_500_000_000) }
             guard gen == generation, VPNController.current?.connectsUnderWay != true else { return }
             // Just launched, the app's state may not be the profile's yet (iOS may have it up).
             let on = await TunnelSwitch.isOn()
             guard !on, gen == generation else { return }
-            await showOff(start: opened)
+            await showOff(intent: intent)
         }
     }
 
-    /// Up on [name]: the numbers now; one is started if none is shown.
+    /// Up on [name]: the numbers now; one is started if none is shown, or renewed (put).
     @available(iOS 18.0, *)
-    private static func showOn(_ name: String, since: Date) async {
+    private static func showOn(_ name: String, since: Date, intent: Bool) async {
         runningName = name
         noteCheck(for: name)
         let state = onState(name, since: since)
-        let all = Activity<VPNActivityAttributes>.activities
-        let live = all.filter { $0.isLive }
-        if let activity = live.first {
-            await send(state, to: activity)
-            for extra in live.dropFirst() { await extra.end(nil, dismissalPolicy: .immediate) }
-        } else if ActivityAuthorizationInfo().areActivitiesEnabled {
-            sent(state)
-            _ = try? Activity<VPNActivityAttributes>.request(attributes: VPNActivityAttributes(), content: content(state), pushType: nil)
-        }
-        // Ended by the system (after 8 h) or swiped away: still listed, but updates do nothing.
-        for old in all where !old.isLive { await old.end(nil, dismissalPolicy: .immediate) }
+        if await put(content(state), intent: intent) { sent(state) }
         startTicking()
     }
 
@@ -299,9 +326,22 @@ enum LiveActivityController {
     /// reconnecting), "Подключаемся…" from off. No numbers meanwhile. staleDate: settleLimit on
     /// (the app may be suspended before the VPN settles), nil for a ping's pause. Already on its
     /// way: only the stale date changes (a ping's pause has none, the connect after it one).
+    /// None shown: one started saying "Подключаемся…" where iOS allows it (startPolicy), on the
+    /// server [named], else the profile's.
     @available(iOS 18.0, *)
-    private static func showConnecting(fromOffOnly: Bool, staleDate: Date?) async {
-        guard let activity = live() else { return }
+    private static func showConnecting(fromOffOnly: Bool, staleDate: Date?, intent: Bool, named: String? = nil) async {
+        guard let activity = live() else {
+            guard startPolicy(intent: intent).start else { return }
+            let gen = generation
+            var name = named
+            if name == nil { name = await TunnelSwitch.serverName() }
+            // A newer change has seen to it meanwhile.
+            guard gen == generation, live() == nil else { return }
+            let (flag, rest) = (name ?? "Titan VPS").splitFlag
+            let state = VPNActivityAttributes.ContentState(server: rest, flag: flag, connected: false, phase: .connecting)
+            await put(ActivityContent(state: state, staleDate: staleDate), intent: intent)
+            return
+        }
         let now = activity.content.state
         let phase: VPNActivityAttributes.ContentState.Phase
         switch now.shown {
@@ -348,7 +388,7 @@ enum LiveActivityController {
                 if Date().timeIntervalSince(at) >= 2, VPNController.current?.connectsUnderWay != true,
                    AppStore.current?.vpnPaused != true {
                     generation += 1
-                    return await showOff(start: false)
+                    return await showOff(intent: false)
                 }
             default:
                 offSince = nil
@@ -357,29 +397,99 @@ enum LiveActivityController {
         }
     }
 
-    /// Off: «Выключено» with the pick, the server ⏻ starts. start: one is started if none is
-    /// shown (the app was opened: iOS allows it in the foreground).
+    /// Off: «Выключено» with the pick, the server ⏻ starts. One is started if none is shown, or
+    /// renewed, where iOS allows it (put).
     @available(iOS 18.0, *)
-    private static func showOff(start: Bool) async {
+    private static func showOff(intent: Bool) async {
         runningName = nil
         let (flag, rest) = (VPNIntents.pickedName ?? "Titan VPS").splitFlag
         let state = VPNActivityAttributes.ContentState(server: rest, flag: flag, connected: false, phase: .off)
+        await put(ActivityContent(state: state, staleDate: nil), intent: intent)
+    }
+
+    /// [content] on the activity shown, updated in place (a reconnect, a switch, a ping's pause
+    /// never end it). None shown: a new one, if iOS allows a start now. One started longer ago
+    /// than renewAfter: a new one in its place, requested first, the old one ended only once the
+    /// new one is there, so the island is never left without one and a failed request changes
+    /// nothing. True if one shows it.
+    @available(iOS 18.0, *)
+    @discardableResult
+    private static func put(_ content: ActivityContent<VPNActivityAttributes.ContentState>, intent: Bool) async -> Bool {
+        let policy = startPolicy(intent: intent)
         let all = Activity<VPNActivityAttributes>.activities
+        noteGone(all)
         let live = all.filter { $0.isLive }
+        var shown = false
         if let activity = live.first {
-            if activity.content.state != state { await activity.update(ActivityContent(state: state, staleDate: nil)) }
-            for extra in live.dropFirst() { await extra.end(nil, dismissalPolicy: .immediate) }
-        } else if start, ActivityAuthorizationInfo().areActivitiesEnabled {
-            _ = try? Activity<VPNActivityAttributes>.request(attributes: VPNActivityAttributes(),
-                                                             content: ActivityContent(state: state, staleDate: nil), pushType: nil)
+            if let after = policy.renewAfter, age(activity) >= after, request(content, instead: activity) {
+                await end(activity)
+            } else if activity.content.state != content.state || activity.content.staleDate != content.staleDate {
+                await activity.update(content)
+            }
+            shown = true
+            for extra in live.dropFirst() { await end(extra) }
+        } else if policy.start {
+            shown = request(content, instead: nil)
         }
-        for old in all where !old.isLive { await old.end(nil, dismissalPolicy: .immediate) }
+        // Ended by iOS (after 8 h) or swiped away: still listed, but updates do nothing. Its card
+        // left on the Lock Screen (iOS keeps one up to 4 h more) goes once another shows the VPN,
+        // or if it says what the VPN no longer is; else it stays, frozen but true (it went even
+        // when nothing could take its place, in the background).
+        for old in all where !old.isLive && (shown || old.content.state.shown != content.state.shown) {
+            await end(old)
+        }
+        return shown
+    }
+
+    /// In the app (foreground) an activity this old is renewed: nothing shows it there, and the
+    /// island then has 7 h or more of iOS's 8 once the app is left.
+    private static let renewInApp: TimeInterval = 3600
+    /// In an intent (Пункт управления, Siri, ⏻, ‹ ›, the app in the background) only one this
+    /// old: the island is on screen, and a renewal there ends the old one before the user's eyes
+    /// (an expanded island closes). At most once in its 8 h, and 2 h of it are kept.
+    private static let renewInIntent: TimeInterval = 6 * 3600
+
+    /// What iOS lets the app do now: start one, and renew one older than renewAfter. A request
+    /// succeeds from the app in the foreground (an active scene: LoopFollow #611 saw it fail with
+    /// `visibility` before didBecomeActive) or in a LiveActivityIntent's perform; in background
+    /// time after either, it fails.
+    @available(iOS 18.0, *)
+    private static func startPolicy(intent: Bool) -> (start: Bool, renewAfter: TimeInterval?) {
+        if UIApplication.shared.applicationState == .active { return (true, renewInApp) }
+        if intent { return (true, renewInIntent) }
+        return (false, nil)
+    }
+
+    /// A new one with [content], its start noted (age); renewing [instead] if given. False if iOS
+    /// didn't start it (Live Activities off for the app, in the background, too many).
+    @available(iOS 18.0, *)
+    private static func request(_ content: ActivityContent<VPNActivityAttributes.ContentState>,
+                                instead old: Activity<VPNActivityAttributes>?) -> Bool {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled,
+              let new = try? Activity<VPNActivityAttributes>.request(attributes: VPNActivityAttributes(), content: content, pushType: nil)
+        else { return false }
+        let now = Date()
+        let was = old.flatMap { starts[$0.id] }.map { Date(timeIntervalSince1970: $0) }
+        starts[new.id] = now.timeIntervalSince1970
+        if old != nil {
+            note("\(stamp(now)) продлена: новая вместо запущенной \(was.map { stamp($0) } ?? "до этой версии")")
+        } else {
+            note("\(stamp(now)) запущена")
+        }
+        return true
+    }
+
+    /// Ended by us: off the list of ours first, so it isn't taken for one iOS ended.
+    @available(iOS 18.0, *)
+    private static func end(_ activity: Activity<VPNActivityAttributes>) async {
+        starts[activity.id] = nil
+        await activity.end(nil, dismissalPolicy: .immediate)
     }
 
     @available(iOS 18.0, *)
     private static func endEvery() async {
         runningName = nil
-        for activity in Activity<VPNActivityAttributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) }
+        for activity in Activity<VPNActivityAttributes>.activities { await end(activity) }
     }
 
     /// Shown and taking updates.
@@ -406,6 +516,9 @@ enum LiveActivityController {
     private static var shownNumbers: Shown?
     private static var sentAt = Date.distantPast
     private static var leftAt = Date.distantPast
+    /// The ticker's last try at a new one (in place of one gone, or a renewal) while the app was
+    /// open: once a minute at most, a request iOS refuses isn't asked again every 2 s.
+    private static var restartedAt = Date.distantPast
     private static var ticker: Task<Void, Never>?
 
     /// The numbers as the widget writes them: an update goes out only when these change.
@@ -436,8 +549,26 @@ enum LiveActivityController {
     /// force: leaving the app, sent whatever went out last.
     @available(iOS 18.0, *)
     private static func tick(force: Bool = false) async -> Bool {
-        guard let activity = live(), activity.content.state.shown == .on, let name = runningName,
-              case .connected(let since)? = VPNController.current?.state else { return false }
+        guard let name = runningName, case .connected(let since)? = VPNController.current?.state else { return false }
+        let inApp = !force && UIApplication.shared.applicationState == .active
+        guard let activity = live() else {
+            // Gone while the app is open (iOS's 8 h, or it was ended some other way): a new one
+            // now, while iOS allows it, not after the app is left with none. Once a minute at most;
+            // none while Live Activities are off for the app in iOS Settings.
+            guard inApp, enabled, hasKey, ActivityAuthorizationInfo().areActivitiesEnabled else { return false }
+            if Date().timeIntervalSince(restartedAt) >= 60 {
+                restartedAt = Date()
+                await showOn(name, since: since, intent: false)
+            }
+            return true
+        }
+        guard activity.content.state.shown == .on else { return false }
+        // Open for an hour or more: renewed now (put), while iOS allows it and nothing shows it.
+        if inApp, age(activity) >= renewInApp, Date().timeIntervalSince(restartedAt) >= 60 {
+            restartedAt = Date()
+            await showOn(name, since: since, intent: false)
+            return true
+        }
         noteCheck(for: name)
         if !force { probeIfDue(name) }
         let state = onState(name, since: since)
@@ -563,6 +694,98 @@ enum LiveActivityController {
                   lastLatency.map({ $0.at < now }) ?? true else { return }
             if let ms { lastLatency = (name, ms, Date()) } else { lastLatency = nil }
         }
+    }
+}
+
+// MARK: How old it is
+
+@MainActor
+extension LiveActivityController {
+    /// When each activity of ours was requested, by its id (an activity has no date of its own):
+    /// iOS ends one 8 h after that. Off the list when we end one; one found ended or gone while
+    /// still on it was ended by iOS or by the user (the journal says which).
+    private static let startsKey = "liveActivityStarts"
+    /// Технический режим's «Dynamic Island»: starts, renewals and ends not ours, the newest last.
+    private static let journalKey = "liveActivityJournal"
+
+    fileprivate static var starts: [String: Double] {
+        get { UserDefaults.standard.dictionary(forKey: startsKey) as? [String: Double] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: startsKey) }
+    }
+
+    /// Since it was requested; one started by an older build (not on the list) counts as old.
+    @available(iOS 18.0, *)
+    fileprivate static func age(_ activity: Activity<VPNActivityAttributes>) -> TimeInterval {
+        starts[activity.id].map { Date().timeIntervalSince1970 - $0 } ?? .infinity
+    }
+
+    /// Ours that iOS or the user ended since the last look (still listed as ended or dismissed,
+    /// or gone from the list): into the journal with how long after its start that was seen. About
+    /// 8 h and «завершена iOS» is iOS's limit; «убрана» is a swipe on the Lock Screen (or iOS's
+    /// 4 h more there). The app sees it only when it runs, so the time is an upper bound.
+    @available(iOS 18.0, *)
+    fileprivate static func noteGone(_ all: [Activity<VPNActivityAttributes>]) {
+        var known = starts
+        let now = Date()
+        var lines: [String] = []
+        for (id, at) in known.sorted(by: { $0.value < $1.value }) {
+            let found = all.first { $0.id == id }
+            if found?.isLive == true { continue }
+            let what: String
+            switch found?.activityState {
+            case .ended?: what = "завершена iOS"
+            case .dismissed?: what = "убрана с экрана блокировки"
+            default: what = "пропала из списка"
+            }
+            let started = Date(timeIntervalSince1970: at)
+            lines.append("\(stamp(now)) \(what): запущена \(stamp(started)), \(duration(now.timeIntervalSince(started))) назад")
+            known[id] = nil
+        }
+        guard !lines.isEmpty else { return }
+        starts = known
+        for line in lines { note(line) }
+    }
+
+    fileprivate static func note(_ line: String) {
+        let journal = (UserDefaults.standard.stringArray(forKey: journalKey) ?? []) + [line]
+        UserDefaults.standard.set(Array(journal.suffix(20)), forKey: journalKey)
+    }
+
+    fileprivate static func stamp(_ date: Date) -> String { stampFormat.string(from: date) }
+
+    private static let stampFormat: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "dd.MM HH:mm"
+        return f
+    }()
+
+    private static func duration(_ seconds: TimeInterval) -> String {
+        let minutes = max(0, Int(seconds / 60))
+        return minutes >= 60 ? "\(minutes / 60) ч \(minutes % 60) мин" : "\(minutes) мин"
+    }
+
+    /// Технический режим: the activity shown now, how long iOS leaves it, and the journal.
+    static var diagnostics: [(String, String)] {
+        guard #available(iOS 18.0, *) else { return [("Сейчас", "Live Activity — с iOS 18")] }
+        let now: String
+        if !enabled {
+            now = "выключена в настройках приложения"
+        } else if !allowedInSettings {
+            now = "Live Activity запрещены для Titan VPS в Настройках iOS"
+        } else if let activity = Activity<VPNActivityAttributes>.activities.first(where: { $0.isLive }) {
+            if let at = starts[activity.id] {
+                let started = Date(timeIntervalSince1970: at)
+                now = "показана, запущена \(stamp(started)) (\(duration(Date().timeIntervalSince(started))) назад); "
+                    + "iOS уберёт её из Dynamic Island в \(stamp(started.addingTimeInterval(8 * 3600))), если приложение не откроют раньше"
+            } else {
+                now = "показана, запущена до этой версии: при открытии приложения заменится новой"
+            }
+        } else {
+            now = "нет"
+        }
+        let journal = UserDefaults.standard.stringArray(forKey: journalKey) ?? []
+        return [("Сейчас", now), ("Журнал", journal.isEmpty ? "пусто" : journal.joined(separator: "\n"))]
     }
 }
 

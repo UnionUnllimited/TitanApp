@@ -58,7 +58,8 @@ struct RootView: View {
                 // the profile's on demand as switched there, and its config as this build makes it.
                 // The app's own connects set both. Not from a subscription an older build saved: its
                 // configs aren't this build's (the panel's TFO); the refresh after the splash
-                // rebuilds from the new one (AppStore.load).
+                // rebuilds from the new one (AppStore.load). Not over «Подключать по запросу»
+                // switched off in iOS Settings while up: Не отключать VPN follows that instead.
                 if !vpn.connectsUnderWay, !store.pingBusy, !store.vpnPaused {
                     let servers = store.subscription.flatMap { $0.parsedNow ? $0.servers : nil } ?? []
                     vpn.setKeepAlive(VPNController.keepAlive, rebuilding: servers)
@@ -100,6 +101,8 @@ struct RootView: View {
             // Back in the app: the VPN may have changed while it was away (the tunnel fell, iOS
             // Settings); the Live Activity and Пункт управления's toggle follow it again.
             LiveActivityController.sync(vpn.state, server: store.selected?.name, paused: store.vpnPaused)
+            // «Подключать по запросу» switched off in iOS Settings meanwhile: Не отключать VPN too.
+            Task { await vpn.reconcileOnDemand() }
             // Opened again (not just Пункт управления pulled down over it): Автоподключение too.
             // During the splash the launch's own check below does it.
             let opened = wasInBackground
