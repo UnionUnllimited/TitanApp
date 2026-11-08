@@ -13,7 +13,7 @@ AUTH=()
 [ -n "${GITHUB_TOKEN:-}" ] && AUTH=(-H "Authorization: Bearer $GITHUB_TOKEN")
 tmp=$(mktemp -d)
 # GitHub answers 502/504 now and then: tried again before the build gives up.
-dl() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 "$@"; }
+dl() { curl -fsSL --retry 10 --retry-all-errors --retry-delay 30 "$@"; }
 
 asset() { # repo regex -> download url of the latest release's matching asset
   dl "${AUTH[@]}" "https://api.github.com/repos/$1/releases/latest" |
