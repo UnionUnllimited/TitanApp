@@ -12,16 +12,18 @@ OUT=app/src/main/jniLibs
 AUTH=()
 [ -n "${GITHUB_TOKEN:-}" ] && AUTH=(-H "Authorization: Bearer $GITHUB_TOKEN")
 tmp=$(mktemp -d)
+# GitHub answers 502/504 now and then: tried again before the build gives up.
+dl() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 "$@"; }
 
 asset() { # repo regex -> download url of the latest release's matching asset
-  curl -fsSL "${AUTH[@]}" "https://api.github.com/repos/$1/releases/latest" |
+  dl "${AUTH[@]}" "https://api.github.com/repos/$1/releases/latest" |
     jq -r --arg re "$2" '.assets[] | select(.name | test($re)) | .browser_download_url'
 }
 
 for abi in arm64-v8a armeabi-v7a x86_64; do
   url=$(asset klzgrad/naiveproxy "^naiveproxy-plugin-.*-${abi}\\.apk$" | head -1)
   echo "naive $abi: $url"
-  curl -fsSL -o "$tmp/naive-$abi.apk" "$url"
+  dl -o "$tmp/naive-$abi.apk" "$url"
   mkdir -p "$OUT/$abi"
   unzip -p "$tmp/naive-$abi.apk" "lib/$abi/libnaive.so" > "$OUT/$abi/libnaive.so"
 done
@@ -31,7 +33,8 @@ for abi in "${!MIERU[@]}"; do
   url=$(asset enfein/mieru "^mieru_.*${MIERU[$abi]}" | sort | head -1)  # android_ before linux_
   echo "mieru $abi: $url"
   mkdir -p "$tmp/mieru-$abi"
-  curl -fsSL "$url" | tar -xz -C "$tmp/mieru-$abi"
+  dl -o "$tmp/mieru-$abi.tar.gz" "$url"
+  tar -xzf "$tmp/mieru-$abi.tar.gz" -C "$tmp/mieru-$abi"
   cp "$(find "$tmp/mieru-$abi" -type f -name mieru | head -1)" "$OUT/$abi/libmieru.so"
 done
 
@@ -44,7 +47,8 @@ for abi in "${!SINGBOX[@]}"; do
   url="https://github.com/SagerNet/sing-box/releases/download/$SB_TAG/sing-box-$SB_VER-${SINGBOX[$abi]}.tar.gz"
   echo "sing-box $abi: $url"
   mkdir -p "$tmp/sb-$abi"
-  curl -fsSL "$url" | tar -xz -C "$tmp/sb-$abi"
+  dl -o "$tmp/sb-$abi.tar.gz" "$url"
+  tar -xzf "$tmp/sb-$abi.tar.gz" -C "$tmp/sb-$abi"
   cp "$(find "$tmp/sb-$abi" -type f -name sing-box | head -1)" "$OUT/$abi/libsingbox.so"
 done
 
