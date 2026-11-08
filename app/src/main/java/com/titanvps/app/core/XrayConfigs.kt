@@ -78,6 +78,20 @@ object XrayConfigs {
         sockopt.put("tcpFastOpen", true)
     }
 
+    /** The outbound's tcpFastOpen gone, an XHTTP download leg's (downloadSettings) too. */
+    internal fun dropTfo(outbound: JSONObject) {
+        outbound.optJSONObject("streamSettings")?.let(::withoutTfo)
+    }
+
+    private fun withoutTfo(stream: JSONObject) {
+        stream.optJSONObject("sockopt")?.remove("tcpFastOpen")
+        for (key in listOf("xhttpSettings", "splithttpSettings")) {
+            val xhttp = stream.optJSONObject(key) ?: continue
+            xhttp.optJSONObject("downloadSettings")?.let(::withoutTfo)
+            xhttp.optJSONObject("extra")?.optJSONObject("downloadSettings")?.let(::withoutTfo)
+        }
+    }
+
     /** [mayBeUnlimited]: no earlier row was taken as «Безлимитные · все серверы». */
     private fun serverFromConfig(src: JSONObject, index: Int, mayBeUnlimited: Boolean = true): Server? {
         val cfg = JSONObject(src.toString())
@@ -102,6 +116,13 @@ object XrayConfigs {
             ?.let { cfg.put(SNIFFING_KEY, it) }
         cfg.remove("inbounds")
         retargetInboundRules(cfg, oldTags)
+        // No TFO on regular servers, as on iOS: there the data a TFO SYN carries (a VLESS
+        // ML-KEM hello, an XHTTP stream-up body) is dropped by the network while the dial
+        // counts as made, and the connection hangs; a plain SYN gets through. «Обходы» (the
+        // ServerGroups.isBypass rule) keep the panel's TFO: under whitelists it gets them through.
+        if ("обход" !in remarks.lowercase()) {
+            for (i in 0 until outbounds.length()) outbounds.optJSONObject(i)?.let(::dropTfo)
+        }
         applyTfo(remarks, proxy)
         val json = cfg.toString()
         // «👇БЕЗЛИМИТНЫЕ👇» with a real config (the first such row; another stays a hidden header):

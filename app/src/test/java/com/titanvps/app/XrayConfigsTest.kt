@@ -258,4 +258,29 @@ class XrayConfigsTest {
         assertEquals(XrayConfigs.endpointKey(country, "bal-3"), XrayConfigs.endpointKey(auto, "bal-17"))
         assertTrue(XrayConfigs.endpointKey(auto, "bal-17") != XrayConfigs.endpointKey(auto, "bal-18"))
     }
+
+    @Test
+    fun noTfoOnRegularServersBypassKeepsIt() {
+        fun cfg(name: String) = """{"remarks":"$name","outbounds":[
+            {"protocol":"vless","tag":"proxy","streamSettings":{"network":"xhttp","sockopt":{"tcpFastOpen":true,"tcpKeepAliveIdle":120},
+              "xhttpSettings":{"extra":{"downloadSettings":{"sockopt":{"tcpFastOpen":true}}}}}},
+            {"protocol":"vless","tag":"second","streamSettings":{"sockopt":{"tcpFastOpen":true}}},
+            {"protocol":"freedom","tag":"direct"}]}"""
+        val regular = org.json.JSONObject(XrayConfigs.serversFromXrayJson(cfg("Швеция WiFi")).single().xrayJson)
+        val obs = regular.getJSONArray("outbounds")
+        val proxy = obs.getJSONObject(0).getJSONObject("streamSettings")
+        assertFalse(proxy.getJSONObject("sockopt").has("tcpFastOpen"))
+        assertEquals(120, proxy.getJSONObject("sockopt").getInt("tcpKeepAliveIdle"))
+        assertFalse(proxy.getJSONObject("xhttpSettings").getJSONObject("extra").getJSONObject("downloadSettings")
+            .getJSONObject("sockopt").has("tcpFastOpen"))
+        assertFalse(obs.getJSONObject(1).getJSONObject("streamSettings").getJSONObject("sockopt").has("tcpFastOpen"))
+        // A "tfo" marker still turns it on.
+        val marked = org.json.JSONObject(XrayConfigs.serversFromXrayJson(cfg("Швеция tfo")).single().xrayJson)
+        assertTrue(marked.getJSONArray("outbounds").getJSONObject(0).getJSONObject("streamSettings")
+            .getJSONObject("sockopt").getBoolean("tcpFastOpen"))
+        // «Обходы» keep the panel's.
+        val bypass = org.json.JSONObject(XrayConfigs.serversFromXrayJson(cfg("Обход МТС")).single().xrayJson)
+        assertTrue(bypass.getJSONArray("outbounds").getJSONObject(1).getJSONObject("streamSettings")
+            .getJSONObject("sockopt").getBoolean("tcpFastOpen"))
+    }
 }
