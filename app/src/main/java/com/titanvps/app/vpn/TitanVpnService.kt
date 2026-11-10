@@ -1650,8 +1650,10 @@ class TitanVpnService : VpnService() {
         private val GREEN_NIGHT = 0xFF22C55E.toInt()
         /** The numbers are looked at this often while the screen is on. */
         private const val TICK_MS = 2_000L
-        /** Posted again at least this often while the screen is on: on top of what came since. */
-        private const val REFRESH_MS = 30_000L
+        /** Posted again at least this often while the screen is on: on top of what came since
+         *  (skins such as HyperOS order the shade by time only; with the numbers off nothing
+         *  else posts it again). */
+        private const val REFRESH_MS = 5_000L
         /** Android 16: a Live Update asked for is read back this long after its post… */
         private const val PROMOTION_CHECK_MS = 1_000L
         /** …and taken as it is found after this, the post seen or not. */
