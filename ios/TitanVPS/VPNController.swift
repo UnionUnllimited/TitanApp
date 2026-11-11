@@ -510,6 +510,13 @@ final class VPNController: ObservableObject {
     /// The tunnel's memory, restarts and kills (its answer to "mem"); nil while off.
     func tunnelMem() async -> [String: Any]? { await askTunnel("mem") }
 
+    /// Технический режим's ICMP feasibility check: whether the tunnel can open an unprivileged
+    /// ICMP socket and round-trip an echo to [host] from the extension; nil while off. Up to 20 s.
+    func tunnelICMPProbe(_ host: String) async -> [String: Any]? {
+        guard isOn, let session = manager?.connection as? NETunnelProviderSession else { return nil }
+        return await Self.ask(session, "icmpProbe:\(host)", within: 20)
+    }
+
     private func askTunnel(_ message: String) async -> [String: Any]? {
         guard isOn, let session = manager?.connection as? NETunnelProviderSession else { return nil }
         return await Self.ask(session, message)

@@ -299,7 +299,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// kernel's record of each one, from the xray-tfo patch) and its memory ("mem"); the app
     /// whether on demand is held off in this session ("onDemandHeld").
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
-        switch String(decoding: messageData, as: UTF8.self) {
+        let msg = String(decoding: messageData, as: UTF8.self)
+        // Технический режим's ICMP feasibility check: off the queue (it blocks on recvfrom).
+        if msg.hasPrefix("icmpProbe:") {
+            let host = String(msg.dropFirst("icmpProbe:".count))
+            DispatchQueue.global(qos: .userInitiated).async { completionHandler?(Self.icmpProbe(host)) }
+            return
+        }
+        switch msg {
         case "tfoStats":
             completionHandler?(Data(TitanInvoke("{\"method\":\"tfoStats\"}").utf8))
         case "mem":
@@ -310,6 +317,70 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         default:
             completionHandler?(nil)
         }
+    }
+
+    // MARK: ICMP probe (feasibility spike)
+
+    /// Технический режим → «ICMP»: whether the extension can open an unprivileged ICMP socket
+    /// (SOCK_DGRAM, IPPROTO_ICMP — no root, a public API, as Apple's SimplePing does) and
+    /// round-trip an echo to [host] from inside the Network Extension's sandbox. That single
+    /// fact decides whether an on-device ICMP transport is worth building; it can't be known
+    /// without running here, on a real phone, on Wi‑Fi and on cellular. Nothing of the VPN is
+    /// touched: the socket leaves by the real interface (NECP keeps the extension's own sockets
+    /// out of the tunnel), so turning Wi‑Fi off tests cellular. Returns JSON for the app.
+    private static func icmpProbe(_ host: String, count: Int = 5) -> Data {
+        func json(_ o: [String: Any]) -> Data { (try? JSONSerialization.data(withJSONObject: o)) ?? Data("{}".utf8) }
+        let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)
+        if fd < 0 {
+            let e = errno
+            return json(["opened": false, "errno": Int(e), "error": String(cString: strerror(e))])
+        }
+        defer { close(fd) }
+        var tv = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        // One IPv4 address for [host].
+        var hints = addrinfo(ai_flags: 0, ai_family: AF_INET, ai_socktype: SOCK_DGRAM,
+                             ai_protocol: IPPROTO_ICMP, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &res) == 0, let info = res else {
+            return json(["opened": true, "resolved": false])
+        }
+        var addr = sockaddr_storage()
+        memcpy(&addr, info.pointee.ai_addr, Int(info.pointee.ai_addrlen))
+        let addrLen = info.pointee.ai_addrlen
+        freeaddrinfo(res)
+        var received = 0
+        var bestRTT = Double.greatestFiniteMagnitude
+        var lastErr: String?
+        for seq in 0..<count {
+            // ICMP echo: type 8, code 0; the kernel fills the checksum and the identifier for a
+            // datagram socket, so 0 is fine. 32 bytes of payload.
+            var pkt = [UInt8](repeating: 0, count: 40)
+            pkt[0] = 8
+            pkt[6] = UInt8((seq >> 8) & 0xff); pkt[7] = UInt8(seq & 0xff)
+            for i in 8..<pkt.count { pkt[i] = UInt8(0x61 + (i % 26)) }
+            let start = Date()
+            let sent = pkt.withUnsafeBytes { raw in
+                withUnsafePointer(to: addr) { sa in
+                    sa.withMemoryRebound(to: sockaddr.self, capacity: 1) { sap in
+                        sendto(fd, raw.baseAddress, raw.count, 0, sap, addrLen)
+                    }
+                }
+            }
+            if sent < 0 { lastErr = String(cString: strerror(errno)); continue }
+            var buf = [UInt8](repeating: 0, count: 1500)
+            let n = recvfrom(fd, &buf, buf.count, 0, nil, nil)
+            if n > 0 {
+                received += 1
+                bestRTT = min(bestRTT, Date().timeIntervalSince(start) * 1000)
+            } else {
+                lastErr = String(cString: strerror(errno))
+            }
+        }
+        var out: [String: Any] = ["opened": true, "resolved": true, "sent": count, "received": received]
+        if received > 0 { out["rtt_ms"] = Int(bestRTT.rounded()) }
+        if let lastErr, received < count { out["error"] = lastErr }
+        return json(out)
     }
 
     // MARK: Sleep

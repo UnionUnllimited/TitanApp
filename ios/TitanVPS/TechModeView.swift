@@ -287,6 +287,10 @@ struct TechModeView: View {
     @State private var trickServer: String?
     @State private var trickSearch = ""
     @State private var reconnecting = false
+    /// «ICMP (проверка)»: the host to echo, the last result, and whether a probe is running.
+    @State private var icmpHost = ""
+    @State private var icmpRows: [(String, String)] = []
+    @State private var icmpBusy = false
 
     private static let stampFormat: DateFormatter = {
         let f = DateFormatter()
@@ -320,6 +324,7 @@ struct TechModeView: View {
                         .buttonStyle(.bordered)
                 }
                 tricksCard
+                icmpCard
                 card("Dynamic Island", islandRows, caption: Self.islandCaption)
                 card("Память туннеля", memRows,
                      caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 8 МБ до лимита Go сначала возвращает свободную память; если не хватило (за 3 МБ до лимита — сразу), туннель перезапускает Xray, не выключая VPN, но только если это освободит хотя бы 3 МБ сверх того, что было после прошлого запуска Xray (в журнале — когда новый Xray проверил серверы, через 5–25 с после перезапуска). Перезапуски, которые не держатся, идут всё реже (до раза в 4 мин), у самого лимита — уже через 10 с после прошлого. При смене сети Xray перезапускается не чаще раза в 20 с; та же сеть после паузы короче 15 с с тем же адресом — без перезапуска. Обновляется каждые 2 с.")
@@ -622,6 +627,47 @@ struct TechModeView: View {
             let picked = store.selected
             Task { await vpn.refreshProfile(servers, picked: picked) }
         }
+    }
+
+    /// A spike, not a feature: can the VPN extension open an ICMP socket and reach a host from
+    /// inside its sandbox — the one fact that decides whether an ICMP transport is worth building.
+    private var icmpCard: some View {
+        card("ICMP (проверка)", icmpRows,
+             caption: "Проверяет, может ли VPN-расширение открыть ICMP-сокет и достучаться до хоста из своей песочницы — от этого зависит, делать ли ICMP-туннель. VPN должен быть включён. Введите IP или хост, который отвечает на ping и не входит в белые списки. Проверьте отдельно на Wi‑Fi и на мобильной сети (выключите Wi‑Fi). «Сокет открылся: да» и «получено больше 0» означают, что приём сработал.") {
+            VStack(spacing: 8) {
+                TextField("IP или хост", text: $icmpHost)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                Button { Task { await runICMP() } } label: { Text("Проверить").frame(maxWidth: .infinity) }
+                    .buttonStyle(.bordered)
+                    .disabled(icmpBusy || icmpHost.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private func runICMP() async {
+        let host = icmpHost.trimmingCharacters(in: .whitespaces)
+        guard !host.isEmpty, !icmpBusy else { return }
+        icmpBusy = true
+        icmpRows = [("Статус", "проверяем…")]
+        defer { icmpBusy = false }
+        guard vpn.isOn else { icmpRows = [("Статус", "включите VPN и повторите")]; return }
+        guard let r = await vpn.tunnelICMPProbe(host) else { icmpRows = [("Статус", "туннель не ответил")]; return }
+        let opened = r["opened"] as? Bool == true
+        var rows: [(String, String)] = [("Сокет открылся", opened ? "да" : "нет")]
+        if !opened {
+            if let e = r["error"] as? String { rows.append(("Ошибка", e)) }
+        } else if r["resolved"] as? Bool == false {
+            rows.append(("Адрес", "не распознан"))
+        } else {
+            rows.append(("Отправлено", "\(r["sent"] as? Int ?? 0)"))
+            rows.append(("Получено", "\(r["received"] as? Int ?? 0)"))
+            if let rtt = r["rtt_ms"] as? Int { rows.append(("Задержка", "\(rtt) мс")) }
+            if (r["received"] as? Int ?? 0) == 0, let e = r["error"] as? String { rows.append(("Ошибка", e)) }
+        }
+        icmpRows = rows
     }
 
     private var journalCard: some View {
