@@ -1,0 +1,26 @@
+# The daemon must receive ICMP echo addressed to the node's public IP and must reply
+# from it, so it runs in the host network namespace. It needs:
+#   - NET_RAW:   open the raw ICMP socket.
+#   - NET_ADMIN: set net.ipv4.icmp_echo_ignore_all (the -manage-icmp-ignore flag). If
+#                your platform does not grant it to the container, drop it, set the
+#                sysctl on the host yourself (see README) and pass
+#                -manage-icmp-ignore=false in command below.
+#
+# Replace <INNER_PORT> with the UDP port of the node's existing inbound that this
+# transport feeds (WireGuard / Hysteria2 / VLESS-or-VMess over mKCP). Do not put the
+# node's public IP here: the daemon binds every interface and forwards to 127.0.0.1.
+services:
+  titan-icmp-gw:
+    build: .
+    image: titan-icmp-gw:latest
+    container_name: titan-icmp-gw
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    restart: unless-stopped
+    command:
+      - -inner
+      - 127.0.0.1:<INNER_PORT>
+      - -listen
+      - 0.0.0.0
