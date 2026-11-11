@@ -7,15 +7,22 @@
 //
 //	{"method": "startSingBox", "config": "<sing-box JSON>"}           -> {"handle": n}
 //	{"method": "startMieru", "profile": "<ClientProfile JSON>", "port": p} -> {"handle": n}
+//	{"method": "startICMP", "config": "<icmpConfig JSON>"}             -> {"handle": n, "port": p}
 //	{"method": "stop", "handle": n}                                    -> {}
 //	{"method": "freePort"}                                             -> {"port": p}
 //	{"method": "tfoStats"}                                             -> {"dials": n, ...}
+//	{"method": "icmpStats"}                                            -> {"upPackets": n, ...}
 //	{"method": "memStats"}                                             -> {"liveHeap": n, ...}
 //	{"method": "freeMemory"}                                           -> {}
 //	{"method": "setMemoryLimit", "limit": n, "footprint": f}           -> {"goLimit": n, "nonGo": m, "why": w, ...}
 //	{"method": "closeTransports"}                                      -> {"closed": n}
 //	{"method": "sleep"}                                                -> {"paused": b}
 //	{"method": "wake"}                                                 -> {"slept": s}
+//
+// startICMP runs the emergency ICMP transport (icmp.go): a datagram pipe that wraps the tunnel's
+// UDP datagrams in ICMP echo for a node whose IP answers ICMP while TCP/UDP to it are blocked. It
+// opens a local UDP listener that Xray's UDP outbound is pointed at and returns its port;
+// icmpStats is what it carried, for Технический режим.
 //
 // tfoStats is what Xray's TCP Fast Open dials in this process did, by the kernel's own
 // record (the xray-tfo patch: internet.TitanTFOStats). memStats is the Go runtime's memory
@@ -68,6 +75,14 @@ func Invoke(requestJSON string) string {
 	case "startMieru":
 		c, err := startMieru(req.Profile, req.Port)
 		return answer(keep(c), err)
+	case "startICMP":
+		c, port, err := startICMP(req.Config)
+		if err != nil {
+			return answer(nil, err)
+		}
+		m := keep(c)
+		m["port"] = port
+		return answer(m, nil)
 	case "stop":
 		mu.Lock()
 		c := running[req.Handle]
@@ -87,6 +102,8 @@ func Invoke(requestJSON string) string {
 		return answer(map[string]any{"port": port}, nil)
 	case "tfoStats":
 		return internet.TitanTFOStats()
+	case "icmpStats":
+		return answer(icmpStatsMap(), nil)
 	case "memStats":
 		return memStats()
 	case "freeMemory":
