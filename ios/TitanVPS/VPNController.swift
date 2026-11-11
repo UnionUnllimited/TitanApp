@@ -517,6 +517,13 @@ final class VPNController: ObservableObject {
         return await Self.ask(session, "icmpProbe:\(host)", within: 20)
     }
 
+    /// Технический режим's ICMP load test: echoes of 1200 B at rising rates to [host] from the
+    /// extension, per step what came back (the carrier's ICMP limit); nil while off. Up to 40 s.
+    func tunnelICMPLoad(_ host: String) async -> [String: Any]? {
+        guard isOn, let session = manager?.connection as? NETunnelProviderSession else { return nil }
+        return await Self.ask(session, "icmpLoad:\(host)", within: 40)
+    }
+
     private func askTunnel(_ message: String) async -> [String: Any]? {
         guard isOn, let session = manager?.connection as? NETunnelProviderSession else { return nil }
         return await Self.ask(session, message)

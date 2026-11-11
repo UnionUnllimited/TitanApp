@@ -306,6 +306,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             DispatchQueue.global(qos: .userInitiated).async { completionHandler?(Self.icmpProbe(host)) }
             return
         }
+        if msg.hasPrefix("icmpLoad:") {
+            let host = String(msg.dropFirst("icmpLoad:".count))
+            DispatchQueue.global(qos: .userInitiated).async { completionHandler?(Self.icmpLoad(host)) }
+            return
+        }
         switch msg {
         case "tfoStats":
             completionHandler?(Data(TitanInvoke("{\"method\":\"tfoStats\"}").utf8))
@@ -338,26 +343,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         defer { close(fd) }
         var tv = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-        // One IPv4 address for [host]: an address as it is (inet_pton), a name through getaddrinfo
-        // with no socket type or protocol in the hints — getaddrinfo knows no ICMP datagram
-        // socket and refuses SOCK_DGRAM with IPPROTO_ICMP even for a numeric address.
+        let (target, resolveError) = icmpAddress(host)
+        guard let sin = target else { return json(["opened": true, "resolved": false, "error": resolveError ?? ""]) }
         var addr = sockaddr_storage()
         let addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-        var sin = sockaddr_in()
-        sin.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        sin.sin_family = sa_family_t(AF_INET)
-        if inet_pton(AF_INET, host, &sin.sin_addr) != 1 {
-            var hints = addrinfo(ai_flags: 0, ai_family: AF_INET, ai_socktype: 0,
-                                 ai_protocol: 0, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
-            var res: UnsafeMutablePointer<addrinfo>?
-            let rc = getaddrinfo(host, nil, &hints, &res)
-            guard rc == 0, let info = res, let sa = info.pointee.ai_addr else {
-                if let res { freeaddrinfo(res) }
-                return json(["opened": true, "resolved": false, "error": String(cString: gai_strerror(rc))])
-            }
-            sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin.sin_addr = $0.pointee.sin_addr }
-            freeaddrinfo(res)
-        }
         withUnsafeMutablePointer(to: &addr) { p in
             p.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee = sin }
         }
@@ -392,6 +381,140 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         var out: [String: Any] = ["opened": true, "resolved": true, "sent": count, "received": received]
         if received > 0 { out["rtt_ms"] = Int(bestRTT.rounded()) }
         if let lastErr, received < count { out["error"] = lastErr }
+        return json(out)
+    }
+
+    /// One IPv4 address for [host]: an address as it is (inet_pton), a name through getaddrinfo
+    /// with no socket type or protocol in the hints — getaddrinfo knows no ICMP datagram socket
+    /// and refuses SOCK_DGRAM with IPPROTO_ICMP even for a numeric address.
+    private static func icmpAddress(_ host: String) -> (sockaddr_in?, String?) {
+        var sin = sockaddr_in()
+        sin.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        sin.sin_family = sa_family_t(AF_INET)
+        if inet_pton(AF_INET, host, &sin.sin_addr) == 1 { return (sin, nil) }
+        var hints = addrinfo(ai_flags: 0, ai_family: AF_INET, ai_socktype: 0,
+                             ai_protocol: 0, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
+        var res: UnsafeMutablePointer<addrinfo>?
+        let rc = getaddrinfo(host, nil, &hints, &res)
+        guard rc == 0, let info = res, let sa = info.pointee.ai_addr else {
+            if let res { freeaddrinfo(res) }
+            return (nil, String(cString: gai_strerror(rc)))
+        }
+        sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin.sin_addr = $0.pointee.sin_addr }
+        freeaddrinfo(res)
+        return (sin, nil)
+    }
+
+    /// What the load test's sender and receiver threads share (under [lock]).
+    private final class IcmpLoad: @unchecked Sendable {
+        let lock = NSLock()
+        var sentAt: [Double]
+        var rtt: [Double]
+        var stop = false
+        init(_ total: Int) {
+            sentAt = [Double](repeating: 0, count: total)
+            rtt = [Double](repeating: -1, count: total)
+        }
+    }
+
+    /// Технический режим → «ICMP под нагрузкой»: the carrier's limit on ICMP, before any tunnel is
+    /// built on it. Echoes of 1200 B (an inner packet of a tunnel at MTU 1200) at 50, 100, 200, 400
+    /// and 800 a second, 2 s each, stopping after a step that lost more than half: per step what
+    /// came back, the latency and the goodput. Mobile carriers often cap ICMP by packets a second,
+    /// so a single ping passing says little about a chatty inner protocol (mKCP) under load.
+    private static func icmpLoad(_ host: String) -> Data {
+        func json(_ o: [String: Any]) -> Data { (try? JSONSerialization.data(withJSONObject: o)) ?? Data("{}".utf8) }
+        let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)
+        if fd < 0 {
+            let e = errno
+            return json(["opened": false, "error": String(cString: strerror(e))])
+        }
+        defer { close(fd) }
+        let (target, resolveError) = icmpAddress(host)
+        guard let sin = target else { return json(["opened": true, "resolved": false, "error": resolveError ?? ""]) }
+        var addr = sockaddr_storage()
+        withUnsafeMutablePointer(to: &addr) { p in
+            p.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee = sin }
+        }
+        let addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        var tv = timeval(tv_sec: 0, tv_usec: 200_000)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        var buffer: Int32 = 1 << 20
+        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buffer, socklen_t(MemoryLayout<Int32>.size))
+
+        let rates = [50, 100, 200, 400, 800]
+        let stepSeconds = 2.0
+        let payload = 1200
+        let counts = rates.map { Int(Double($0) * stepSeconds) }
+        let state = IcmpLoad(counts.reduce(0, +))
+        let start = CFAbsoluteTimeGetCurrent()
+        let magic: [UInt8] = [0x54, 0x4c, 0x44, 0x31] // "TLD1"
+
+        // Replies: the datagram socket gives the IPv4 header too on Darwin (SimplePing skips it).
+        let receiverDone = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            var buf = [UInt8](repeating: 0, count: 2048)
+            while true {
+                state.lock.lock(); let stop = state.stop; state.lock.unlock()
+                if stop { break }
+                let n = recvfrom(fd, &buf, buf.count, 0, nil, nil)
+                guard n > 0 else { continue }
+                var at = 0
+                if n >= 20, buf[0] >> 4 == 4 { at = Int(buf[0] & 0x0f) * 4 }
+                guard n >= at + 16, buf[at] == 0, Array(buf[(at + 8)..<(at + 12)]) == magic else { continue }
+                let seq = Int(buf[at + 12]) << 24 | Int(buf[at + 13]) << 16 | Int(buf[at + 14]) << 8 | Int(buf[at + 15])
+                let now = CFAbsoluteTimeGetCurrent() - start
+                state.lock.lock()
+                if seq < state.rtt.count, state.rtt[seq] < 0 { state.rtt[seq] = (now - state.sentAt[seq]) * 1000 }
+                state.lock.unlock()
+            }
+            receiverDone.signal()
+        }
+
+        var pkt = [UInt8](repeating: 0x61, count: 8 + payload)
+        pkt[0] = 8; pkt[1] = 0; pkt[2] = 0; pkt[3] = 0; pkt[4] = 0; pkt[5] = 0
+        for i in 0..<4 { pkt[8 + i] = magic[i] }
+        var seq = 0
+        var steps: [[String: Any]] = []
+        var sendError: String?
+        for (index, pps) in rates.enumerated() {
+            let first = seq
+            let stepStart = CFAbsoluteTimeGetCurrent()
+            for i in 0..<counts[index] {
+                let due = stepStart + Double(i) / Double(pps)
+                let wait = due - CFAbsoluteTimeGetCurrent()
+                if wait > 0 { usleep(useconds_t(wait * 1_000_000)) }
+                pkt[6] = UInt8((seq >> 8) & 0xff); pkt[7] = UInt8(seq & 0xff)
+                pkt[12] = UInt8((seq >> 24) & 0xff); pkt[13] = UInt8((seq >> 16) & 0xff)
+                pkt[14] = UInt8((seq >> 8) & 0xff); pkt[15] = UInt8(seq & 0xff)
+                state.lock.lock(); state.sentAt[seq] = CFAbsoluteTimeGetCurrent() - start; state.lock.unlock()
+                let sent = pkt.withUnsafeBytes { raw in
+                    withUnsafePointer(to: addr) { sa in
+                        sa.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(fd, raw.baseAddress, raw.count, 0, $0, addrLen) }
+                    }
+                }
+                if sent < 0, sendError == nil { sendError = String(cString: strerror(errno)) }
+                seq += 1
+            }
+            // The step's last replies.
+            usleep(600_000)
+            state.lock.lock()
+            let rtts = state.rtt[first..<seq].filter { $0 >= 0 }
+            state.lock.unlock()
+            let got = rtts.count
+            var step: [String: Any] = ["pps": pps, "sent": seq - first, "received": got,
+                                       "mbps": Double(got * payload * 8) / stepSeconds / 1_000_000]
+            if got > 0 {
+                step["rttAvg"] = Int((rtts.reduce(0, +) / Double(got)).rounded())
+                step["rttMax"] = Int((rtts.max() ?? 0).rounded())
+            }
+            steps.append(step)
+            if got * 2 < seq - first { break }
+        }
+        state.lock.lock(); state.stop = true; state.lock.unlock()
+        _ = receiverDone.wait(timeout: .now() + 1)
+        var out: [String: Any] = ["opened": true, "resolved": true, "payload": payload, "steps": steps]
+        if let sendError { out["error"] = sendError }
         return json(out)
     }
 

@@ -643,8 +643,44 @@ struct TechModeView: View {
                 Button { Task { await runICMP() } } label: { Text("Проверить").frame(maxWidth: .infinity) }
                     .buttonStyle(.bordered)
                     .disabled(icmpBusy || icmpHost.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button { Task { await runICMPLoad() } } label: { Text("Под нагрузкой").frame(maxWidth: .infinity) }
+                    .buttonStyle(.bordered)
+                    .disabled(icmpBusy || icmpHost.trimmingCharacters(in: .whitespaces).isEmpty)
+                Text("«Под нагрузкой»: пакеты по 1200 Б с частотой 50, 100, 200, 400 и 800 в секунду, по 2 с, до первой ступени, где пропало больше половины (около 10 с). Показывает, сколько пакетов в секунду оператор пропускает по ICMP.")
+                    .font(.scaled(12)).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func runICMPLoad() async {
+        let host = icmpHost.trimmingCharacters(in: .whitespaces)
+        guard !host.isEmpty, !icmpBusy else { return }
+        icmpBusy = true
+        icmpRows = [("Статус", "идёт нагрузка, около 10 с…")]
+        defer { icmpBusy = false }
+        guard vpn.isOn else { icmpRows = [("Статус", "включите VPN и повторите")]; return }
+        guard let r = await vpn.tunnelICMPLoad(host) else { icmpRows = [("Статус", "туннель не ответил")]; return }
+        guard r["opened"] as? Bool == true else {
+            icmpRows = [("Сокет открылся", "нет"), ("Ошибка", r["error"] as? String ?? "")]
+            return
+        }
+        guard r["resolved"] as? Bool != false else {
+            icmpRows = [("Адрес", "не распознан"), ("Ошибка", r["error"] as? String ?? "")]
+            return
+        }
+        var rows: [(String, String)] = []
+        for step in (r["steps"] as? [[String: Any]]) ?? [] {
+            let pps = step["pps"] as? Int ?? 0
+            let sent = step["sent"] as? Int ?? 0
+            let got = step["received"] as? Int ?? 0
+            let loss = sent > 0 ? Double(sent - got) * 100 / Double(sent) : 0
+            var line = "\(got) из \(sent), потери \(String(format: "%.1f", loss)) %"
+            if let avg = step["rttAvg"] as? Int, let max = step["rttMax"] as? Int { line += ", \(avg) мс (макс. \(max))" }
+            if let mbps = step["mbps"] as? Double { line += ", \(String(format: "%.1f", mbps)) Мбит/с" }
+            rows.append(("\(pps) пак/с", line))
+        }
+        if let e = r["error"] as? String { rows.append(("Ошибка отправки", e)) }
+        icmpRows = rows.isEmpty ? [("Статус", "нет данных")] : rows
     }
 
     private func runICMP() async {
