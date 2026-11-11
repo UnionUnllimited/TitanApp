@@ -67,9 +67,16 @@ type Config struct {
 	JanitorEvery time.Duration // how often idle sessions are reaped
 }
 
+// DefaultSlotTTL is how long a reply slot is held for downstream data before it goes back
+// empty. Long, so an idle client's one poll costs one request and one reply per this long
+// and the phone's cellular radio can go idle in between; well under carrier ICMP NAT
+// timeouts (30-60 s), so the reply still finds its mapping; and under the client's loss
+// timeout (lossMs, 15 s), so a held poll isn't taken for lost.
+const DefaultSlotTTL = 10 * time.Second
+
 func (c *Config) withDefaults() {
 	if c.SlotTTL <= 0 {
-		c.SlotTTL = 250 * time.Millisecond
+		c.SlotTTL = DefaultSlotTTL
 	}
 	if c.IdleTimeout <= 0 {
 		c.IdleTimeout = 120 * time.Second
@@ -349,9 +356,13 @@ func (ses *session) loop() {
 		slotsQ   []slot   // unspent reply credits, oldest first
 		pendingQ [][]byte // downstream datagrams waiting for a credit, oldest first
 	)
-	// A short ticker drives slot-TTL expiry. It runs at a fraction of SlotTTL so a
-	// slot is released close to its deadline rather than up to a full period late.
-	tick := cfg.SlotTTL / 2
+	// A short ticker drives slot-TTL expiry. It runs at a fraction of SlotTTL, at most a
+	// second, so a slot is released close to its deadline (and well inside the client's
+	// loss timeout) rather than up to a full period late.
+	tick := cfg.SlotTTL / 4
+	if tick > time.Second {
+		tick = time.Second
+	}
 	if tick < 10*time.Millisecond {
 		tick = 10 * time.Millisecond
 	}

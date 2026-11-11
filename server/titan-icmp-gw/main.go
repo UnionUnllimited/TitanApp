@@ -32,7 +32,7 @@ func main() {
 	var (
 		inner       = flag.String("inner", "127.0.0.1:51820", "inner inbound address (UDP) to forward to")
 		listen      = flag.String("listen", "0.0.0.0", "local IPv4 address for the raw ICMP socket")
-		slotTTL     = flag.Duration("slot-ttl", 250*time.Millisecond, "hold an unspent reply slot this long, then answer empty")
+		slotTTL     = flag.Duration("slot-ttl", DefaultSlotTTL, "hold an unspent reply slot this long, then answer empty (keep under the client's 15 s loss timeout)")
 		idle        = flag.Duration("idle-timeout", 120*time.Second, "close a session after this long with no traffic")
 		maxDatagram = flag.Int("max-datagram", 1500, "largest inner datagram accepted")
 		slotQueue   = flag.Int("slot-queue", 64, "max outstanding reply slots per session")

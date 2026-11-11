@@ -47,6 +47,12 @@ const (
 	icmpHeaderLen = 8
 	// icmpEchoHeaderLen is the ICMP echo message header: type, code, checksum(2), id(2), seq(2).
 	icmpEchoHeaderLen = 8
+	// icmpMaxEchoData is the most echo data an IPv4 datagram can carry (65535 - 20 IP - 8 ICMP).
+	// The receive side is sized to it, not to the upstream cap (MTU): a reply carries whatever the
+	// node's inbound sent (a WireGuard inbound at its own MTU, QUIC at 1280 plus an 8-byte
+	// salamander salt), which can be bigger than what we send, and a reply cut short would only
+	// fail the inner protocol's authentication. Sized so, no reply is ever cut.
+	icmpMaxEchoData = 65507
 
 	icmpTypeEchoRequest = 8 // IPv4 Echo Request
 	icmpTypeEchoReply   = 0 // IPv4 Echo Reply
@@ -58,7 +64,7 @@ type icmpConfig struct {
 	Port        int    `json:"port"`        // local UDP port on 127.0.0.1 (0: a free one, returned in the answer)
 	Session     uint16 `json:"session"`     // our session in the header (0: a random non-zero one)
 	Magic       uint32 `json:"magic"`       // header magic (0: icmpMagic)
-	MTU         int    `json:"mtu"`         // inner datagram cap, bytes
+	MTU         int    `json:"mtu"`         // cap on the datagrams we send, bytes (replies may be bigger)
 	MinPolls    int    `json:"minPolls"`    // outstanding requests kept while idle
 	MaxPolls    int    `json:"maxPolls"`    // ceiling for outstanding requests
 	KeepaliveMs int    `json:"keepaliveMs"` // at least one request per this long
@@ -77,7 +83,10 @@ func applyICMPDefaults(c *icmpConfig) {
 		c.MTU = 1232 // ~WireGuard-safe; the owner's inner MTU is ~1200-1280
 	}
 	if c.MinPolls <= 0 {
-		c.MinPolls = 4
+		// One poll held at the node while idle: it answers it (empty) only after its slot hold
+		// (titan-icmp-gw -slot-ttl, 10 s), so an idle tunnel costs one request and one reply per
+		// ~10 s and the cellular radio can go idle in between.
+		c.MinPolls = 1
 	}
 	if c.MaxPolls < c.MinPolls {
 		c.MaxPolls = 64
@@ -89,7 +98,10 @@ func applyICMPDefaults(c *icmpConfig) {
 		c.TickMs = 500
 	}
 	if c.LossMs <= 0 {
-		c.LossMs = 2500
+		// Above the node's slot hold (10 s) plus a round trip, so a poll it holds isn't taken for
+		// lost. A request that really was lost is found much sooner: the node answers in order,
+		// so the reply to any later request gives it away (credit.onReply).
+		c.LossMs = 15000
 	}
 }
 
@@ -169,7 +181,9 @@ type darwinICMP struct {
 	rbuf []byte // reused read buffer: the raw echo message (echo header + body); one reader
 }
 
-func dialICMP(nodeIP net.IP, maxPayload int) (*darwinICMP, error) {
+// dialICMP opens the datagram ICMP socket. maxSend caps the echo data we send; the read buffer
+// takes any echo (icmpMaxEchoData), since the kernel cuts a datagram to the buffer with no error.
+func dialICMP(nodeIP net.IP, maxSend int) (*darwinICMP, error) {
 	conn, err := icmp.ListenPacket("udp4", "0.0.0.0")
 	if err != nil {
 		return nil, err
@@ -177,8 +191,8 @@ func dialICMP(nodeIP net.IP, maxPayload int) (*darwinICMP, error) {
 	return &darwinICMP{
 		conn: conn,
 		dst:  &net.UDPAddr{IP: nodeIP},
-		wbuf: make([]byte, icmpEchoHeaderLen+maxPayload),
-		rbuf: make([]byte, icmpEchoHeaderLen+maxPayload),
+		wbuf: make([]byte, icmpEchoHeaderLen+maxSend),
+		rbuf: make([]byte, icmpEchoHeaderLen+icmpMaxEchoData),
 	}, nil
 }
 
@@ -195,7 +209,8 @@ func (d *darwinICMP) writeTo(payload []byte, id, seq uint16) error {
 
 // readFrom is called only by the single downstream goroutine, so rbuf needs no lock. It reads the
 // raw echo message into rbuf (echo header + body) and copies just the body into buf, so the
-// interface contract ("buf receives the body") holds whatever the ICMP framing is.
+// interface contract ("buf receives the body") holds whatever the ICMP framing is. rbuf takes the
+// largest echo there is, and the shim's buf is as big, so nothing is cut on the way.
 func (d *darwinICMP) readFrom(buf []byte) (int, uint16, uint16, error) {
 	for {
 		n, _, err := d.conn.ReadFrom(d.rbuf)
@@ -214,72 +229,100 @@ func (d *darwinICMP) close() error { return d.conn.Close() }
 
 // --- credit: keep enough requests outstanding for the node's downstream slots ---
 
-// credit is a FIFO of the send times of outstanding Echo Requests. target rides up when replies
-// carry data and decays toward min when idle; requests whose reply is lost are expired by age so
-// outstanding can't inflate forever. One bounded ring is the single source of truth for
-// outstanding, expiry and the RTT estimate. All operations are O(1) (expiry is O(expired)).
+// rttWindow is how long the lowest RTT sample is kept before a fresh one replaces it.
+const rttWindow = int64(10 * time.Second)
+
+// outReq is one outstanding Echo Request: its echo seq (the node mirrors it in the reply), when it
+// went out and whether it carried an inner datagram (else it was a poll).
+type outReq struct {
+	at   int64
+	seq  uint16
+	data bool
+}
+
+// credit tracks the outstanding Echo Requests in send order. The node answers a session's
+// requests strictly in the order they arrived (its reply slots are a FIFO) and mirrors the echo
+// seq, so a reply for seq S also tells us that every request sent before S and still unanswered
+// was lost (or its reply was), and those are reclaimed at once rather than held until they age
+// out. Requests with no later reply at all (the path went quiet) are expired by age. target rides
+// up when replies carry data and decays toward min when idle. One bounded ring is the single
+// source of truth for outstanding, loss and the RTT estimate.
 type credit struct {
 	mu            sync.Mutex
 	target        int
 	min, max      int
-	times         []int64 // ring of send times (nanos); head writes, tail is oldest
-	head, tail, n int     // n = outstanding (tracked)
-	timeout       int64   // nanos; older unanswered requests are deemed lost
-	rtt           int64   // EWMA, nanos
-	hadData       bool    // a data reply since the last tick
+	ring          []outReq // head writes, tail is oldest
+	head, tail, n int      // n = outstanding (tracked)
+	timeout       int64    // nanos; older unanswered requests are deemed lost
+	hadData       bool     // a data reply since the last tick
+
+	// RTT: the lowest round trip of a request that carried data and was answered with data, over
+	// the current and the previous rttWindow. Polls are left out (the node holds one until data
+	// comes to spend it on, up to its slot hold), and so are empty replies (a slot it released).
+	rttMin, rttPrev int64
+	rttSince        int64
 }
 
 func newCredit(min, max int, timeout time.Duration) *credit {
 	// Ring capacity: the poll ceiling plus headroom for an upstream burst. Beyond it the oldest
-	// send time is dropped (its request is presumed answered) so the ring stays bounded.
+	// request is dropped (presumed answered) so the ring stays bounded.
 	capacity := max + 64
 	return &credit{
 		target:  min,
 		min:     min,
 		max:     max,
-		times:   make([]int64, capacity),
+		ring:    make([]outReq, capacity),
 		timeout: int64(timeout),
 	}
 }
 
-func (c *credit) push(now int64) {
-	if c.n == len(c.times) { // full: drop the oldest
-		c.tail = (c.tail + 1) % len(c.times)
+func (c *credit) push(r outReq) {
+	if c.n == len(c.ring) { // full: drop the oldest
+		c.tail = (c.tail + 1) % len(c.ring)
 		c.n--
 	}
-	c.times[c.head] = now
-	c.head = (c.head + 1) % len(c.times)
+	c.ring[c.head] = r
+	c.head = (c.head + 1) % len(c.ring)
 	c.n++
 }
 
-func (c *credit) popOldest() (int64, bool) {
-	if c.n == 0 {
-		return 0, false
-	}
-	t := c.times[c.tail]
-	c.tail = (c.tail + 1) % len(c.times)
+func (c *credit) popOldest() outReq {
+	r := c.ring[c.tail]
+	c.tail = (c.tail + 1) % len(c.ring)
 	c.n--
-	return t, true
+	return r
 }
 
-// onSent records a request just sent (data or poll).
-func (c *credit) onSent(now int64) {
+// onSent records a request about to go out (data or poll). It is booked before the write so a
+// reply that beats the bookkeeping still finds it; one whose write failed counts as lost.
+func (c *credit) onSent(now int64, seq uint16, data bool) {
 	c.mu.Lock()
-	c.push(now)
+	c.push(outReq{at: now, seq: seq, data: data})
 	c.mu.Unlock()
 }
 
-// onReply records a reply received; data says it carried an inner datagram. It frees one slot and
-// adapts target.
-func (c *credit) onReply(data bool, now int64) {
+// onReply records the reply to the request with echo seq; data says it carried an inner
+// datagram. It frees that request's slot along with every older one still outstanding (lost,
+// since the node answers in order), adapts target and returns how many were lost. A seq that
+// isn't outstanding (a duplicate, a reply to a request already given up on) frees nothing.
+func (c *credit) onReply(seq uint16, data bool, now int64) (lost int) {
 	c.mu.Lock()
-	if t, ok := c.popOldest(); ok {
-		sample := now - t
-		if sample > 0 {
-			if c.rtt == 0 {
-				c.rtt = sample
-			} else {
-				c.rtt += (sample - c.rtt) / 8 // EWMA, 1/8 weight
+	defer c.mu.Unlock()
+	k := -1
+	for i, j := 0, c.tail; i < c.n; i, j = i+1, (j+1)%len(c.ring) {
+		if c.ring[j].seq == seq {
+			k = i
+			break
+		}
+	}
+	if k >= 0 {
+		for ; lost < k; lost++ {
+			c.popOldest()
+		}
+		r := c.popOldest()
+		if r.data && data {
+			if s := now - r.at; s > 0 && (c.rttMin == 0 || s < c.rttMin) {
+				c.rttMin = s
 			}
 		}
 	}
@@ -292,22 +335,35 @@ func (c *credit) onReply(data bool, now int64) {
 			}
 		}
 	}
-	c.mu.Unlock()
+	return lost
 }
 
-// tick advances one maintenance interval: it expires lost requests and decays target when
-// downstream was idle, then returns how many polls to send to reach target and how many requests
-// expired.
+// tick advances one maintenance interval: it expires requests unanswered for longer than the
+// timeout, decays target when downstream was idle, rolls the RTT window, and returns how many
+// polls to send to reach target and how many requests expired.
 func (c *credit) tick(now int64) (topUp, expired int) {
 	c.mu.Lock()
-	for c.n > 0 && now-c.times[c.tail] > c.timeout {
+	for c.n > 0 && now-c.ring[c.tail].at > c.timeout {
 		c.popOldest()
 		expired++
 	}
 	if !c.hadData && c.target > c.min {
-		c.target--
+		// Idle: a quarter of the excess (at least 1) a tick, so the window a transfer opened winds
+		// down in seconds instead of keeping a full set of polls cycling through the node.
+		d := (c.target - c.min) / 4
+		if d < 1 {
+			d = 1
+		}
+		c.target -= d
 	}
 	c.hadData = false
+	if now-c.rttSince >= rttWindow {
+		if c.rttMin > 0 {
+			c.rttPrev = c.rttMin
+		}
+		c.rttMin = 0
+		c.rttSince = now
+	}
 	if c.n < c.target {
 		topUp = c.target - c.n
 	}
@@ -322,10 +378,15 @@ func (c *credit) shouldPoll() bool {
 	return c.n < c.target
 }
 
+// snapshot returns outstanding, target and the RTT estimate (0: no sample yet).
 func (c *credit) snapshot() (outstanding, target int, rtt int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.n, c.target, c.rtt
+	rtt = c.rttPrev
+	if c.rttMin > 0 && (rtt == 0 || c.rttMin < rtt) {
+		rtt = c.rttMin
+	}
+	return c.n, c.target, rtt
 }
 
 // --- shim ---
@@ -357,6 +418,10 @@ type icmpShim struct {
 	seq      atomic.Uint32 // header seq counter
 	lastSend atomic.Int64  // nanos of the last request sent (for keepalive)
 	peer     atomic.Pointer[netip.AddrPort]
+	// paused: the device sleeps (titan "sleep", icmpSleep). No polls are topped up and an empty
+	// reply isn't re-polled, so the node holds nothing for us beyond the keepalive's; a reply that
+	// carries data still re-polls, so a transfer during sleep goes on.
+	paused atomic.Bool
 
 	stats     icmpStatsCounters
 	done      chan struct{}
@@ -383,19 +448,22 @@ func (s *icmpShim) start() {
 	go s.upstream()
 	go s.downstream()
 	go s.maintain()
-	s.fill(nowNanos()) // prime the node's reply slots before any upstream traffic
+	if !s.paused.Load() {
+		s.topUp() // prime the node's reply slots before any upstream traffic
+	}
 }
 
 // nextSeq returns the next header/echo seq (wraps at 16 bits).
 func (s *icmpShim) nextSeq() uint16 { return uint16(s.seq.Add(1)) }
 
-// send writes one frame as an Echo Request (echo id = session) and books the credit.
-func (s *icmpShim) send(frame []byte, seq uint16) error {
+// send writes one frame as an Echo Request (echo id = session, echo seq = header seq) and books
+// the credit; data says it carries an inner datagram.
+func (s *icmpShim) send(frame []byte, seq uint16, data bool) error {
+	now := nowNanos()
+	s.cr.onSent(now, seq, data)
 	if err := s.tr.writeTo(frame, s.session, seq); err != nil {
 		return err
 	}
-	now := nowNanos()
-	s.cr.onSent(now)
 	s.lastSend.Store(now)
 	s.stats.reqSent.Add(1)
 	return nil
@@ -405,24 +473,26 @@ func (s *icmpShim) send(frame []byte, seq uint16) error {
 func (s *icmpShim) sendPoll(seq uint16) error {
 	var hdr [icmpHeaderLen]byte
 	putFrameHeader(hdr[:], s.magic, s.session, seq)
-	return s.send(hdr[:], seq)
+	return s.send(hdr[:], seq, false)
 }
 
-// fill sends polls until outstanding reaches target.
-func (s *icmpShim) fill(now int64) {
+// topUp sends polls until outstanding reaches target.
+func (s *icmpShim) topUp() {
 	for s.cr.shouldPoll() {
 		if err := s.sendPoll(s.nextSeq()); err != nil {
 			return
 		}
 		s.stats.polls.Add(1)
 	}
-	_ = now
 }
 
 // upstream: UDP datagrams from the Xray outbound -> Echo Requests to the node.
 func (s *icmpShim) upstream() {
 	defer s.wg.Done()
-	buf := make([]byte, icmpHeaderLen+s.mtu)
+	// One byte over the cap: the kernel cuts a datagram to the buffer with no error, so only this
+	// way does one bigger than mtu show as n > mtu and get dropped and counted, rather than
+	// forwarded cut short (which the inner protocol would only reject as corrupt).
+	buf := make([]byte, icmpHeaderLen+s.mtu+1)
 	for {
 		n, ap, err := s.udp.ReadFromUDPAddrPort(buf[icmpHeaderLen:])
 		if err != nil {
@@ -439,7 +509,7 @@ func (s *icmpShim) upstream() {
 		}
 		seq := s.nextSeq()
 		putFrameHeader(buf, s.magic, s.session, seq)
-		if err := s.send(buf[:icmpHeaderLen+n], seq); err != nil {
+		if err := s.send(buf[:icmpHeaderLen+n], seq, true); err != nil {
 			continue
 		}
 		s.stats.upPackets.Add(1)
@@ -450,9 +520,10 @@ func (s *icmpShim) upstream() {
 // downstream: Echo Replies from the node -> UDP datagrams to the Xray outbound.
 func (s *icmpShim) downstream() {
 	defer s.wg.Done()
-	buf := make([]byte, icmpHeaderLen+s.mtu)
+	// Any echo fits (icmpMaxEchoData), whatever the upstream cap: see icmpMaxEchoData.
+	buf := make([]byte, icmpMaxEchoData)
 	for {
-		n, _, _, err := s.tr.readFrom(buf)
+		n, _, seq, err := s.tr.readFrom(buf)
 		if err != nil {
 			return // the transport was closed by Close
 		}
@@ -461,23 +532,27 @@ func (s *icmpShim) downstream() {
 		s.stats.lastReply.Store(now)
 		inner, _, ok := parseFrame(buf[:n], s.magic, s.session)
 		if !ok {
-			// A reply we can't read still answers one of our requests: free the slot.
+			// Not from our node session (it always sends our header): an ordinary echo reply to
+			// some other socket, or another session's. It answers none of our requests.
 			if n >= icmpHeaderLen && binary.BigEndian.Uint32(buf[0:]) != s.magic {
 				s.stats.dropMagic.Add(1)
 			} else {
 				s.stats.dropSession.Add(1)
 			}
-			s.cr.onReply(false, now)
-			s.refill(now)
 			continue
 		}
-		if len(inner) == 0 {
-			// An empty reply: a long-poll refresh / keepalive from the node, no data.
-			s.cr.onReply(false, now)
-			s.refill(now)
+		data := len(inner) > 0
+		if lost := s.cr.onReply(seq, data, now); lost > 0 {
+			s.stats.expired.Add(uint64(lost))
+		}
+		if !data {
+			// An empty reply: a slot the node held as long as its slot hold and released. While
+			// the device sleeps it isn't re-polled; the keepalive alone keeps one going.
+			if !s.paused.Load() {
+				s.topUp()
+			}
 			continue
 		}
-		s.cr.onReply(true, now)
 		if ap := s.peer.Load(); ap != nil {
 			if _, err := s.udp.WriteToUDPAddrPort(inner, *ap); err == nil {
 				s.stats.downPackets.Add(1)
@@ -486,19 +561,8 @@ func (s *icmpShim) downstream() {
 		} else {
 			s.stats.dropNoPeer.Add(1)
 		}
-		s.refill(now)
+		s.topUp() // data is flowing: keep the node supplied with slots, asleep or not
 	}
-}
-
-// refill tops the outstanding requests back up to target after a reply freed a slot.
-func (s *icmpShim) refill(now int64) {
-	for s.cr.shouldPoll() {
-		if err := s.sendPoll(s.nextSeq()); err != nil {
-			return
-		}
-		s.stats.polls.Add(1)
-	}
-	_ = now
 }
 
 // maintain runs the slow loop: expire lost requests, keep target topped up, keepalive, and
@@ -517,9 +581,12 @@ func (s *icmpShim) maintain() {
 			if expired > 0 {
 				s.stats.expired.Add(uint64(expired))
 			}
-			s.fill(now)
+			if !s.paused.Load() {
+				s.topUp()
+			}
 			// Keepalive: at least one request per keepalive interval, even when the node holds all
-			// our polls without replying (so a NAT mapping on the path doesn't lapse).
+			// our polls without replying or the device sleeps (so a NAT mapping on the path doesn't
+			// lapse and the node still has a slot for us).
 			if now-s.lastSend.Load() >= int64(s.keepalive) {
 				if err := s.sendPoll(s.nextSeq()); err == nil {
 					s.stats.keepalives.Add(1)
@@ -550,10 +617,37 @@ func (s *icmpShim) Close() error {
 var (
 	icmpMu      sync.Mutex
 	icmpRunning = map[*icmpShim]struct{}{}
+	icmpAsleep  bool // the device sleeps (icmpSleep); a shim started meanwhile starts paused
 )
 
-func registerICMP(s *icmpShim)   { icmpMu.Lock(); icmpRunning[s] = struct{}{}; icmpMu.Unlock() }
+// registerICMP adds a shim, not yet started, to the registry; it takes the sleep state.
+func registerICMP(s *icmpShim) {
+	icmpMu.Lock()
+	icmpRunning[s] = struct{}{}
+	s.paused.Store(icmpAsleep)
+	icmpMu.Unlock()
+}
+
 func unregisterICMP(s *icmpShim) { icmpMu.Lock(); delete(icmpRunning, s); icmpMu.Unlock() }
+
+// icmpSleep pauses (asleep) or resumes the running shims' polling, for PacketTunnelProvider's
+// sleep and wake (sleep.go). Asleep, an idle shim sends only the keepalive, so it no longer keeps
+// the cellular radio up with polls; on wake the node gets its slots back at once.
+func icmpSleep(asleep bool) {
+	icmpMu.Lock()
+	icmpAsleep = asleep
+	shims := make([]*icmpShim, 0, len(icmpRunning))
+	for s := range icmpRunning {
+		shims = append(shims, s)
+	}
+	icmpMu.Unlock()
+	for _, s := range shims {
+		s.paused.Store(asleep)
+		if !asleep {
+			s.topUp() // a shim closed meanwhile fails its first write and stops
+		}
+	}
+}
 
 // startICMP opens the local UDP listener and the ICMP transport and starts the pipe. It returns
 // the chosen local UDP port so the Swift side can point Xray's outbound at 127.0.0.1:port.
