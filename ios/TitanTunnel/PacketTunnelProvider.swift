@@ -338,17 +338,29 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         defer { close(fd) }
         var tv = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-        // One IPv4 address for [host].
-        var hints = addrinfo(ai_flags: 0, ai_family: AF_INET, ai_socktype: SOCK_DGRAM,
-                             ai_protocol: IPPROTO_ICMP, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
-        var res: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(host, nil, &hints, &res) == 0, let info = res else {
-            return json(["opened": true, "resolved": false])
-        }
+        // One IPv4 address for [host]: an address as it is (inet_pton), a name through getaddrinfo
+        // with no socket type or protocol in the hints — getaddrinfo knows no ICMP datagram
+        // socket and refuses SOCK_DGRAM with IPPROTO_ICMP even for a numeric address.
         var addr = sockaddr_storage()
-        memcpy(&addr, info.pointee.ai_addr, Int(info.pointee.ai_addrlen))
-        let addrLen = info.pointee.ai_addrlen
-        freeaddrinfo(res)
+        let addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        var sin = sockaddr_in()
+        sin.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        sin.sin_family = sa_family_t(AF_INET)
+        if inet_pton(AF_INET, host, &sin.sin_addr) != 1 {
+            var hints = addrinfo(ai_flags: 0, ai_family: AF_INET, ai_socktype: 0,
+                                 ai_protocol: 0, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
+            var res: UnsafeMutablePointer<addrinfo>?
+            let rc = getaddrinfo(host, nil, &hints, &res)
+            guard rc == 0, let info = res, let sa = info.pointee.ai_addr else {
+                if let res { freeaddrinfo(res) }
+                return json(["opened": true, "resolved": false, "error": String(cString: gai_strerror(rc))])
+            }
+            sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin.sin_addr = $0.pointee.sin_addr }
+            freeaddrinfo(res)
+        }
+        withUnsafeMutablePointer(to: &addr) { p in
+            p.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee = sin }
+        }
         var received = 0
         var bestRTT = Double.greatestFiniteMagnitude
         var lastErr: String?

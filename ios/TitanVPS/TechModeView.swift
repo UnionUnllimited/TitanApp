@@ -661,6 +661,7 @@ struct TechModeView: View {
             if let e = r["error"] as? String { rows.append(("Ошибка", e)) }
         } else if r["resolved"] as? Bool == false {
             rows.append(("Адрес", "не распознан"))
+            if let e = r["error"] as? String { rows.append(("Ошибка", e)) }
         } else {
             rows.append(("Отправлено", "\(r["sent"] as? Int ?? 0)"))
             rows.append(("Получено", "\(r["received"] as? Int ?? 0)"))
