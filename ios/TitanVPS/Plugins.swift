@@ -158,6 +158,13 @@ enum Plugins {
         guard let json = server.xrayJson, let tag = server.proxyTag else {
             throw SubscriptionError(message: "Обновите подписку: потяните список серверов вниз")
         }
+        // Emergency ICMP transport: a server marked "icmp" (its name or the Host Mapper "titan"
+        // field, like the "tfo" / "pktup" markers) whose proxy outbound runs over UDP has that
+        // outbound's datagrams wrapped in ICMP echo to the node (package titan, icmp.go), for a
+        // node whose IP answers ICMP while TCP/UDP to it are blocked. Everything else is unchanged.
+        if icmpMarked(server) {
+            return try withICMP(json: json, tag: tag)
+        }
         // Технический режим's «Приёмы против блокировок» for this server (Techniques): Xray's own
         // servers only; none, the config as it is.
         guard let ep = endpoint(server) else {
@@ -193,6 +200,144 @@ enum Plugins {
         }
         cfg["outbounds"] = outbounds
         return (try? JSONSerialization.data(withJSONObject: cfg)).map { String(decoding: $0, as: UTF8.self) } ?? json
+    }
+
+    // MARK: - Emergency ICMP transport
+
+    /// The inner datagram cap passed to the shim (icmpConfig.mtu): the core's UDP datagram plus our
+    /// 8-byte header, the 8-byte ICMP echo header and the ~20-byte IPv4 header stay under a cellular
+    /// MTU, so the Echo Request isn't fragmented.
+    static let icmpShimMTU = 1280
+    /// WireGuard's tunnel MTU under the shim: its UDP datagram is the inner IP packet (≤ this) plus
+    /// ~32 bytes of WireGuard framing, which must fit icmpShimMTU.
+    static let icmpWireGuardMTU = 1240
+    /// mKCP's UDP datagram size (the whole packet, header included): set to the shim cap.
+    static let icmpKcpMTU = 1280
+
+    /// A server marked "icmp" (its name or the Host Mapper "titan" field), like "tfo" / "pktup".
+    static func icmpMarked(_ server: Server) -> Bool {
+        if server.name.lowercased().contains("icmp") { return true }
+        guard let json = server.xrayJson, let tag = server.proxyTag,
+              let cfg = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              let ob = outbound(cfg, tag: tag) else { return false }
+        return ((ob["titan"] as? String) ?? "").lowercased().contains("icmp")
+    }
+
+    /// The UDP-based proxy outbounds the ICMP shim can wrap.
+    private enum ICMPProto { case wireguard, mkcp, hysteria }
+
+    /// Which UDP protocol a proxy outbound is, or nil when it isn't one the shim can wrap.
+    private static func icmpProto(_ proxy: [String: Any]) -> ICMPProto? {
+        let proto = ((proxy["protocol"] as? String) ?? "").lowercased()
+        if proto == "wireguard" { return .wireguard }
+        if proto == "hysteria" || proto == "hysteria2" { return .hysteria }
+        if proto == "vless" || proto == "vmess" {
+            let network = (((proxy["streamSettings"] as? [String: Any])?["network"] as? String) ?? "").lowercased()
+            if network == "kcp" || network == "mkcp" { return .mkcp }
+        }
+        return nil
+    }
+
+    /// The node's real address an "icmp" outbound dials (the ICMP target), before the rewrite.
+    private static func icmpNodeHost(_ proxy: [String: Any], _ kind: ICMPProto) -> String? {
+        let settings = proxy["settings"] as? [String: Any] ?? [:]
+        switch kind {
+        case .wireguard:
+            // WireGuard's peer endpoint is "host:port" (IPv4, "[v6]:port" or "name:port").
+            guard let endpoint = (settings["peers"] as? [[String: Any]])?.first?["endpoint"] as? String else { return nil }
+            return icmpEndpointHost(endpoint)
+        case .mkcp:
+            let address = (settings["vnext"] as? [[String: Any]])?.first?["address"] as? String
+            return (address?.isEmpty == false) ? address : nil
+        case .hysteria:
+            if let address = settings["address"] as? String, !address.isEmpty { return address }
+            let address = (settings["servers"] as? [[String: Any]])?.first?["address"] as? String
+            return (address?.isEmpty == false) ? address : nil
+        }
+    }
+
+    /// The host out of a "host:port" / "[v6]:port" endpoint string.
+    private static func icmpEndpointHost(_ endpoint: String) -> String? {
+        if endpoint.hasPrefix("["), let close = endpoint.firstIndex(of: "]") {
+            let host = String(endpoint[endpoint.index(after: endpoint.startIndex)..<close])
+            return host.isEmpty ? nil : host
+        }
+        guard let colon = endpoint.lastIndex(of: ":") else { return endpoint.isEmpty ? nil : endpoint }
+        let host = String(endpoint[..<colon])
+        return host.isEmpty ? nil : host
+    }
+
+    /// The proxy outbound pointed at the shim's local UDP port, with the inner MTU set where the
+    /// protocol has one. Only the server endpoint changes; the protocol and its credentials stay.
+    private static func rewriteICMP(_ proxy: inout [String: Any], _ kind: ICMPProto, localPort: Int) {
+        var settings = proxy["settings"] as? [String: Any] ?? [:]
+        let local = "127.0.0.1"
+        switch kind {
+        case .wireguard:
+            var peers = settings["peers"] as? [[String: Any]] ?? []
+            for j in peers.indices { peers[j]["endpoint"] = "\(local):\(localPort)" }
+            settings["peers"] = peers
+            settings["mtu"] = icmpWireGuardMTU
+            proxy["settings"] = settings
+        case .mkcp:
+            var vnext = settings["vnext"] as? [[String: Any]] ?? []
+            for j in vnext.indices {
+                vnext[j]["address"] = local
+                vnext[j]["port"] = localPort
+            }
+            settings["vnext"] = vnext
+            proxy["settings"] = settings
+            var stream = proxy["streamSettings"] as? [String: Any] ?? [:]
+            var kcp = stream["kcpSettings"] as? [String: Any] ?? [:]
+            kcp["mtu"] = icmpKcpMTU
+            stream["kcpSettings"] = kcp
+            proxy["streamSettings"] = stream
+        case .hysteria:
+            if settings["address"] != nil {
+                settings["address"] = local
+                settings["port"] = localPort
+            }
+            if var servers = settings["servers"] as? [[String: Any]] {
+                for j in servers.indices {
+                    servers[j]["address"] = local
+                    servers[j]["port"] = localPort
+                }
+                settings["servers"] = servers
+            }
+            proxy["settings"] = settings
+        }
+    }
+
+    /// The server's config with its UDP proxy outbound wrapped by the ICMP shim: the shim's local
+    /// UDP port (startICMP binds it) replaces the node endpoint, and startICMP carries the node's
+    /// IPv4 so the shim sends the Echo Requests there. A marked outbound that isn't UDP-based gets a
+    /// clear Russian error instead.
+    static func withICMP(json: String, tag: String) throws -> PreparedServer {
+        guard var cfg = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              var outbounds = cfg["outbounds"] as? [[String: Any]],
+              let i = outbounds.firstIndex(where: { $0["tag"] as? String == tag }) else {
+            throw SubscriptionError(message: "Не удалось разобрать конфиг сервера для ICMP")
+        }
+        var proxy = outbounds[i]
+        guard let kind = icmpProto(proxy), let host = icmpNodeHost(proxy, kind) else {
+            throw SubscriptionError(message: "«ICMP» включён для этого сервера, но его протокол работает не по UDP. ICMP-туннель подходит только для WireGuard, Hysteria2 или VLESS/VMess поверх mKCP. Выберите другой сервер.")
+        }
+        // The shim's unprivileged datagram ICMP socket is IPv4 only; resolve the node here (the Go
+        // side has no resolv.conf on iOS), as the sing-box / mieru clients are resolved.
+        let ip = resolve(host)
+        guard IPv4Address(ip) != nil else {
+            throw SubscriptionError(message: "Адрес сервера для ICMP не удалось привести к IPv4: \(host)")
+        }
+        let port = try Titan.freePort()
+        rewriteICMP(&proxy, kind, localPort: port)
+        outbounds[i] = proxy
+        cfg["outbounds"] = outbounds
+        let newJson = (try? JSONSerialization.data(withJSONObject: cfg)).map { String(decoding: $0, as: UTF8.self) } ?? json
+        let icmpConfig: [String: Any] = ["node": ip, "port": port, "mtu": icmpShimMTU]
+        let configStr = (try? JSONSerialization.data(withJSONObject: icmpConfig)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        let request: [String: Any] = ["method": "startICMP", "config": configStr]
+        let plugin = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
+        return PreparedServer(json: newJson, plugin: plugin)
     }
 
     /// sing-box as the client for TUIC / AnyTLS / ShadowTLS / SSH (same as Android's).

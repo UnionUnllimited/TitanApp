@@ -202,6 +202,38 @@ struct TFOStats {
     static func app() -> TFOStats? { TFOStats(try? Titan.invoke(["method": "tfoStats"])) }
 }
 
+/// The emergency ICMP shim's counters (the tunnel's answer to "icmpStats", package titan): what
+/// it carried while an ICMP server is connected. "sessions" is 0 when none is.
+struct ICMPStats {
+    let sessions: Int
+    private let n: [String: Int]
+
+    init?(_ obj: [String: Any]?) {
+        guard let obj, let sessions = (obj["sessions"] as? NSNumber)?.intValue else { return nil }
+        self.sessions = sessions
+        n = obj.reduce(into: [String: Int]()) { if let v = ($1.value as? NSNumber)?.intValue { $0[$1.key] = v } }
+    }
+
+    var connected: Bool { sessions > 0 }
+
+    func rows() -> [(String, String)] {
+        func c(_ key: String) -> Int { n[key] ?? 0 }
+        func kb(_ bytes: Int) -> String { String(format: "%.1f КБ", Double(bytes) / 1024) }
+        let age: String
+        if let ms = n["lastReplyAgeMs"] { age = ms < 0 ? "ответов ещё не было" : "\(ms) мс назад" } else { age = "—" }
+        return [
+            ("Сессии", "\(sessions)"),
+            ("Вверх", "\(c("upPackets")) датаграмм, \(kb(c("upBytes")))"),
+            ("Вниз", "\(c("downPackets")) датаграмм, \(kb(c("downBytes")))"),
+            ("Запросы / ответы", "\(c("reqSent")) / \(c("replyRecv")) (поллы \(c("polls")), keepalive \(c("keepalives")))"),
+            ("Поллов в воздухе", "\(c("outstanding")) из \(c("target"))"),
+            ("Последний ответ", age),
+            ("RTT", c("rttMs") > 0 ? "\(c("rttMs")) мс" : "—"),
+            ("Отброшено", "magic \(c("dropMagic")), сессия \(c("dropSession")), размер \(c("dropBig")), нет пира \(c("dropNoPeer")), просрочено \(c("expired"))"),
+        ]
+    }
+}
+
 /// The tunnel's memory (its answer to "mem"): its footprint, which iOS's limit is checked
 /// against, the Go runtime's part of it, the watchdog's restarts and the kills it saw.
 struct TunnelMemory {
@@ -279,6 +311,7 @@ struct TechModeView: View {
     @State private var udp: Set<String> = []
     @State private var tfoTunnel: TFOStats?
     @State private var tfoApp: TFOStats?
+    @State private var icmp: ICMPStats?
     @State private var mem: TunnelMemory?
     @Environment(\.scenePhase) private var scenePhase
     @State private var copied = false
@@ -323,6 +356,10 @@ struct TechModeView: View {
                     Button { Task { await refreshTFO() } } label: { Text("Обновить").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
                 }
+                if let icmp, icmp.connected {
+                    card("ICMP-туннель", icmp.rows(),
+                         caption: "Аварийный транспорт: датаграммы туннеля завёрнуты в ICMP echo к узлу (для узла, чей IP отвечает на ping, пока TCP/UDP к нему заблокированы). Показывается, пока подключён сервер с пометкой «icmp» на UDP-протоколе. Обновляется каждые 2 с.")
+                }
                 tricksCard
                 icmpCard
                 card("Dynamic Island", islandRows, caption: Self.islandCaption)
@@ -345,6 +382,7 @@ struct TechModeView: View {
         .task(id: scenePhase) {
             while scenePhase == .active, !Task.isCancelled {
                 mem = TunnelMemory(await vpn.tunnelMem())
+                icmp = ICMPStats(await vpn.tunnelICMPStats())
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
@@ -759,6 +797,7 @@ struct TechModeView: View {
         add("Доступ (\(accessRoute ?? appRoute))", accessRows)
         add("Серверы" + (tcpNote.map { " (\($0))" } ?? ""), serverRows)
         add("TCP Fast Open", tfoRows)
+        if let icmp, icmp.connected { add("ICMP-туннель", icmp.rows()) }
         add("Приёмы против блокировок", trickRows)
         add("Dynamic Island", islandRows)
         add("Память туннеля", memRows)

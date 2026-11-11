@@ -296,8 +296,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pluginHandle: Int?
 
     /// Технический режим asks what the tunnel's TCP Fast Open dials did ("tfoStats": the
-    /// kernel's record of each one, from the xray-tfo patch) and its memory ("mem"); the app
-    /// whether on demand is held off in this session ("onDemandHeld").
+    /// kernel's record of each one, from the xray-tfo patch), the emergency ICMP shim's counters
+    /// ("icmpStats", package titan) and its memory ("mem"); the app whether on demand is held off
+    /// in this session ("onDemandHeld").
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         let msg = String(decoding: messageData, as: UTF8.self)
         // Технический режим's ICMP feasibility check: off the queue (it blocks on recvfrom).
@@ -314,6 +315,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         switch msg {
         case "tfoStats":
             completionHandler?(Data(TitanInvoke("{\"method\":\"tfoStats\"}").utf8))
+        case "icmpStats":
+            // The emergency ICMP shim's counters (package titan, icmp.go), for Технический режим.
+            completionHandler?(Data(TitanInvoke("{\"method\":\"icmpStats\"}").utf8))
         case "mem":
             // On the queue: the counters are its.
             queue.async { [self] in completionHandler?(memoryReport()) }
