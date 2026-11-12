@@ -280,6 +280,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disconnect() = TitanVpnService.stop(getApplication<Application>())
 
+    /** The user's own Вкл / Выкл on Главная: what it comes to is felt (TitanScreen), nothing else. */
+    internal val connectFeedback = ConnectFeedback()
+
+    /** Вкл by hand: [connect] is MainActivity's (it asks for the VPN permission first). */
+    fun connectByHand(connect: () -> Unit) {
+        connectFeedback.expect(ConnectFeedback.Asked.CONNECT, SystemClock.elapsedRealtime())
+        connect()
+    }
+
+    fun disconnectByHand() {
+        connectFeedback.expect(ConnectFeedback.Asked.DISCONNECT, SystemClock.elapsedRealtime())
+        disconnect()
+    }
+
     /**
      * Выйти (as iOS): what the key left on this device goes — the key, its servers and pick,
      * favourites, pings, the account; reminders with it (TitanApp's observer of the key). The

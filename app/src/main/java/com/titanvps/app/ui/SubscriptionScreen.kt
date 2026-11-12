@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -72,7 +72,7 @@ import kotlinx.coroutines.flow.first
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onOpenDevices: () -> Unit) {
+internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, scroll: ScrollState, onOpenDevices: () -> Unit) {
     val info = sub.info
     val context = LocalContext.current
     val palette = Titan.palette
@@ -177,7 +177,7 @@ internal fun SubscriptionScreen(viewModel: MainViewModel, sub: Subscription, onO
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val wide = maxWidth >= 720.dp
             Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                Modifier.fillMaxSize().verticalScroll(scroll),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Column(

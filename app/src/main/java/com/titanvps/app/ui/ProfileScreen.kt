@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -89,6 +89,7 @@ import com.titanvps.app.ui.theme.fixedSp
 internal fun ProfileScreen(
     viewModel: MainViewModel,
     sub: Subscription,
+    scroll: ScrollState,
     onOpenApps: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenHome: () -> Unit,
@@ -116,7 +117,7 @@ internal fun ProfileScreen(
     val selected = sub.servers.firstOrNull { it.id == selectedId } ?: sub.servers.firstOrNull()
     val supportUrl = sub.info.supportUrl ?: BuildConfig.TELEGRAM_URL
 
-    Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) {
+    Box(Modifier.fillMaxSize().verticalScroll(scroll), contentAlignment = Alignment.TopCenter) {
         Column(
             Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

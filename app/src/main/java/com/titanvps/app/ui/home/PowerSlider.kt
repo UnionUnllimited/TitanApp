@@ -181,19 +181,19 @@ internal fun PowerSlider(state: VpnState, onToggle: (Boolean) -> Boolean, modifi
         delay(1500)
         model.pending = null
     }
-    // A connect that failed: the knob is back at Выкл, with a shake.
+    // A connect that failed: the knob is back at Выкл, with a shake. Felt only when it was the
+    // user's Вкл (TitanScreen's ConnectHaptics), not after a reconnect the VPN made itself.
     LaunchedEffect(state) {
         val before = model.lastState
         model.lastState = state
         if (state is VpnState.Error && before !is VpnState.Error) {
             model.pending = null
-            haptics.error()
             shaker.shake()
         }
     }
 
+    // Felt already: a refusal comes with its warning toast.
     fun refuse() {
-        haptics.error()
         scope.launch { shaker.shake() }
     }
 

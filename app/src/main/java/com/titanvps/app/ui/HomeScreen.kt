@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -61,10 +62,13 @@ import com.titanvps.app.data.ServerOrder
 import com.titanvps.app.data.Subscription
 import com.titanvps.app.ui.home.ListCaption
 import com.titanvps.app.ui.home.PowerSlider
+import com.titanvps.app.ui.home.ScrollTopButton
+import com.titanvps.app.ui.home.ScrollTopRoom
 import com.titanvps.app.ui.home.ServerRow
 import com.titanvps.app.ui.home.ServerTabs
 import com.titanvps.app.ui.home.StatusBlock
 import com.titanvps.app.ui.home.WifiLockedDialog
+import com.titanvps.app.ui.home.rememberScrollTopVisible
 import com.titanvps.app.ui.kit.SpinningIcon
 import com.titanvps.app.ui.kit.SquareIconButton
 import com.titanvps.app.ui.kit.ToastKind
@@ -80,6 +84,7 @@ import kotlinx.coroutines.launch
  * Главная: header (Поддержка, logo, Обновить подписку), the Выкл | Вкл slider, the status
  * with Проверить соединение, Страны | Обходы tabs with Пинг, and the server list. The
  * subscription's details are on Подписка; here only that it ran out. Обходы: mobile data only.
+ * [list]: the server list's scroll (TitanScreen takes it to the top); a screen down, «↑» does too.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,6 +93,7 @@ internal fun HomeScreen(
     sub: Subscription,
     busy: Boolean,
     onConnect: () -> Unit,
+    list: LazyListState,
 ) {
     val context = LocalContext.current
     val haptics = rememberHaptics()
@@ -131,11 +137,11 @@ internal fun HomeScreen(
                 Toasts.show(refusal, ToastKind.WARNING)
                 false
             } ?: run {
-                onConnect()
+                viewModel.connectByHand(onConnect)
                 true
             }
             !on && active -> {
-                viewModel.disconnect()
+                viewModel.disconnectByHand()
                 true
             }
             else -> true
@@ -223,6 +229,10 @@ internal fun HomeScreen(
     // 16 at the top: with the slider's own 6, its glow fades out before the list's edge under
     // the header cuts it (as on iOS).
     val listPadding = PaddingValues(16.dp)
+    // «↑» about a screen down; meanwhile the last row can rise above it. That's on a list some two
+    // screens long, so the end that grows is off screen.
+    val toTop = rememberScrollTopVisible(list)
+    val serverPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + if (toTop) ScrollTopRoom else 0.dp)
     // Pull to refresh's own spinner for a pull only (as on iOS); the header's arrow turns for
     // any refresh, the one at launch too.
     var pulling by remember { mutableStateOf(false) }
@@ -236,6 +246,9 @@ internal fun HomeScreen(
             pulling = false
         }
     }
+    val onTop: () -> Unit = { scope.launch { list.animateScrollToItem(0) } }
+    // Over the rows' middle, clear of their flag, ping and mark; above the tab bar.
+    val topButton = Modifier.padding(bottom = 12.dp)
 
     // Phones: one column up to 640dp, centered. Tablets / landscape: controls on the
     // left, the server list on the right.
@@ -257,10 +270,12 @@ internal fun HomeScreen(
                     ) {
                         LazyColumn(
                             Modifier.fillMaxSize(),
-                            contentPadding = listPadding,
+                            state = list,
+                            contentPadding = serverPadding,
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             content = listItems,
                         )
+                        ScrollTopButton(toTop, onTop, Modifier.align(Alignment.BottomCenter).then(topButton))
                     }
                 }
             }
@@ -274,12 +289,14 @@ internal fun HomeScreen(
                 ) {
                     LazyColumn(
                         Modifier.fillMaxSize(),
-                        contentPadding = listPadding,
+                        state = list,
+                        contentPadding = serverPadding,
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         topItems()
                         listItems()
                     }
+                    ScrollTopButton(toTop, onTop, Modifier.align(Alignment.BottomCenter).then(topButton))
                 }
             }
         }

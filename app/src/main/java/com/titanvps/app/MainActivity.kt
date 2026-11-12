@@ -36,7 +36,8 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (it.resultCode == RESULT_OK) TitanVpnService.start(this)
+        // Not allowed: the Вкл asked for comes to nothing (nothing to feel).
+        if (it.resultCode == RESULT_OK) TitanVpnService.start(this) else viewModel.connectFeedback.forget()
     }
 
     // Allowed now: the VPN notification that was hidden appears, a due traffic reminder too.
@@ -104,7 +105,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connect() {
-        if (!viewModel.canConnect()) return
+        if (!viewModel.canConnect()) {
+            viewModel.connectFeedback.forget()
+            return
+        }
         val prepare = VpnService.prepare(this)
         if (prepare != null) vpnPermission.launch(prepare) else TitanVpnService.start(this)
     }

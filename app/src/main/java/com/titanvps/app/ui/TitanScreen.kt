@@ -1,7 +1,9 @@
 package com.titanvps.app.ui
 
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
@@ -28,6 +30,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.tappableElement
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -42,8 +48,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -57,6 +65,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.titanvps.app.BuildConfig
 import com.titanvps.app.ui.kit.AppNav
 import com.titanvps.app.ui.kit.AuroraBackground
@@ -72,6 +83,7 @@ import com.titanvps.app.ui.theme.fixedSp
 import com.titanvps.app.ui.theme.iosSpring
 import com.titanvps.app.ui.theme.rememberReduceMotion
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -87,6 +99,7 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
     val context = LocalContext.current
     // Links prepared by the view model (Личный кабинет).
     LaunchedEffect(Unit) { viewModel.openUrl.collect { context.openUrl(it) } }
+    ConnectHaptics(viewModel)
 
     // The view model's messages come up as toasts.
     LaunchedEffect(message) {
@@ -138,13 +151,50 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
             WelcomeScreen(viewModel, busy)
             return@Crossfade
         }
+        // Each tab's scroll, kept while it's off screen; a tap on the tab it's on takes it to the top.
+        val homeList = rememberLazyListState()
+        val subscriptionScroll = rememberScrollState()
+        val profileScroll = rememberScrollState()
+        val scope = rememberCoroutineScope()
+        val haptics = rememberHaptics()
+        // The tabs side by side, swiped between (TabSwipe); none while a screen is open over them,
+        // back on the tab it was opened from.
+        val pager = if (overlay == null) rememberPagerState(initialPage = tab.ordinal) { MainTab.entries.size } else null
+        if (pager != null) {
+            // Settled on another tab after a swipe: that's the tab.
+            LaunchedEffect(pager) { snapshotFlow { pager.settledPage }.collect { tab = MainTab.entries[it] } }
+            // Picked any other way (the bar, Назад, a reminder, a row on Профиль): there at once.
+            LaunchedEffect(pager, tab) { if (pager.currentPage != tab.ordinal) pager.scrollToPage(tab.ordinal) }
+        }
+        // The tab on screen, or the one a swipe is going to while it goes.
+        val shown = pager?.let { MainTab.entries[it.targetPage] } ?: tab
+        val open: (MainTab) -> Unit = { t ->
+            tab = t
+            pager?.let { scope.launch { it.scrollToPage(t.ordinal) } }
+        }
         // Back on Подписка or Профиль goes to Главная first.
-        BackHandler(enabled = overlay == null && tab != MainTab.HOME) { tab = MainTab.HOME }
+        BackHandler(enabled = overlay == null && shown != MainTab.HOME) { open(MainTab.HOME) }
 
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                if (overlay == null) BottomBar(tab) { tab = it }
+                if (pager != null) {
+                    BottomBar(
+                        tab = shown,
+                        onSelect = open,
+                        onReselect = { t ->
+                            if (!pager.isScrollInProgress) {
+                                scope.launch {
+                                    when (t) {
+                                        MainTab.HOME -> homeList.animateScrollToItem(0)
+                                        MainTab.SUBSCRIPTION -> subscriptionScroll.animateScrollTo(0)
+                                        MainTab.PROFILE -> profileScroll.animateScrollTo(0)
+                                    }
+                                }
+                            }
+                        },
+                    )
+                }
             },
         ) { padding ->
             // Scaffold's padding covers the bars; consume it so safeDrawing (e.g. IME) isn't added twice.
@@ -160,16 +210,29 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
                         onOpenLogs = { logsFromTech = true; overlay = Overlay.DIAGNOSTICS },
                     ) { overlay = null }
                     overlay == Overlay.DEVICES -> DevicesScreen(viewModel) { overlay = null }
-                    tab == MainTab.HOME -> HomeScreen(viewModel, sub, busy, onConnect)
-                    tab == MainTab.SUBSCRIPTION -> SubscriptionScreen(viewModel, sub, onOpenDevices = { overlay = Overlay.DEVICES })
-                    else -> ProfileScreen(
-                        viewModel, sub,
-                        onOpenApps = { overlay = Overlay.APPS },
-                        onOpenDiagnostics = { overlay = Overlay.DIAGNOSTICS },
-                        onOpenHome = { tab = MainTab.HOME },
-                        onOpenTech = { overlay = Overlay.TECH },
-                        onOpenSubscription = { tab = MainTab.SUBSCRIPTION },
-                    )
+                    pager != null -> HorizontalPager(
+                        state = pager,
+                        modifier = Modifier.fillMaxSize().tabSwipe(pager) { haptics.selection() },
+                        // Only TabSwipe moves it: the pages' own gestures go first.
+                        userScrollEnabled = false,
+                        pageNestedScrollConnection = NoPagerNestedScroll,
+                    ) { page ->
+                        when (MainTab.entries[page]) {
+                            MainTab.HOME -> HomeScreen(viewModel, sub, busy, onConnect, homeList)
+                            MainTab.SUBSCRIPTION -> SubscriptionScreen(
+                                viewModel, sub, subscriptionScroll,
+                                onOpenDevices = { overlay = Overlay.DEVICES },
+                            )
+                            MainTab.PROFILE -> ProfileScreen(
+                                viewModel, sub, profileScroll,
+                                onOpenApps = { overlay = Overlay.APPS },
+                                onOpenDiagnostics = { overlay = Overlay.DIAGNOSTICS },
+                                onOpenHome = { open(MainTab.HOME) },
+                                onOpenTech = { overlay = Overlay.TECH },
+                                onOpenSubscription = { open(MainTab.SUBSCRIPTION) },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -192,6 +255,36 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
 }
 
 private enum class Overlay { APPS, DIAGNOSTICS, DEVICES, TECH }
+
+/**
+ * The user's own Вкл / Выкл felt when it's done: success once connected, a light tap once off,
+ * an error if the connect failed (ConnectFeedback). Only while the app is on screen: leaving it
+ * forgets what was asked, so nothing the VPN comes to meanwhile is felt, then or on return.
+ */
+@Composable
+private fun ConnectHaptics(viewModel: MainViewModel) {
+    val haptics = rememberHaptics()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val activity = LocalContext.current as? Activity
+    LaunchedEffect(viewModel, lifecycle) {
+        val feedback = viewModel.connectFeedback
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            try {
+                viewModel.vpnState.collect { state ->
+                    when (feedback.onState(state, SystemClock.elapsedRealtime())) {
+                        ConnectFeedback.Outcome.CONNECTED -> haptics.success()
+                        ConnectFeedback.Outcome.DISCONNECTED -> haptics.tap()
+                        ConnectFeedback.Outcome.FAILED -> haptics.error()
+                        null -> Unit
+                    }
+                }
+            } finally {
+                // Turned, not left: the connect goes on in the new screen.
+                if (activity?.isChangingConfigurations != true) feedback.forget()
+            }
+        }
+    }
+}
 
 /** The logo rising out of the aurora, «Titan VPS» in the logo's colours (iOS SplashView). */
 @Composable
@@ -237,10 +330,11 @@ private fun SplashScreen() {
 
 /**
  * Главная / Подписка / Профиль: a thin bar on the surface with a one-pixel hairline on top,
- * down to the screen's edge; the picked tab in the brand blue (iOS TitanTabBar).
+ * down to the screen's edge; the picked tab in the brand blue (iOS TitanTabBar). The picked one
+ * tapped again: [onReselect] (its list to the top).
  */
 @Composable
-private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit) {
+private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit, onReselect: (MainTab) -> Unit) {
     val palette = Titan.palette
     val haptics = rememberHaptics()
     // Of gesture navigation's inset (the handle, 24 dp) 18 under the items (48 dp tall, a touch
@@ -278,6 +372,8 @@ private fun BottomBar(tab: MainTab, onSelect: (MainTab) -> Unit) {
                                 if (!selected) {
                                     haptics.selection()
                                     onSelect(t)
+                                } else {
+                                    onReselect(t)
                                 }
                             },
                             scale = 0.92f,
