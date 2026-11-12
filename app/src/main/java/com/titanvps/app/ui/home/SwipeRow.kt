@@ -107,6 +107,8 @@ internal fun SwipeRow(
                                 }
                                 val d = change.position - down.position
                                 if (horizontal == null) {
+                                    // Taken before it got here: the tabs caught still sliding (TabSwipe).
+                                    if (change.isConsumed) break
                                     // An up or down move is the list's, at once (before it scrolls).
                                     if (abs(d.y) >= slop && abs(d.x) <= abs(d.y) * 2) {
                                         horizontal = false

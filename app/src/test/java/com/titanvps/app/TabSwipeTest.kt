@@ -5,6 +5,7 @@ import com.titanvps.app.ui.TabSwipe.Decision
 import kotlin.math.abs
 import kotlin.math.hypot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -76,6 +77,19 @@ class TabSwipeTest {
         assertEquals(1, TabSwipe.target(1, 3, moved = 0.4f, velocity = -900f, flingAt = fling))
         // Far and fast: still the next one only.
         assertEquals(1, TabSwipe.target(0, 3, moved = 1.4f, velocity = 5000f, flingAt = fling))
+    }
+
+    @Test
+    fun aTouchCatchesThePagesOnlyWhileTheyStillHaveSomeWayToGo() {
+        // 400 px pages, caught from 2 px.
+        assertTrue(TabSwipe.catches(settling = true, pagesLeft = 0.2f, pageSize = 400f, catchFrom = 2f))
+        assertTrue(TabSwipe.catches(settling = true, pagesLeft = -0.6f, pageSize = 400f, catchFrom = 2f))
+        // All but there: the touch is the pages'.
+        assertFalse(TabSwipe.catches(settling = true, pagesLeft = 0.004f, pageSize = 400f, catchFrom = 2f))
+        // At rest: never.
+        assertFalse(TabSwipe.catches(settling = false, pagesLeft = 0.5f, pageSize = 400f, catchFrom = 2f))
+        // Not laid out yet.
+        assertFalse(TabSwipe.catches(settling = true, pagesLeft = 1f, pageSize = 0f, catchFrom = 2f))
     }
 
     @Test

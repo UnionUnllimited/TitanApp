@@ -172,6 +172,12 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
             tab = t
             pager?.let { scope.launch { it.scrollToPage(t.ordinal) } }
         }
+        // A screen over the tabs: Назад comes back to the tab it was opened on, even one a swipe was
+        // still settling on (the pager is gone meanwhile, and `tab` follows it only once settled).
+        val openOverlay: (MainTab, Overlay) -> Unit = { from, o ->
+            tab = from
+            overlay = o
+        }
         // Back on Подписка or Профиль goes to Главная first.
         BackHandler(enabled = overlay == null && shown != MainTab.HOME) { open(MainTab.HOME) }
 
@@ -221,14 +227,14 @@ fun TitanScreen(viewModel: MainViewModel, onConnect: () -> Unit) {
                             MainTab.HOME -> HomeScreen(viewModel, sub, busy, onConnect, homeList)
                             MainTab.SUBSCRIPTION -> SubscriptionScreen(
                                 viewModel, sub, subscriptionScroll,
-                                onOpenDevices = { overlay = Overlay.DEVICES },
+                                onOpenDevices = { openOverlay(MainTab.SUBSCRIPTION, Overlay.DEVICES) },
                             )
                             MainTab.PROFILE -> ProfileScreen(
                                 viewModel, sub, profileScroll,
-                                onOpenApps = { overlay = Overlay.APPS },
-                                onOpenDiagnostics = { overlay = Overlay.DIAGNOSTICS },
+                                onOpenApps = { openOverlay(MainTab.PROFILE, Overlay.APPS) },
+                                onOpenDiagnostics = { openOverlay(MainTab.PROFILE, Overlay.DIAGNOSTICS) },
                                 onOpenHome = { open(MainTab.HOME) },
-                                onOpenTech = { overlay = Overlay.TECH },
+                                onOpenTech = { openOverlay(MainTab.PROFILE, Overlay.TECH) },
                                 onOpenSubscription = { open(MainTab.SUBSCRIPTION) },
                             )
                         }

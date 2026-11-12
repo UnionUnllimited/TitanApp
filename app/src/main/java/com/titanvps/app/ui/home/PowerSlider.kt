@@ -305,7 +305,7 @@ internal fun PowerSlider(state: VpnState, onToggle: (Boolean) -> Boolean, modifi
                                         val back = if (wasOn) model.maxX else 0f
                                         scope.launch { model.knobX.animateTo(back, iosSpring(0.35f, 0.8f)) }
                                     }
-                                } else if (horizontal == null && !moved) {
+                                } else if (horizontal == null && !moved && !change.isConsumed) {
                                     change.consume()
                                     tapped(down.position.x > size.width / 2f)
                                 }
@@ -314,6 +314,8 @@ internal fun PowerSlider(state: VpnState, onToggle: (Boolean) -> Boolean, modifi
                             val d = change.position - down.position
                             if (d.getDistance() > slop) moved = true
                             if (horizontal == null) {
+                                // Taken before it got here: the tabs caught still sliding (TabSwipe).
+                                if (change.isConsumed) break
                                 // An up or down move is the list's, at once (before it scrolls).
                                 if (abs(d.y) >= slop && abs(d.x) <= abs(d.y) * 1.5f) {
                                     horizontal = false
