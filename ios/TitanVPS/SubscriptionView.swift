@@ -508,8 +508,10 @@ struct ProfileView: View {
                     .frame(maxWidth: .infinity)
                     .id(Self.top)
                 }
-                // A tap on Профиль in the tab bar while on it.
+                // A tap on Профиль in the tab bar while on it: back from Технический режим first
+                // (as the system bar pops), the next tap to the top.
                 .onChange(of: toTop) { _ in
+                    if showTech { showTech = false; return }
                     withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(Self.top, anchor: .top) }
                 }
             }

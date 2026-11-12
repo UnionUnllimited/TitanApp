@@ -108,9 +108,14 @@ struct HomeView: View {
     /// of that redraws Главная. The status bar's tap to the top works as before (one ScrollView).
     private func depth(screen: CGFloat) -> some View {
         GeometryReader { g in
-            Color.clear.onChange(of: -g.frame(in: .named(Self.listSpace)).minY > screen) { down in
-                withAnimation(.easeInOut(duration: 0.2)) { showTop = down }
-            }
+            let down = -g.frame(in: .named(Self.listSpace)).minY > screen
+            Color.clear
+                // A new list (the window crossed into the other layout) has no change to report
+                // for where it starts: read once as it comes.
+                .onAppear { showTop = down }
+                .onChange(of: down) { now in
+                    withAnimation(.easeInOut(duration: 0.2)) { showTop = now }
+                }
         }
     }
 
