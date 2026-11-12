@@ -613,9 +613,11 @@ struct TechModeView: View {
         Text("Применится при следующем подключении").font(.scaled(12)).foregroundStyle(.secondary)
         if vpn.isConnected, store.selected?.name == server.name {
             Button {
+                // A tap now; how the reconnect ends is felt too (VPNController's byUser).
+                Haptics.tap()
                 reconnecting = true
                 Task {
-                    await vpn.switchTo(server)
+                    await vpn.switchTo(server, byUser: true)
                     reconnecting = false
                 }
             } label: {

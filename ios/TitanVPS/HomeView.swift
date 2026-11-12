@@ -14,45 +14,74 @@ struct HomeView: View {
     /// Speed while connected (read only while Главная is on screen). Held without observing it:
     /// only the speed line and the curve redraw each second, not all of Главная.
     @State private var traffic = TrafficMonitor()
+    /// Наверх: shown once the list is about a screen down.
+    @State private var showTop = false
     @Environment(\.openURL) private var openURL
     var openSettings: () -> Void
+    /// Bumped by a tap on Главная in the tab bar while it is on screen: back to the top.
+    var toTop = 0
+
+    /// The scroll content's top (the list's, and the controls column's in a wide window), and
+    /// the list's ScrollView, which its depth is read against.
+    private static let top = "home.top"
+    private static let controlsTop = "home.controlsTop"
+    private static let listSpace = "home.list"
 
     var body: some View {
         GeometryReader { geo in
             let wide = geo.size.width >= 720
-            VStack(spacing: 0) {
-                header
-                if wide {
-                    HStack(alignment: .top, spacing: 0) {
-                        ScrollView {
-                            VStack(spacing: 12) { controls }
-                                .animation(.spring(response: 0.45, dampingFraction: 0.85), value: vpn.isConnected)
-                                // The column clips: room at its sides for the slider's glow.
-                                .padding(.vertical, 16)
-                                .padding(.horizontal, 24)
-                        }
-                        .scrollDisabled(holdingDrag)
-                        ScrollView { VStack(spacing: 10) { list(wide: true) }.padding(16) }
+            ScrollViewReader { proxy in
+                VStack(spacing: 0) {
+                    header
+                    if wide {
+                        HStack(alignment: .top, spacing: 0) {
+                            ScrollView {
+                                VStack(spacing: 12) { controls }
+                                    .animation(.spring(response: 0.45, dampingFraction: 0.85), value: vpn.isConnected)
+                                    // The column clips: room at its sides for the slider's glow.
+                                    .padding(.vertical, 16)
+                                    .padding(.horizontal, 24)
+                                    .id(Self.controlsTop)
+                            }
+                            .scrollDisabled(holdingDrag)
+                            ScrollView {
+                                VStack(spacing: 10) { list(wide: true) }
+                                    .padding(16)
+                                    .padding(.bottom, ScrollTopButton.room)
+                                    .background(depth(screen: geo.size.height))
+                                    .id(Self.top)
+                            }
+                            .coordinateSpace(name: Self.listSpace)
                             .scrollDisabled(holdingDrag)
                             .refreshable { await store.refreshFromPull() }
-                    }
-                } else {
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            controls
-                            list(wide: false)
+                            .overlay(alignment: .bottomTrailing) { topButton(proxy, wide: true) }
                         }
-                        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: vpn.isConnected)
-                        .padding(16)
-                        .frame(maxWidth: 640)
-                        .frame(maxWidth: .infinity)
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 12) {
+                                controls
+                                list(wide: false)
+                            }
+                            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: vpn.isConnected)
+                            .padding(16)
+                            // Room under the last row for Наверх: at the list's end it covers none.
+                            .padding(.bottom, ScrollTopButton.room)
+                            .frame(maxWidth: 640)
+                            .frame(maxWidth: .infinity)
+                            .background(depth(screen: geo.size.height))
+                            .id(Self.top)
+                        }
+                        .coordinateSpace(name: Self.listSpace)
+                        .scrollDisabled(holdingDrag)
+                        .refreshable { await store.refreshFromPull() }
+                        .overlay(alignment: .bottomTrailing) { topButton(proxy, wide: false) }
                     }
-                    .scrollDisabled(holdingDrag)
-                    .refreshable { await store.refreshFromPull() }
                 }
+                .frame(maxWidth: wide ? 1200 : .infinity)
+                .frame(maxWidth: .infinity)
+                // A tap on Главная in the tab bar while on it.
+                .onChange(of: toTop) { _ in scrollUp(proxy, wide: wide) }
             }
-            .frame(maxWidth: wide ? 1200 : .infinity)
-            .frame(maxWidth: .infinity)
         }
         .background(Palette.background.ignoresSafeArea())
         .onAppear { if vpn.isConnected { traffic.start() } }
@@ -72,6 +101,34 @@ struct HomeView: View {
             page = .servers
             if !store.resumingAfterPing { Task { await vpn.switchTo(to) } }
             store.message = "Обходы работают только через мобильный интернет. Переключили на «\(to.name.splitFlag.1)»."
+        }
+    }
+
+    /// Whether the list is about a screen down (Наверх then), read as it scrolls: only a change
+    /// of that redraws Главная. The status bar's tap to the top works as before (one ScrollView).
+    private func depth(screen: CGFloat) -> some View {
+        GeometryReader { g in
+            Color.clear.onChange(of: -g.frame(in: .named(Self.listSpace)).minY > screen) { down in
+                withAnimation(.easeInOut(duration: 0.2)) { showTop = down }
+            }
+        }
+    }
+
+    /// Наверх in the list's corner above the tab bar, once it is a screen down.
+    @ViewBuilder private func topButton(_ proxy: ScrollViewProxy, wide: Bool) -> some View {
+        if showTop {
+            ScrollTopButton { scrollUp(proxy, wide: wide) }
+                .padding(.trailing, 16)
+                .padding(.bottom, 12)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+        }
+    }
+
+    /// Back to the top, animated (both columns in a wide window).
+    private func scrollUp(_ proxy: ScrollViewProxy, wide: Bool) {
+        withAnimation(.easeInOut(duration: 0.35)) {
+            proxy.scrollTo(Self.top, anchor: .top)
+            if wide { proxy.scrollTo(Self.controlsTop, anchor: .top) }
         }
     }
 
@@ -188,21 +245,22 @@ struct HomeView: View {
         }
     }
 
-    /// The slider moved: false when it can't be done now (the knob goes back).
+    /// The slider moved: false when it can't be done now (the knob goes back, with its own error
+    /// haptic: the notes here have none). Its outcome is felt (VPNController's byUser).
     private func toggleVPN(_ on: Bool) -> Bool {
         if on {
             guard !vpn.isOn else { return true }
             guard let server = store.selected else {
-                store.showToast("Выберите сервер в списке ниже", .warning)
+                store.showToast("Выберите сервер в списке ниже", .warning, haptic: false)
                 return false
             }
             if store.blockedOnWifi(server) {
-                store.showToast("Обходы недоступны на Wi-Fi — выберите сервер во вкладке «Страны»", .warning)
+                store.showToast("Обходы недоступны на Wi-Fi — выберите сервер во вкладке «Страны»", .warning, haptic: false)
                 return false
             }
-            Task { await vpn.connect(server) }
+            Task { await vpn.connect(server, byUser: true) }
         } else {
-            if vpn.isOn { vpn.disconnect() }
+            if vpn.isOn { vpn.disconnect(byUser: true) }
         }
         return true
     }
@@ -442,8 +500,9 @@ struct HomeView: View {
         let changed = s.id != store.selected?.id
         if changed { Haptics.selection() }
         store.select(s.id)
-        // Coming back after a ping: that reconnect goes over to the pick itself.
-        if changed, !store.resumingAfterPing { Task { await vpn.switchTo(s) } }
+        // Coming back after a ping: that reconnect goes over to the pick itself. The switch's
+        // outcome is felt (byUser); the tick above is its start.
+        if changed, !store.resumingAfterPing { Task { await vpn.switchTo(s, byUser: true) } }
     }
 
     /// Страны and Обходы (a group with no servers has no tab).

@@ -10,8 +10,20 @@ struct SubscriptionView: View {
     @State private var showDevices = false
     /// Продлить подписку in the cabinet: Тарифы once its sheet is down.
     @State private var renewAfterCabinet = false
+    /// Bumped by a tap on Подписка in the tab bar while it is on screen: back to the top.
+    var toTop = 0
+    private static let top = "subscription.top"
 
     var body: some View {
+        ScrollViewReader { proxy in
+            page
+                .onChange(of: toTop) { _ in
+                    withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(Self.top, anchor: .top) }
+                }
+        }
+    }
+
+    private var page: some View {
         ScrollView {
             if let sub = store.subscription {
                 let info = sub.info
@@ -134,6 +146,7 @@ struct SubscriptionView: View {
                 .padding(16)
                 .frame(maxWidth: 640)
                 .frame(maxWidth: .infinity)
+                .id(Self.top)
             }
         }
         .background(Palette.background.ignoresSafeArea())
@@ -313,6 +326,12 @@ struct ProfileView: View {
     @State private var showTech = false
     var openSubscription: () -> Void = {}
     var openHome: () -> Void = {}
+    /// Bumped by a tap on Профиль in the tab bar while it is on screen: back to the top.
+    var toTop = 0
+    /// A swipe across this screen to another tab (TabSwipe): on the root of the
+    /// NavigationStack, so Технический режим pushed over it has none.
+    var swipeTab: (Int) -> Bool = { _ in false }
+    private static let top = "profile.top"
 
     private var version: String {
         let info = Bundle.main.infoDictionary
@@ -321,173 +340,181 @@ struct ProfileView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    if let sub = store.subscription { accountCard(sub) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let sub = store.subscription { accountCard(sub) }
 
-                    SectionTitle("Оформление")
-                    Card { ThemePicker(theme: $theme) }
+                        SectionTitle("Оформление")
+                        Card { ThemePicker(theme: $theme) }
 
-                    SectionTitle("Подключение")
-                    Card {
-                        Button {
-                            Haptics.selection()
-                            openHome()
-                        } label: {
-                            SettingsRow(icon: "server.rack", color: Palette.primary, title: "Сервер", chevron: true) {
-                                HStack(spacing: 6) {
-                                    if let s = store.selected { FlagCircle(server: s.name, size: 20) }
-                                    Text(serverName).font(.scaled(15)).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                                .frame(maxWidth: 170, alignment: .trailing)
-                            }
-                        }
-                        .buttonStyle(RowButtonStyle())
-                        RowDivider()
-                        Toggle(isOn: $autoconnect) {
-                            HStack(spacing: 14) {
-                                IconTile(icon: "bolt.fill", color: Palette.green)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Автоподключение").font(.scaled(16, weight: .medium))
-                                        .lineLimit(1).minimumScaleFactor(0.75)
-                                    Text("VPN включится сам при открытии приложения")
-                                        .font(.scaled(12)).foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
+                        SectionTitle("Подключение")
+                        Card {
+                            Button {
+                                Haptics.selection()
+                                openHome()
+                            } label: {
+                                SettingsRow(icon: "server.rack", color: Palette.primary, title: "Сервер", chevron: true) {
+                                    HStack(spacing: 6) {
+                                        if let s = store.selected { FlagCircle(server: s.name, size: 20) }
+                                        Text(serverName).font(.scaled(15)).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                    .frame(maxWidth: 170, alignment: .trailing)
                                 }
                             }
-                        }
-                        .toggleStyle(TitanToggleStyle())
-                        .padding(.horizontal, 16).padding(.vertical, 12)
-                        RowDivider()
-                        // VPN On Demand: on by default, applies to the running VPN at once.
-                        Toggle(isOn: $keepAlive) {
-                            HStack(spacing: 14) {
-                                IconTile(icon: "checkmark.shield.fill", color: Palette.green)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Не отключать VPN").font(.scaled(16, weight: .medium))
-                                        .lineLimit(1).minimumScaleFactor(0.75)
-                                    Text(keepAliveNote)
-                                        .font(.scaled(12)).foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                        }
-                        .toggleStyle(TitanToggleStyle())
-                        .padding(.horizontal, 16).padding(.vertical, 12)
-                        // With the servers this build parsed: turned on while connected, the profile
-                        // gets the current config too (no TFO on regular servers), not the old one.
-                        .onChange(of: keepAlive) { on in
-                            vpn.setKeepAlive(on, rebuilding: store.subscription.flatMap { $0.parsedNow ? $0.servers : nil } ?? [])
-                        }
-                        RowDivider()
-                        Toggle(isOn: $reminders) {
-                            HStack(spacing: 14) {
-                                IconTile(icon: "bell.badge.fill", color: .orange)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Напоминания").font(.scaled(16, weight: .medium))
-                                        .lineLimit(1).minimumScaleFactor(0.75)
-                                    Text("За 3 дня и за день до конца подписки и когда на обходах кончается трафик")
-                                        .font(.scaled(12)).foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                        }
-                        .toggleStyle(TitanToggleStyle())
-                        .padding(.horizontal, 16).padding(.vertical, 12)
-                        .onChange(of: reminders) { on in
-                            guard on else { Reminders.cancelAll(); return }
-                            Task {
-                                guard await Reminders.allowed() else {
-                                    store.showToast("Разрешите уведомления для Titan VPS в Настройках iOS", .warning)
-                                    return
-                                }
-                                if let info = store.subscription?.info { await Reminders.update(for: info) }
-                            }
-                        }
-                        // The Live Activity is drawn by TitanWidgets, which needs iOS 18.
-                        if #available(iOS 18.0, *) {
+                            .buttonStyle(RowButtonStyle())
                             RowDivider()
-                            liveActivityRow
-                        }
-                    }
-
-                    SectionTitle("Приложение")
-                    Card {
-                        Button { openURL(store.supportURL) } label: {
-                            SettingsRow(icon: "headphones", color: Palette.primary, title: "Поддержка", subtitle: "Ответим в Telegram") {
-                                Image(systemName: "arrow.up.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
+                            Toggle(isOn: $autoconnect) {
+                                HStack(spacing: 14) {
+                                    IconTile(icon: "bolt.fill", color: Palette.green)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Автоподключение").font(.scaled(16, weight: .medium))
+                                            .lineLimit(1).minimumScaleFactor(0.75)
+                                        Text("VPN включится сам при открытии приложения")
+                                            .font(.scaled(12)).foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
                             }
-                        }
-                        .buttonStyle(RowButtonStyle())
-                        RowDivider()
-                        Button { Task { await store.refreshByHand() } } label: {
-                            SettingsRow(icon: "arrow.clockwise", color: Palette.green, title: "Обновить подписку",
-                                        subtitle: store.subscription.map { "Обновлено " + Fmt.ago($0.fetchedAt) }) {
-                                if store.busy { ProgressView() }
-                            }
-                        }
-                        .buttonStyle(RowButtonStyle())
-                        .disabled(store.busy)
-                        RowDivider()
-                        Button { about = true } label: {
-                            SettingsRow(icon: "info.circle.fill", color: Palette.violet, title: "О приложении",
-                                        subtitle: "Версия и открытый исходный код", chevron: true)
-                        }
-                        .buttonStyle(RowButtonStyle())
-                        RowDivider()
-                        Button { openURL(Config.privacyPolicy) } label: {
-                            SettingsRow(icon: "hand.raised.fill", color: Palette.primary, title: "Политика конфиденциальности") {
-                                Image(systemName: "arrow.up.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
-                            }
-                        }
-                        .buttonStyle(RowButtonStyle())
-                        RowDivider()
-                        SettingsRow(icon: "number", color: .gray, title: "Версия") {
-                            Text(wrongCode ? "Неверный код" : version)
-                                .font(.scaled(15).monospacedDigit())
-                                .foregroundStyle(wrongCode ? Color.red : Color.secondary)
-                        }
-                        .onTapGesture { versionTapped() }
-                        if techMode {
+                            .toggleStyle(TitanToggleStyle())
+                            .padding(.horizontal, 16).padding(.vertical, 12)
                             RowDivider()
-                            Button { showTech = true } label: {
-                                SettingsRow(icon: "wrench.and.screwdriver.fill", color: .orange, title: "Технический режим", chevron: true)
+                            // VPN On Demand: on by default, applies to the running VPN at once.
+                            Toggle(isOn: $keepAlive) {
+                                HStack(spacing: 14) {
+                                    IconTile(icon: "checkmark.shield.fill", color: Palette.green)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Не отключать VPN").font(.scaled(16, weight: .medium))
+                                            .lineLimit(1).minimumScaleFactor(0.75)
+                                        Text(keepAliveNote)
+                                            .font(.scaled(12)).foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                            .toggleStyle(TitanToggleStyle())
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                            // With the servers this build parsed: turned on while connected, the profile
+                            // gets the current config too (no TFO on regular servers), not the old one.
+                            .onChange(of: keepAlive) { on in
+                                vpn.setKeepAlive(on, rebuilding: store.subscription.flatMap { $0.parsedNow ? $0.servers : nil } ?? [])
+                            }
+                            RowDivider()
+                            Toggle(isOn: $reminders) {
+                                HStack(spacing: 14) {
+                                    IconTile(icon: "bell.badge.fill", color: .orange)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Напоминания").font(.scaled(16, weight: .medium))
+                                            .lineLimit(1).minimumScaleFactor(0.75)
+                                        Text("За 3 дня и за день до конца подписки и когда на обходах кончается трафик")
+                                            .font(.scaled(12)).foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                            .toggleStyle(TitanToggleStyle())
+                            .padding(.horizontal, 16).padding(.vertical, 12)
+                            .onChange(of: reminders) { on in
+                                guard on else { Reminders.cancelAll(); return }
+                                Task {
+                                    guard await Reminders.allowed() else {
+                                        store.showToast("Разрешите уведомления для Titan VPS в Настройках iOS", .warning)
+                                        return
+                                    }
+                                    if let info = store.subscription?.info { await Reminders.update(for: info) }
+                                }
+                            }
+                            // The Live Activity is drawn by TitanWidgets, which needs iOS 18.
+                            if #available(iOS 18.0, *) {
+                                RowDivider()
+                                liveActivityRow
+                            }
+                        }
+
+                        SectionTitle("Приложение")
+                        Card {
+                            Button { openURL(store.supportURL) } label: {
+                                SettingsRow(icon: "headphones", color: Palette.primary, title: "Поддержка", subtitle: "Ответим в Telegram") {
+                                    Image(systemName: "arrow.up.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
+                                }
+                            }
+                            .buttonStyle(RowButtonStyle())
+                            RowDivider()
+                            Button { Task { await store.refreshByHand() } } label: {
+                                SettingsRow(icon: "arrow.clockwise", color: Palette.green, title: "Обновить подписку",
+                                            subtitle: store.subscription.map { "Обновлено " + Fmt.ago($0.fetchedAt) }) {
+                                    if store.busy { ProgressView() }
+                                }
+                            }
+                            .buttonStyle(RowButtonStyle())
+                            .disabled(store.busy)
+                            RowDivider()
+                            Button { about = true } label: {
+                                SettingsRow(icon: "info.circle.fill", color: Palette.violet, title: "О приложении",
+                                            subtitle: "Версия и открытый исходный код", chevron: true)
+                            }
+                            .buttonStyle(RowButtonStyle())
+                            RowDivider()
+                            Button { openURL(Config.privacyPolicy) } label: {
+                                SettingsRow(icon: "hand.raised.fill", color: Palette.primary, title: "Политика конфиденциальности") {
+                                    Image(systemName: "arrow.up.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
+                                }
+                            }
+                            .buttonStyle(RowButtonStyle())
+                            RowDivider()
+                            SettingsRow(icon: "number", color: .gray, title: "Версия") {
+                                Text(wrongCode ? "Неверный код" : version)
+                                    .font(.scaled(15).monospacedDigit())
+                                    .foregroundStyle(wrongCode ? Color.red : Color.secondary)
+                            }
+                            .onTapGesture { versionTapped() }
+                            if techMode {
+                                RowDivider()
+                                Button { showTech = true } label: {
+                                    SettingsRow(icon: "wrench.and.screwdriver.fill", color: .orange, title: "Технический режим", chevron: true)
+                                }
+                                .buttonStyle(RowButtonStyle())
+                            }
+                        }
+
+                        Card {
+                            Button { confirmReset = true } label: {
+                                SettingsRow(icon: "arrow.counterclockwise", color: .orange, title: "Сброс настроек")
                             }
                             .buttonStyle(RowButtonStyle())
                         }
-                    }
+                        .padding(.top, 18)
 
-                    Card {
-                        Button { confirmReset = true } label: {
-                            SettingsRow(icon: "arrow.counterclockwise", color: .orange, title: "Сброс настроек")
-                        }
-                        .buttonStyle(RowButtonStyle())
-                    }
-                    .padding(.top, 18)
-
-                    SectionTitle("Аккаунт")
-                    Card {
-                        Button { confirmLogout = true } label: {
-                            SettingsRow(icon: "rectangle.portrait.and.arrow.right", color: .red, title: "Выйти из аккаунта", titleColor: .red)
-                        }
-                        .buttonStyle(RowButtonStyle())
-                        .disabled(deleting)
-                        RowDivider()
-                        Button { askDelete() } label: {
-                            SettingsRow(icon: "trash.fill", color: .red, title: "Удалить аккаунт", titleColor: .red) {
-                                if deleting { ProgressView() }
+                        SectionTitle("Аккаунт")
+                        Card {
+                            Button { confirmLogout = true } label: {
+                                SettingsRow(icon: "rectangle.portrait.and.arrow.right", color: .red, title: "Выйти из аккаунта", titleColor: .red)
                             }
+                            .buttonStyle(RowButtonStyle())
+                            .disabled(deleting)
+                            RowDivider()
+                            Button { askDelete() } label: {
+                                SettingsRow(icon: "trash.fill", color: .red, title: "Удалить аккаунт", titleColor: .red) {
+                                    if deleting { ProgressView() }
+                                }
+                            }
+                            .buttonStyle(RowButtonStyle())
+                            .disabled(deleting)
                         }
-                        .buttonStyle(RowButtonStyle())
-                        .disabled(deleting)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: 640)
+                    .frame(maxWidth: .infinity)
+                    .id(Self.top)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
-                .frame(maxWidth: 640)
-                .frame(maxWidth: .infinity)
+                // A tap on Профиль in the tab bar while on it.
+                .onChange(of: toTop) { _ in
+                    withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(Self.top, anchor: .top) }
+                }
             }
             .background(Palette.background.ignoresSafeArea())
+            .tabSwipe(swipeTab)
             // Back from iOS Settings: maybe allowed there now.
             .onAppear { activitiesOff = !LiveActivityController.allowedInSettings }
             .onChange(of: scenePhase) { if $0 == .active { activitiesOff = !LiveActivityController.allowedInSettings } }

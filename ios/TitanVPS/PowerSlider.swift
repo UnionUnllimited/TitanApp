@@ -100,7 +100,8 @@ struct PowerSlider: View {
         .onChange(of: failures) { _ in
             guard pending != nil else { return }
             withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) { pending = nil }
-            refuse()
+            // The shake only: the failed connect is felt from VPNController (the user's own ask).
+            refuse(haptic: false)
         }
         .task(id: pending) {
             guard pending != nil else { return }
@@ -241,6 +242,8 @@ struct PowerSlider: View {
                 // A new drag (a cancelled one never ended): its direction is decided now.
                 if axis?.start != value.startLocation {
                     axis = AxisLock(start: value.startLocation, horizontal: Self.sideways(value.translation))
+                    // The knob's, never the tabs' (TabSwipe), locked or not.
+                    SidewaysClaims.claim(value.startLocation)
                 }
             }
             .onEnded { value in
@@ -275,8 +278,8 @@ struct PowerSlider: View {
         }
     }
 
-    private func refuse() {
-        Haptics.error()
+    private func refuse(haptic: Bool = true) {
+        if haptic { Haptics.error() }
         withAnimation(.linear(duration: 0.4)) { shakes += 1 }
     }
 

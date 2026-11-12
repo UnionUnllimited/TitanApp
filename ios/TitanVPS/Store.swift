@@ -228,11 +228,12 @@ final class AppStore: ObservableObject {
         await Task { await refreshByHand() }.value
     }
 
-    func showToast(_ text: String, _ kind: Toast.Kind = .info) {
+    /// haptic: false where the control that refused has its own (the Выкл | Вкл knob's shake).
+    func showToast(_ text: String, _ kind: Toast.Kind = .info, haptic: Bool = true) {
         switch kind {
-        case .success: Haptics.success()
-        case .warning: Haptics.warning()
-        case .info: break
+        case .success where haptic: Haptics.success()
+        case .warning where haptic: Haptics.warning()
+        default: break
         }
         toast = Toast(text: text, kind: kind)
         VoiceOver.announce(text)

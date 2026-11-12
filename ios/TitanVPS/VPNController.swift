@@ -46,6 +46,20 @@ final class VPNController: ObservableObject {
     /// Bumped by each hold of on demand (a server switch, a ping's pause, Выкл): a setKeepAlive
     /// begun before one doesn't turn it back on.
     private var holds = 0
+    /// What the user asked for on the app's screen (byUser: Вкл, Выкл, a server picked, a key
+    /// entered), until it ends: its end is felt (userAskEnded). Nothing else is: on demand,
+    /// Автоподключение, a ping's resume, the move off a bypass server on Wi-Fi, a titanvps://
+    /// link, Пункт управления, Siri and the Live Activity call without byUser. Any stop or newer
+    /// connect of ours drops it (forgetStart).
+    private var userAsk: UserAsk?
+    private struct UserAsk {
+        let on: Bool
+        let attempt: Int
+        let at = Date()
+        /// Its profile is being saved (on demand may start the tunnel on that): from here a
+        /// connected status is its own, not the session's before (a switch's).
+        var saving = false
+    }
 
     /// The app's own, while it runs: the Live Activity's ‹ › switch through it (VPNIntents).
     static weak var current: VPNController?
@@ -126,6 +140,7 @@ final class VPNController: ObservableObject {
         case .connected:
             starting = nil
             set(.connected(since: connection.connectedDate ?? Date()))
+            userAskEnded(.connected)
         case .connecting, .reasserting:
             starting?.seen = true
             set(.connecting)
@@ -135,6 +150,9 @@ final class VPNController: ObservableObject {
             // Our own start fell before it was ever up (a config the tunnel can't run, say).
             let failed = starting?.seen == true ? starting?.attempt : nil
             starting = nil
+            // The user's Выкл is done, or the user's own connect fell before it was up.
+            userAskEnded(.off)
+            if let failed { userAskEnded(.failed, attempt: failed) }
             // It fell while starting: show the tunnel's reason instead of a plain "Не подключено".
             if wasConnecting || failed != nil {
                 connection.fetchLastDisconnectError { [weak self] error in
@@ -168,6 +186,7 @@ final class VPNController: ObservableObject {
     private func forgetStart() {
         attempts += 1
         starting = nil
+        userAsk = nil
     }
 
     /// Status notifications come for any VPN and again for the same status (a ping's pause and
@@ -176,15 +195,18 @@ final class VPNController: ObservableObject {
         if state != new { state = new }
     }
 
-    func connect(_ server: Server) async {
+    /// byUser: asked for on the app's screen (Вкл, a server picked, a key entered): its outcome is
+    /// felt (userAsk).
+    func connect(_ server: Server, byUser: Bool = false) async {
         wantOn = true
         // An older connect's start still under way is this one's to watch now.
         forgetStart()
         let attempt = attempts
+        if byUser { userAsk = UserAsk(on: true, attempt: attempt) }
         connectsInFlight += 1
         defer { connectsInFlight -= 1 }
         guard let tunnelId = Self.tunnelBundleId else {
-            fail("В этой сборке нет VPN-расширения")
+            fail("В этой сборке нет VPN-расширения", attempt: attempt)
             return
         }
         // Подключаемся… at once: the build below may take seconds (a plugin server's DNS
@@ -222,6 +244,7 @@ final class VPNController: ObservableObject {
             // Still wanted: Подключаемся… again if a late status of the tunnel stopped before (a
             // switch) put it off meanwhile. Выкл or a ping's pause meanwhile keep theirs.
             if wantOn { state = .connecting }
+            if userAsk?.attempt == attempt { userAsk?.saving = true }
             try await m.saveToPreferences()
             // Saving the first time asks the user to allow the VPN; reload to get a usable manager.
             try await m.loadFromPreferences()
@@ -259,19 +282,22 @@ final class VPNController: ObservableObject {
                 try? await m.saveToPreferences()
             }
         } catch {
-            fail(Self.describe(error))
+            fail(Self.describe(error), attempt: attempt)
         }
     }
 
-    private func fail(_ message: String) {
+    private func fail(_ message: String, attempt: Int) {
         state = .error(message)
         failures += 1
+        userAskEnded(.failed, attempt: attempt)
     }
 
-    func disconnect() {
+    /// byUser: Выкл on the app's screen: felt once off (userAsk).
+    func disconnect(byUser: Bool = false) {
         wantOn = false
         offsByHand += 1
         forgetStart()
+        if byUser { userAsk = UserAsk(on: false, attempt: attempts) }
         state = .disconnecting
         // The Live Activity says «Выключено» now, not after its wait for a switch's drop.
         LiveActivityController.turnedOffInApp()
@@ -296,6 +322,28 @@ final class VPNController: ObservableObject {
         try? await m.loadFromPreferences()
         guard m.isOnDemandEnabled else { return }
         await TunnelSwitch.saveOnDemand(false, m)
+    }
+
+    private enum AskEnd { case connected, failed, off }
+
+    /// The user's own ask (userAsk) came to [end]: felt once (success, error, a light tap), and
+    /// only with the app on screen (not once it was left, nor under Пункт управления pulled down)
+    /// within a minute of the ask. [attempt]: the connect it is about, if not the latest. The
+    /// generators follow iOS's own haptics setting.
+    private func userAskEnded(_ end: AskEnd, attempt: Int? = nil) {
+        guard let ask = userAsk, ask.attempt == (attempt ?? attempts) else { return }
+        switch end {
+        case .connected: guard ask.on, ask.saving else { return }
+        case .failed: guard ask.on else { return }
+        case .off: guard !ask.on else { return }
+        }
+        userAsk = nil
+        guard UIApplication.shared.applicationState == .active, Date().timeIntervalSince(ask.at) < 60 else { return }
+        switch end {
+        case .connected: Haptics.success()
+        case .failed: Haptics.error()
+        case .off: Haptics.tap()
+        }
     }
 
     /// What a profile's config was built from: the subscription's server as it was then (its
@@ -551,8 +599,8 @@ final class VPNController: ObservableObject {
         return data.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
     }
 
-    /// Reconnects on another server while on.
-    func switchTo(_ server: Server) async {
+    /// Reconnects on another server while on. byUser: picked on the app's screen, as connect's.
+    func switchTo(_ server: Server, byUser: Bool = false) async {
         guard isOn else { return }
         // Off for a moment in between: no refreshProfile then either.
         connectsInFlight += 1
@@ -570,7 +618,7 @@ final class VPNController: ObservableObject {
             update()
             return
         }
-        await connect(server)
+        await connect(server, byUser: byUser)
     }
 
     /// Turned off outside the app's screen (Пункт управления, Siri, ⏻), or Выйти while off: a

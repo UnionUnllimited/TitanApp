@@ -659,6 +659,8 @@ struct SwipeActions<Content: View>: View {
             .onChanged { value in
                 if axis?.start != value.startLocation {
                     axis = AxisLock(start: value.startLocation, horizontal: Self.sideways(value.translation))
+                    // Whichever way it goes, the drag is the row's, never the tabs' (TabSwipe).
+                    SidewaysClaims.claim(value.startLocation)
                 }
             }
             .onEnded { value in
@@ -671,5 +673,51 @@ struct SwipeActions<Content: View>: View {
                 if dx >= mark, let right { Haptics.success(); right.perform() }
                 else if dx <= -mark, let left { Haptics.success(); left.perform() }
             }
+    }
+}
+
+/// Drags that controls moving sideways themselves took (a server row's actions, the Выкл | Вкл
+/// knob), by where each began, in .global points: the swipe between the tabs (TabSwipe) leaves
+/// them to those controls. Not observed: a claim redraws nothing. Only gestures use it, on the
+/// main thread.
+enum SidewaysClaims {
+    private static var starts: [CGPoint] = []
+
+    /// A control's drag began at [start]; claimed on its first move.
+    static func claim(_ start: CGPoint) {
+        guard !claimed(start) else { return }
+        starts.append(start)
+        // The last few: a drag is decided long before eight more begin.
+        if starts.count > 8 { starts.removeFirst() }
+    }
+
+    /// The drag that began at [start] is a control's (the same touch, to within a point).
+    static func claimed(_ start: CGPoint) -> Bool {
+        starts.contains { abs($0.x - start.x) <= 1 && abs($0.y - start.y) <= 1 }
+    }
+}
+
+// MARK: - Back to the top
+
+/// Наверх: a round ↑ over a long list scrolled down, back to its top. The theme's surface and
+/// the brand blue, as Главная's square buttons.
+struct ScrollTopButton: View {
+    /// Room the list keeps under its last row: at its end the button covers none.
+    static let room: CGFloat = 48
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.scaled(18, weight: .bold))
+                .foregroundStyle(Palette.primary)
+                .frame(width: 46, height: 46)
+                .background(Palette.surface, in: Circle())
+                .overlay(Circle().stroke(Palette.outline.opacity(0.6), lineWidth: 1))
+                .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+                .contentShape(Circle())
+        }
+        .buttonStyle(PressableStyle(scale: 0.9))
+        .accessibilityLabel("Наверх")
     }
 }

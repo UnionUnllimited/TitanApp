@@ -1,6 +1,7 @@
 import SwiftUI
 
-enum Tab: Hashable { case home, subscription, profile }
+/// In the bar's order, which a swipe across a tab follows too (TabSwipe).
+enum Tab: Hashable, CaseIterable { case home, subscription, profile }
 
 struct RootView: View {
     @EnvironmentObject var store: AppStore
@@ -10,6 +11,8 @@ struct RootView: View {
     /// Конфиденциальность accepted (PrivacyNoticeView): nothing of the service is used before.
     @AppStorage(PrivacyNoticeView.key) private var privacyAccepted = false
     @State private var tab: Tab = .home
+    /// Bumped by a tap on the tab already picked: that tab back to its top.
+    @State private var toTop: [Tab: Int] = [:]
     @State private var splash = true
     /// A titanvps:// link opened before Конфиденциальность was accepted: added right after.
     @State private var pendingLink: URL?
@@ -206,24 +209,39 @@ struct RootView: View {
         GeometryReader { geo in
             VStack(spacing: 0) {
                 TabView(selection: $tab) {
-                    HomeView(openSettings: { tab = .profile })
+                    HomeView(openSettings: { tab = .profile }, toTop: toTop[.home] ?? 0)
+                        .tabSwipe { swipeTab(from: .home, $0) }
                         .toolbar(.hidden, for: .tabBar)
                         .tabItem { Label("Главная", systemImage: "house.fill") }.tag(Tab.home)
-                    SubscriptionView()
+                    SubscriptionView(toTop: toTop[.subscription] ?? 0)
+                        .tabSwipe { swipeTab(from: .subscription, $0) }
                         .toolbar(.hidden, for: .tabBar)
                         .tabItem { Label("Подписка", systemImage: "crown") }.tag(Tab.subscription)
-                    ProfileView(openSubscription: { tab = .subscription }, openHome: { tab = .home })
+                    // Its swipe is put inside its NavigationStack: none on Технический режим pushed there.
+                    ProfileView(openSubscription: { tab = .subscription }, openHome: { tab = .home },
+                                toTop: toTop[.profile] ?? 0, swipeTab: { swipeTab(from: .profile, $0) })
                         .toolbar(.hidden, for: .tabBar)
                         .tabItem { Label("Профиль", systemImage: "person") }.tag(Tab.profile)
                 }
                 // Of the home indicator's 34 pt it needs 20 under the bar.
-                TitanTabBar(selection: $tab, bottom: min(geo.safeAreaInsets.bottom, 20))
+                TitanTabBar(selection: $tab, bottom: min(geo.safeAreaInsets.bottom, 20),
+                            reselect: { toTop[$0, default: 0] += 1 })
             }
             // Down to the screen's edge. A keyboard (in a sheet over it) doesn't lift the bar:
             // no tab has a text field of its own.
             .ignoresSafeArea([.container, .keyboard], edges: .bottom)
         }
         .id(typeSize)
+    }
+
+    /// A swipe across a tab (TabSwipe): to the next one or the one before, as a tap on it in the
+    /// bar, with a tick. False when there is none that way, or [from] is no longer on screen.
+    private func swipeTab(from: Tab, _ step: Int) -> Bool {
+        let all = Tab.allCases
+        guard tab == from, let i = all.firstIndex(of: from), all.indices.contains(i + step) else { return false }
+        Haptics.selection()
+        tab = all[i + step]
+        return true
     }
 
     /// Автоподключение: on each time the app is opened, at launch or back from the background
@@ -243,6 +261,8 @@ struct RootView: View {
 struct TitanTabBar: View {
     @Binding var selection: Tab
     var bottom: CGFloat = 0
+    /// A tap on the tab already picked: its screen back to the top, as iOS's own bar does.
+    var reselect: (Tab) -> Void = { _ in }
     @Environment(\.displayScale) private var displayScale
 
     private struct Item: Identifiable {
@@ -262,7 +282,7 @@ struct TitanTabBar: View {
             ForEach(items) { item in
                 let on = item.id == selection
                 Button {
-                    guard !on else { return }
+                    guard !on else { reselect(item.id); return }
                     Haptics.selection()
                     selection = item.id
                 } label: {
@@ -294,6 +314,85 @@ struct TitanTabBar: View {
         .overlay(alignment: .top) {
             Palette.outline.frame(height: 1 / displayScale)
         }
+    }
+}
+
+/// A sideways swipe across a tab's own screen: to the next tab (the finger going left) or the
+/// one before, as a tap on TitanTabBar, which stays for VoiceOver and anyone else.
+///
+/// Not a page-style TabView: that takes sideways drags from the controls in it. This drag runs
+/// alongside the others (simultaneousGesture), so scrolling and pull to refresh go on as before,
+/// and it sees a server row's swipe and the Выкл | Вкл knob's drag as well. Those claim each of
+/// theirs by where it began, on its first move (SidewaysClaims), and a claimed drag never
+/// switches. Theirs comes sooner (20 and 16 pt against 24 here) and this one never switches on
+/// its own first move, so the claim is in before it could; and were the system to run only one
+/// of the two, it would be the one that began first, theirs. Only a drag clearly sideways from
+/// its first move (within about 27° of level, as a row decides it) and still so, that went 64 pt
+/// or was flung, switches, once.
+/// It switches as the finger gets there, not as it lifts: a button the drag began on (Профиль's
+/// rows are buttons) would take the lift as its tap. The screen left is disabled until the
+/// finger is up, so that lift presses nothing there.
+/// On a tab's root screen only (Профиль's inside its NavigationStack): pushed screens, sheets,
+/// dialogs and the swipe back from the edge have none.
+struct TabSwipe: ViewModifier {
+    /// 1: the next tab, -1: the one before; true if it switched.
+    let onSwipe: (Int) -> Bool
+
+    private struct Drag: Equatable {
+        var start: CGPoint
+        var horizontal: Bool
+        var switched = false
+    }
+
+    /// The drag under way, its direction decided on its first move.
+    @State private var drag: Drag?
+    /// Left by a swipe whose finger may still be down on it.
+    @State private var left = false
+
+    /// Within about 27° of level, as a server row's (SwipeActions).
+    private static func sideways(_ t: CGSize) -> Bool { abs(t.width) > abs(t.height) * 2 }
+
+    func body(content: Content) -> some View {
+        content
+            .disabled(left)
+            .simultaneousGesture(gesture)
+            // Back on screen: the drag that left it is long over.
+            .onAppear { left = false }
+    }
+
+    private var gesture: some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .global)
+            .onChanged { value in
+                // A new drag (a cancelled one never ended): its direction is decided now, and
+                // nothing switches on this first move.
+                guard let d = drag, d.start == value.startLocation else {
+                    drag = Drag(start: value.startLocation, horizontal: Self.sideways(value.translation))
+                    return
+                }
+                guard d.horizontal, !d.switched, Self.sideways(value.translation),
+                      !SidewaysClaims.claimed(value.startLocation) else { return }
+                let dx = value.translation.width
+                let thrown = value.predictedEndTranslation.width
+                guard abs(dx) >= 64 || (abs(dx) >= 40 && abs(thrown) >= 200 && (thrown < 0) == (dx < 0)) else { return }
+                drag?.switched = true
+                if onSwipe(dx < 0 ? 1 : -1) { left = true }
+            }
+            .onEnded { _ in
+                drag = nil
+                guard left else { return }
+                // The lift has been taken by now (by nothing: disabled); usable again a moment later.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    left = false
+                }
+            }
+    }
+}
+
+extension View {
+    /// Swiping between the root tabs (TabSwipe).
+    func tabSwipe(_ onSwipe: @escaping (Int) -> Bool) -> some View {
+        modifier(TabSwipe(onSwipe: onSwipe))
     }
 }
 
@@ -637,12 +736,14 @@ struct WelcomeView: View {
         }
     }
 
-    /// Key added: connect right away (same as Android).
+    /// Key added: connect right away (same as Android). A tap now; how the connect ends is felt
+    /// too (VPNController's byUser).
     private func connect() {
         guard !key.isEmpty, !store.busy else { return }
+        Haptics.tap()
         editing = false
         Task {
-            if await store.activate(key), let s = store.selected, !store.blockedOnWifi(s) { await vpn.connect(s) }
+            if await store.activate(key), let s = store.selected, !store.blockedOnWifi(s) { await vpn.connect(s, byUser: true) }
         }
     }
 }
