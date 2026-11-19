@@ -369,7 +369,7 @@ struct HomeView: View {
 
     private var accountNotice: (text: String, blocked: Bool)? {
         switch store.account?.status {
-        case "BLOCKED"?: return ("Аккаунт заблокирован. Напишите в поддержку", true)
+        case "BLOCKED"?: return ("Доступ к аккаунту закрыт. Напишите в поддержку", true)
         case "MAINTENANCE"?: return ("Идут технические работы. Маршруты могут не работать", false)
         default: return nil
         }
