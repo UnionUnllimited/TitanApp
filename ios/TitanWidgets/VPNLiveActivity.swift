@@ -5,12 +5,12 @@ import WidgetKit
 
 /// The VPN on or off, on the Lock Screen and in the Dynamic Island (the app starts, updates and
 /// ends it: LiveActivity.swift): the server with its flag, ‹ › for the previous and the next one
-/// (SwitchServerIntent, run in the app) and ⏻. On: «Подключено» with the timer, the speed, the
+/// (SwitchServerIntent, run in the app) and ⏻. On: «В пути» with the timer, the speed, the
 /// latency (only under 300 ms: Latency) as Главная shows them, until they go stale (the app
 /// isn't open to send new ones). The island shows it only while the app isn't open: its speed
 /// is the one sent on leaving the app, for 15 s (a live one in the background would need server
 /// pushes).
-/// Off: «Выключено» with the server ⏻ starts; ‹ › only move the pick. No widgetURL: a tap
+/// Off: «Стоим» with the server ⏻ starts; ‹ › only move the pick. No widgetURL: a tap
 /// elsewhere just opens the app (titanvps:// links are for keys).
 struct VPNLiveActivity: Widget {
     var body: some WidgetConfiguration {
@@ -30,7 +30,7 @@ struct VPNLiveActivity: Widget {
                     VStack(alignment: .leading, spacing: 4) {
                         // With the numbers under it, on one line: a second would push ‹ ⏻ › past
                         // the island's height (up to 160 pt; the bottom region is under the rest).
-                        Text(state.server)
+                        Text(RouteName.shown(state.server))
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(.white)
                             .lineLimit(numbers.isEmpty ? 2 : 1)
@@ -81,7 +81,7 @@ private struct ActivityBanner: View {
                     .foregroundStyle(Color.white.opacity(0.5))
                 // Whole: on two lines, a little smaller if need be, rather than cut with "…"
                 // (a Live Activity can't scroll it).
-                Text(state.server)
+                Text(RouteName.shown(state.server))
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
@@ -110,7 +110,8 @@ private struct ActivityBanner: View {
 }
 
 /// The server's flag filled into a circle (FlagCircle in ios/Shared), as in the app; АВТО's
-/// bolt or a server without one. The name beside it keeps its own ⚡ or 🚀.
+/// sparkles, the unlimited row's bolt or a server without one. The name beside it keeps its own
+/// ⚡ or 🚀 (АВТО's reads «Лучший маршрут», RouteName).
 private struct ServerCircle: View {
     let state: VPNActivityAttributes.ContentState
     let size: CGFloat
@@ -124,10 +125,10 @@ private struct ServerCircle: View {
 private extension VPNActivityAttributes.ContentState.Phase {
     var title: String {
         switch self {
-        case .on: return "Подключено"
-        case .switching: return "Переключаемся…"
-        case .connecting: return "Подключаемся…"
-        case .off: return "Выключено"
+        case .on: return "В пути"
+        case .switching: return "Меняем направление…"
+        case .connecting: return "Строим маршрут…"
+        case .off: return "Стоим"
         }
     }
 
@@ -141,7 +142,7 @@ private extension VPNActivityAttributes.ContentState.Phase {
     }
 }
 
-/// What the activity says: its phase, or, for a "Подключаемся…" / "Переключаемся…" that went
+/// What the activity says: its phase, or, for a "Строим маршрут…" / "Меняем направление…" that went
 /// stale (an intent's, with no update for a minute: the app was suspended before the VPN
 /// settled), that it doesn't know, in grey, rather than a connect that never ends.
 private struct StatusLook {
@@ -359,7 +360,7 @@ private struct SwitchButton: View {
                 if titled {
                     HStack(spacing: 5) {
                         if !forward { Image(systemName: "chevron.left") }
-                        Text(forward ? "Следующий" : "Предыдущий").lineLimit(1).minimumScaleFactor(0.8)
+                        Text(forward ? "Следующее" : "Предыдущее").lineLimit(1).minimumScaleFactor(0.8)
                         if forward { Image(systemName: "chevron.right") }
                     }
                     .font(.system(size: 14, weight: .semibold))
@@ -375,13 +376,13 @@ private struct SwitchButton: View {
             .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(forward ? "Следующий сервер" : "Предыдущий сервер")
+        .accessibilityLabel(forward ? "Следующее направление" : "Предыдущее направление")
     }
 }
 
-/// ⏻ (StopVPNIntent / StartVPNIntent, run in the app): the VPN off, in red; while it is off,
-/// on, in green. Between ‹ and › in the expanded island; round on the Lock Screen, where it
-/// shows only while off.
+/// ⏻ (StopVPNIntent / StartVPNIntent, run in the app): the VPN off, in red with a stop sign;
+/// while it is off, on, in green with the route's arrow. Between ‹ and › in the expanded
+/// island; round on the Lock Screen, where it shows only while off.
 private struct PowerButton: View {
     let off: Bool
     var round = false
@@ -395,11 +396,11 @@ private struct PowerButton: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(off ? "Включить VPN" : "Выключить VPN")
+        .accessibilityLabel(off ? "Поехали" : "Остановиться")
     }
 
     private var face: some View {
-        Image(systemName: "power")
+        Image(systemName: off ? "location.north.line.fill" : "stop.fill")
             .font(.system(size: round ? 15 : 16, weight: .bold))
             .foregroundStyle(.white)
             .frame(width: round ? 38 : 44, height: round ? 38 : 36)

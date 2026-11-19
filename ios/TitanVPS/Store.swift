@@ -182,7 +182,7 @@ final class AppStore: ObservableObject {
     @discardableResult
     func activate(_ text: String) async -> Bool {
         guard let url = SubscriptionAPI.findLink(text) else {
-            message = "Это не ключ Titan VPS"
+            message = "Это не код проездного Titan VPS"
             return false
         }
         // A fetch of the old key still under way doesn't overwrite this one.
@@ -218,9 +218,9 @@ final class AppStore: ObservableObject {
         // Signed out or another key meanwhile: nothing to say about the old one.
         guard started == generation else { return }
         if ok {
-            showToast("Подписка обновлена", .success)
+            showToast("Проездной обновлён", .success)
         } else if !Task.isCancelled {
-            showToast("Не удалось обновить подписку: " + (lastLoadError ?? "сервер не ответил"), .warning)
+            showToast("Не удалось обновить проездной: " + (lastLoadError ?? "сервер не ответил"), .warning)
         }
         await loadAccount()
     }

@@ -35,7 +35,7 @@ struct CabinetView: View {
             VStack(spacing: 12) {
                 if purchases.otherMethods {
                     SegmentedTabs(items: [
-                        SegmentedTabs.Item(id: 0, title: "Подписка", icon: "crown.fill"),
+                        SegmentedTabs.Item(id: 0, title: "Проездной", icon: "ticket.fill"),
                         SegmentedTabs.Item(id: 1, title: "Тарифы", icon: "tag.fill"),
                     ], selection: $tab)
                     .padding(.horizontal, 16)
@@ -52,7 +52,7 @@ struct CabinetView: View {
                                 Group {
                                     subscription(d)
                                     Button(action: renew) {
-                                        Label("Продлить подписку", systemImage: "crown.fill")
+                                        Label("Продлить проездной", systemImage: "ticket.fill")
                                     }
                                     .buttonStyle(PrimaryButtonStyle())
                                     .padding(.top, 4)
@@ -290,7 +290,7 @@ struct CabinetView: View {
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Circle().fill(Color.white).frame(width: 7, height: 7)
-                Text(d.status.isEmpty ? (d.active ? "Активна" : "Неактивна") : d.status)
+                Text(d.status.isEmpty ? (d.active ? "Действует" : "Не действует") : d.status)
             }
             .font(.scaled(13, weight: .bold))
             .padding(.horizontal, 10).padding(.vertical, 5)
@@ -400,7 +400,7 @@ private struct PayPane: View {
             }
             Button("Отмена", role: .cancel) {}
         } message: {
-            Text("Продлевает подписку на указанное в коде число дней. Один код — один раз на аккаунт.")
+            Text("Продлевает проездной на указанное в коде число дней. Один код — один раз на аккаунт.")
         }
     }
 
@@ -413,11 +413,11 @@ private struct PayPane: View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
-                    IconTile(icon: kind == "sub" ? "crown.fill" : "chart.pie.fill",
+                    IconTile(icon: kind == "sub" ? "ticket.fill" : "chart.pie.fill",
                              color: kind == "sub" ? Palette.primary : Palette.violet, size: 38)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(kind == "sub" ? "Продление подписки" : "Гигабайты для обходов").font(.scaled(17, weight: .bold))
-                        Text(kind == "sub" ? "Дни добавятся к текущей подписке" : "Добавятся к трафику на обходах")
+                        Text(kind == "sub" ? "Продление проездного" : "Гигабайты для объездов").font(.scaled(17, weight: .bold))
+                        Text(kind == "sub" ? "Дни добавятся к текущему проездному" : "Добавятся к трафику на объездах")
                             .font(.scaled(12)).foregroundStyle(.secondary)
                     }
                 }

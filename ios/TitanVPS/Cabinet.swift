@@ -66,7 +66,7 @@ final class CabinetAPI {
     /// Signs in with the cabinet link from the subscription and reads the cabinet.
     static func open(_ link: String) async throws -> (CabinetAPI, Snapshot) {
         guard let url = URL(string: link), var c = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            throw Failure(message: "Нет ссылки на кабинет в подписке")
+            throw Failure(message: "Нет ссылки на кабинет в проездном")
         }
         c.path = "/"; c.query = nil
         let config = URLSessionConfiguration.ephemeral
@@ -103,7 +103,7 @@ final class CabinetAPI {
         let (body, http) = try await send(req)
         guard (200..<300).contains(http.statusCode), http.url?.path.hasPrefix("/cabinet") == true else {
             let path = http.url?.path ?? ""
-            throw Failure(message: "Не удалось войти в кабинет (\(http.statusCode)\(path.isEmpty ? "" : ", \(path)")). Обновите подписку и попробуйте ещё раз")
+            throw Failure(message: "Не удалось войти в кабинет (\(http.statusCode)\(path.isEmpty ? "" : ", \(path)")). Обновите проездной и попробуйте ещё раз")
         }
         return try Self.parse(String(decoding: body, as: UTF8.self))
     }

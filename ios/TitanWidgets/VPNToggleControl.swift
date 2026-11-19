@@ -9,12 +9,12 @@ struct VPNToggleControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: VPNControl.kind, provider: VPNStatusProvider()) { isOn in
             ControlWidgetToggle("Titan VPS", isOn: isOn, action: SetVPNIntent()) { on in
-                Label(on ? "Подключено" : "Не подключено", systemImage: on ? "checkmark.shield.fill" : "shield")
+                Label(on ? "В пути" : "Стоим", systemImage: on ? "location.north.line.fill" : "location.north.line")
             }
             .tint(Brand.green)
         }
         .displayName("Titan VPS")
-        .description("Включает и выключает VPN на сервере, выбранном в приложении.")
+        .description("«Поехали» и «Остановиться» — по направлению, выбранному в приложении.")
     }
 }
 

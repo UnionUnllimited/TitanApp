@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Выкл | Вкл as one slider: the knob is dragged across by hand (or a side tapped). While a
+/// Стоим | В пути as one slider: the knob is dragged across by hand (or a side tapped). While a
 /// ping runs (it turns the VPN off for its time and back on after) the slider is locked:
 /// it darkens, the knob shows a lock and a shine runs over it; a tap then only shakes it.
 /// It glows in its state's colour (none while locked): the parent keeps clipping edges 22 pt away.
@@ -109,8 +109,8 @@ struct PowerSlider: View {
             if !Task.isCancelled { pending = nil }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("VPN")
-        .accessibilityValue(locked ? "недоступно, идёт пинг" : isOn ? "включён" : "выключен")
+        .accessibilityLabel("Маршрут")
+        .accessibilityValue(locked ? "недоступно, идёт пинг" : isOn ? "в пути" : "стоим")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { tapped(right: !isOn) }
     }
@@ -161,14 +161,14 @@ struct PowerSlider: View {
         .accessibilityHidden(true)
     }
 
-    /// What the free half of the track says: where the knob would go.
+    /// What the free half of the track says: where the knob would go (Остановиться, Поехали).
     private func sideLabels(progress: CGFloat) -> some View {
         HStack(spacing: 0) {
-            Label("Выкл", systemImage: "power")
+            Label("Остановиться", systemImage: "stop.fill")
                 .frame(maxWidth: .infinity)
                 .opacity(Double(progress))
             HStack(spacing: 7) {
-                Text("Вкл")
+                Text("Поехали")
                 Image(systemName: "chevron.right")
                     .font(.scaled(15, weight: .bold))
             }
@@ -178,6 +178,8 @@ struct PowerSlider: View {
         }
         .font(.scaled(20, weight: .semibold))
         .lineLimit(1)
+        // «Остановиться» on a 375 pt iPhone at large text.
+        .minimumScaleFactor(0.6)
         .foregroundStyle(.secondary)
         .padding(.horizontal, inset)
         .allowsHitTesting(false)
@@ -201,19 +203,20 @@ struct PowerSlider: View {
                     Text(lockedText)
                 } else if busy {
                     ProgressView().tint(Color.white)
-                    Text(phase == .connecting ? "Подключение" : "Отключение")
+                    Text(phase == .connecting ? "Строим маршрут" : "Останавливаемся")
                 } else if lit {
-                    Image(systemName: "checkmark.shield.fill")
-                    Text("Вкл")
+                    Image(systemName: "location.north.line.fill")
+                    Text("В пути")
                 } else {
-                    Image(systemName: "power")
-                    Text("Выкл")
+                    Image(systemName: "stop.fill")
+                    Text("Стоим")
                 }
             }
             .font(.scaled(22, weight: .bold))
             .foregroundStyle(locked && !lit ? Color.primary : Color.white)
             .lineLimit(1)
-            .minimumScaleFactor(0.6)
+            // «Останавливаемся» beside the spinner in half the track.
+            .minimumScaleFactor(0.5)
             .padding(.horizontal, 12)
         }
         .allowsHitTesting(false)

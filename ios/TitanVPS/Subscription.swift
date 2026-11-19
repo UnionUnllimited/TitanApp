@@ -154,7 +154,7 @@ enum SubscriptionAPI {
     }
 
     static func fetch(_ url: String) async throws -> Subscription {
-        guard isAllowed(url) else { throw SubscriptionError(message: "Недопустимый адрес подписки") }
+        guard isAllowed(url) else { throw SubscriptionError(message: "Недопустимый код проездного") }
         var firstError: Error?
         // Our own UA ("Titan(IOS/…)"); "Xray" if the server doesn't answer it with Xray JSON.
         for ua in Config.userAgents {
@@ -166,7 +166,7 @@ enum SubscriptionAPI {
                     if all.isEmpty { throw SubscriptionError(message: SubscriptionErrors.unusable(info, body)) }
                     if let stub = SubscriptionErrors.stub(all.map(\.name)) { throw SubscriptionError(message: stub) }
                     let servers = all.filter { !ServerGroup.isHidden($0) }
-                    if servers.isEmpty { throw SubscriptionError(message: "В подписке нет серверов") }
+                    if servers.isEmpty { throw SubscriptionError(message: "В проездном нет направлений") }
                     return Subscription(url: url, info: info, servers: servers, fetchedAt: Date(),
                                         parsedBy: XrayRunConfig.version)
                 } catch {
@@ -174,7 +174,7 @@ enum SubscriptionAPI {
                 }
             }
         }
-        throw firstError ?? SubscriptionError(message: "Сервер подписки недоступен")
+        throw firstError ?? SubscriptionError(message: "Сервер проездных недоступен")
     }
 
     private static func alternates(_ url: String) -> [String] {
@@ -194,16 +194,16 @@ enum SubscriptionAPI {
         do {
             (data, resp) = try await URLSession.shared.data(for: req)
         } catch {
-            throw SubscriptionError(message: "Нет соединения с сервером подписки")
+            throw SubscriptionError(message: "Нет связи с сервером проездных")
         }
-        guard let http = resp as? HTTPURLResponse else { throw SubscriptionError(message: "Сервер подписки недоступен") }
+        guard let http = resp as? HTTPURLResponse else { throw SubscriptionError(message: "Сервер проездных недоступен") }
         let host = http.url?.host ?? ""
-        if let final = http.url?.absoluteString, !isAllowed(final) { throw SubscriptionError(message: "Недопустимый адрес подписки") }
+        if let final = http.url?.absoluteString, !isAllowed(final) { throw SubscriptionError(message: "Недопустимый код проездного") }
         if http.statusCode == 404 || http.statusCode == 403 {
-            throw SubscriptionError(message: "Подписка не найдена или отключена (\(http.statusCode), \(host))")
+            throw SubscriptionError(message: "Проездной не найден или отключён (\(http.statusCode), \(host))")
         }
         guard (200..<300).contains(http.statusCode) else {
-            throw SubscriptionError(message: "Сервер подписки недоступен (\(http.statusCode), \(host))")
+            throw SubscriptionError(message: "Сервер проездных недоступен (\(http.statusCode), \(host))")
         }
         let header = { (name: String) in http.value(forHTTPHeaderField: name) }
         return (parseInfo(header), String(decoding: data, as: UTF8.self))
@@ -403,7 +403,7 @@ enum SubscriptionAPI {
     static func parseServers(_ body: String, sniffing: Bool? = nil) throws -> [Server] {
         let text = body.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}")))
         guard let data = text.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) else {
-            throw SubscriptionError(message: "Подписка пришла не в формате Xray JSON")
+            throw SubscriptionError(message: "Проездной пришёл не в формате Xray JSON")
         }
         let configs: [[String: Any]] = (json as? [[String: Any]]) ?? ((json as? [String: Any]).map { [$0] } ?? [])
         let service: Set<String> = ["freedom", "blackhole", "dns", "loopback"]
@@ -492,10 +492,11 @@ enum SubscriptionAPI {
 
 /// Страны / Обходы, same rules as Android (data/ServerGroups.kt): "Обходы" are the servers
 /// with "обход" in the name; section headers and the panel's info entries aren't servers
-/// (the unlimited servers' row, which looks like one, is). The raw value is the tab's title
-/// and is never saved (Главная starts on Страны).
+/// (the unlimited servers' row, which looks like one, is). The raw value is the tab's title,
+/// «Направления» / «Объезды» on iOS («Маршрут», docs/HANDOFF.md), and is never saved (Маршрут
+/// starts on Направления).
 enum ServerGroup: String, CaseIterable, Identifiable {
-    case servers = "Страны", bypass = "Обходы"
+    case servers = "Направления", bypass = "Объезды"
     var id: String { rawValue }
 
     static func split(_ servers: [Server]) -> [ServerGroup: [Server]] {
@@ -553,9 +554,9 @@ enum SubscriptionErrors {
     static func unusable(_ info: SubscriptionInfo, _ body: String) -> String {
         if let a = info.announce?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty { return a }
         if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Сервер подписки не прислал ни одного сервера. Возможно, превышен лимит устройств или подписка неактивна — напишите в поддержку"
+            return "Сервер проездных не прислал ни одного направления. Возможно, превышен лимит устройств или проездной не действует — напишите в поддержку"
         }
-        return "Не удалось разобрать подписку. Напишите в поддержку"
+        return "Не удалось разобрать проездной. Напишите в поддержку"
     }
 
     /// The stub's text when every entry is one (no real server came).

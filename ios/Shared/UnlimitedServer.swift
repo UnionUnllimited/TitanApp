@@ -2,13 +2,16 @@ import Foundation
 
 /// The subscription's «👇БЕЗЛИМИТНЫЕ👇» row (a placeholder flag before it): it looks like a
 /// section header, yet it is a working config, a balancer over the unlimited servers with
-/// YouTube through nodes of its own. The app lists it right after АВТО in «Страны» under one name
-/// everywhere (Главная, Настройки, the Live Activity, Siri), with АВТО's bolt for its flag.
+/// YouTube through nodes of its own. The app lists it right after АВТО in «Направления» under one
+/// name everywhere (Маршрут, Настройки, the Live Activity, Siri), with a bolt for its flag.
 enum UnlimitedServer {
     /// Its name in the app, given once where the subscription is parsed (SubscriptionAPI.parseServers).
+    /// As before «Маршрут»: favourites, techniques and the VPN profile know the row by it.
     static let name = "⚡ Безлимитные · все серверы"
+    /// The name on screen (RouteName.shown).
+    static let shownName = "⚡ Безлимитные · все направления"
     /// What VoiceOver says for its bolt.
-    static let spokenName = "Безлимитные, все серверы"
+    static let spokenName = "Безлимитные, все направления"
     /// Its id: the same after each refresh, wherever the panel puts the row.
     static let id = "json-unlimited"
 

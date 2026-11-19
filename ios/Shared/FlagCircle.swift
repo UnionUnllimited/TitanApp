@@ -3,13 +3,13 @@ import UIKit
 
 /// A server's flag filled into a circle, as on Windows: the square flag from Flags.xcassets
 /// (flag-icons, drawn to PNG by librsvg in CI: scripts/download-flags-ios.sh), else
-/// the flag emoji as large as the circle needs. No flag: a bolt for АВТО and the unlimited
-/// servers' row (UnlimitedServer), else a server.
+/// the flag emoji as large as the circle needs. No flag: sparkles for АВТО («Лучший маршрут»,
+/// RouteName), a bolt for the unlimited servers' row (UnlimitedServer), else a server.
 /// The app's list and status, Настройки and the Live Activity give it their colours.
 struct FlagCircle: View {
     /// The name's leading flag emoji (String.splitFlag in the app).
     let flag: String?
-    /// The name without it: АВТО and UnlimitedServer get the bolt.
+    /// The name without it, as the panel sends it: АВТО gets the sparkles, UnlimitedServer the bolt.
     var name = ""
     let size: CGFloat
     /// The disc behind the flag (image or emoji), the bolt and the server.
@@ -35,6 +35,8 @@ struct FlagCircle: View {
                 // The emoji's flag is wider than tall and has a margin: large enough that
                 // its height fills the circle.
                 Text(flag).font(.system(size: size * 1.6)).fixedSize()
+            } else if RouteName.isBest(name) {
+                Image(systemName: "sparkles").font(.system(size: size * 0.5)).foregroundStyle(bolt)
             } else if unlimited || name.lowercased().contains("авто") {
                 Image(systemName: "bolt.fill").font(.system(size: size * 0.5)).foregroundStyle(bolt)
             } else {
@@ -44,7 +46,7 @@ struct FlagCircle: View {
         .frame(width: size, height: size)
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(stroke, lineWidth: size < 24 ? 0.5 : 1))
-        // АВТО's bolt and the server add nothing to the name.
+        // АВТО's sparkles, the bolt and the server add nothing to the name.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label ?? "")
         .accessibilityHidden(label == nil)

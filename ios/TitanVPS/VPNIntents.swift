@@ -6,20 +6,20 @@ import Foundation
 /// profile through TunnelSwitch, as Пункт управления's toggle does (SetVPNIntent); on comes on
 /// the server picked in the app.
 struct TurnOnVPNIntent: AppIntent {
-    static var title: LocalizedStringResource = "Включить Titan VPS"
-    static var description = IntentDescription("Подключает VPN к серверу, выбранному в приложении.")
+    static var title: LocalizedStringResource = "Поехали"
+    static var description = IntentDescription("Строит маршрут по направлению, выбранному в приложении Titan VPS.")
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        if await TunnelSwitch.isOn() { return .result(dialog: "Titan VPS уже включён") }
+        if await TunnelSwitch.isOn() { return .result(dialog: "Уже в пути") }
         let name = try await VPNIntents.turnOn()
-        return .result(dialog: "Titan VPS включён: \(name)")
+        return .result(dialog: "В пути · \(name)")
     }
 }
 
 struct TurnOffVPNIntent: AppIntent {
-    static var title: LocalizedStringResource = "Выключить Titan VPS"
-    static var description = IntentDescription("Отключает VPN — сам он не включится, пока его не включат снова.")
+    static var title: LocalizedStringResource = "Остановиться"
+    static var description = IntentDescription("Останавливает поездку — сама она не продолжится, пока не скажете «Поехали».")
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -28,40 +28,41 @@ struct TurnOffVPNIntent: AppIntent {
         let paused = await MainActor.run { AppStore.current?.vpnPaused == true }
         // Off anyway: Не отключать VPN doesn't bring it back, nor does the ping's end.
         await VPNIntents.turnOff()
-        if wasOn || paused { return .result(dialog: "Titan VPS выключен") }
-        return .result(dialog: "Titan VPS уже выключен")
+        if wasOn || paused { return .result(dialog: "Стоим") }
+        return .result(dialog: "Уже стоим")
     }
 }
 
 struct ToggleVPNIntent: AppIntent {
-    static var title: LocalizedStringResource = "Переключить Titan VPS"
-    static var description = IntentDescription("Включает VPN, если он выключен, и выключает, если включён.")
+    static var title: LocalizedStringResource = "Поехали или остановиться"
+    static var description = IntentDescription("Поехали, если стоим, и остановиться, если в пути.")
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         if await TunnelSwitch.isOn() {
             await VPNIntents.turnOff()
-            return .result(dialog: "Titan VPS выключен")
+            return .result(dialog: "Стоим")
         }
         let name = try await VPNIntents.turnOn()
-        return .result(dialog: "Titan VPS включён: \(name)")
+        return .result(dialog: "В пути · \(name)")
     }
 }
 
-/// "Привет, Siri, включи Titan VPS" and the app's actions in Команды.
+/// "Привет, Siri, поехали с Titan VPS" and the app's actions in Команды. «Маршрут»'s words
+/// first; the plain «Включи» / «Выключи» stay, as people said them before.
 struct TitanShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: TurnOnVPNIntent(), phrases: [
+            "Поехали с \(.applicationName)",
+            "Поехали в \(.applicationName)",
+            "Построй маршрут в \(.applicationName)",
             "Включи \(.applicationName)",
-            "Включить \(.applicationName)",
-            "Подключи \(.applicationName)",
-            "Включи VPN в \(.applicationName)",
         ])
         AppShortcut(intent: TurnOffVPNIntent(), phrases: [
+            "Остановись в \(.applicationName)",
+            "Остановиться в \(.applicationName)",
+            "Останови \(.applicationName)",
             "Выключи \(.applicationName)",
-            "Выключить \(.applicationName)",
-            "Отключи \(.applicationName)",
-            "Выключи VPN в \(.applicationName)",
         ])
         AppShortcut(intent: ToggleVPNIntent(), phrases: [
             "Переключи \(.applicationName)",
@@ -77,12 +78,12 @@ extension TurnOnVPNIntent: LiveActivityIntent {}
 @available(iOS 18.0, *)
 extension ToggleVPNIntent: LiveActivityIntent {}
 
-// Off keeps the activity («Выключено»): one the system ended after 8 h starts again.
+// Off keeps the activity («Стоим»): one the system ended after 8 h starts again.
 @available(iOS 18.0, *)
 extension TurnOffVPNIntent: LiveActivityIntent {}
 
 enum VPNIntents {
-    /// Returns the server's name without its flag (for Siri to say).
+    /// Returns the server's name without its flag, as shown (RouteName: for Siri to say).
     static func turnOn() async throws -> String {
         // Пункт управления's toggle then shows what the VPN really did, failed or not: run in the
         // background (Siri, Команды), the app has no screen to see the change.
@@ -106,10 +107,10 @@ enum VPNIntents {
             // Off again, Не отключать VPN with it; the activity says «Выключено».
             await TunnelSwitch.stop()
             await LiveActivityController.turnedOff()
-            throw TunnelSwitchError("Titan VPS выключен")
+            throw TunnelSwitchError("Остановились")
         }
         await LiveActivityController.turnedOn()
-        return name.splitFlag.1
+        return RouteName.shown(name.splitFlag.1)
     }
 
     @MainActor
@@ -295,10 +296,10 @@ enum VPNIntents {
     /// The server picked in the app (AppStore keeps the pick under this key), with its config.
     private static func picked() throws -> TunnelSwitch.Target {
         guard let sub = savedSubscription() else {
-            throw TunnelSwitchError("Добавьте ключ подписки в приложении Titan VPS")
+            throw TunnelSwitchError("Добавьте код проездного в приложении Titan VPS")
         }
         guard let server = pickedServer(in: sub) else {
-            throw TunnelSwitchError("В подписке нет серверов. Обновите её в приложении Titan VPS")
+            throw TunnelSwitchError("В проездном нет направлений. Обновите его в приложении Titan VPS")
         }
         return try target(server)
     }

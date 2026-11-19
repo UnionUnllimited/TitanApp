@@ -92,7 +92,7 @@ struct HomeView: View {
         .alert("Недоступно на Wi-Fi", isPresented: $wifiInfo) {
             Button("Понятно", role: .cancel) {}
         } message: {
-            Text("Обходы работают только через мобильный интернет и нужны при его ограничениях. На Wi-Fi подключиться к ним нельзя — выберите сервер во вкладке «Страны».")
+            Text("Объезды работают только через мобильный интернет и нужны при его ограничениях. На Wi-Fi по ним не проехать — выберите направление во вкладке «Направления».")
         }
         // Wi-Fi came while on a bypass server: move to a regular one (same as Android).
         .onChange(of: store.onWifi) { wifi in
@@ -100,7 +100,7 @@ struct HomeView: View {
             store.select(to.id)
             page = .servers
             if !store.resumingAfterPing { Task { await vpn.switchTo(to) } }
-            store.message = "Обходы работают только через мобильный интернет. Переключили на «\(to.name.splitFlag.1)»."
+            store.message = "Объезды работают только через мобильный интернет. Перестроили маршрут на «\(RouteName.shown(to.name.splitFlag.1))»."
         }
     }
 
@@ -143,10 +143,10 @@ struct HomeView: View {
     private var statusTitle: String {
         if paused { return "Пауза на время пинга" }
         switch vpn.state {
-        case .off, .error: return "Не подключено"
-        case .connecting: return "Подключаемся…"
-        case .connected: return "Подключено"
-        case .disconnecting: return "Отключаемся…"
+        case .off, .error: return "Стоим"
+        case .connecting: return "Строим маршрут…"
+        case .connected: return "В пути"
+        case .disconnecting: return "Останавливаемся…"
         }
     }
 
@@ -169,7 +169,7 @@ struct HomeView: View {
             }
             Spacer()
             // Обновить подписку (the theme is in Настройки).
-            squareButton("arrow.clockwise", spinning: store.busy, label: "Обновить подписку") {
+            squareButton("arrow.clockwise", spinning: store.busy, label: "Обновить проездной") {
                 Task { await store.refreshByHand() }
             }
             .disabled(store.busy)
@@ -193,7 +193,7 @@ struct HomeView: View {
     @ViewBuilder private var controls: some View {
         if let sub = store.subscription {
             if let status = store.account?.status, let text = ["BLOCKED": "Аккаунт заблокирован. Напишите в поддержку",
-                                                               "MAINTENANCE": "Идут технические работы. Подключение может не работать"][status] {
+                                                               "MAINTENANCE": "Идут технические работы. Маршруты могут не работать"][status] {
                 Button { openURL(store.supportURL) } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -211,7 +211,7 @@ struct HomeView: View {
             if sub.info.expire > 0, sub.info.expire <= Int64(Date().timeIntervalSince1970) { expiredBanner }
             PowerSlider(phase: powerPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Пинг…",
                         failures: vpn.failures, onToggle: toggleVPN,
-                        onLockedTap: { store.showToast("Идёт пинг серверов — переключатель вернётся через пару секунд", .info) },
+                        onLockedTap: { store.showToast("Идёт пинг направлений — переключатель вернётся через пару секунд", .info) },
                         onHold: { holdingDrag = $0 })
                 // Room for its glow: with the stack's padding, 22 pt to the page's top.
                 .padding(.vertical, 6)
@@ -225,7 +225,7 @@ struct HomeView: View {
         Button { store.paywall = .expired } label: {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.circle.fill")
-                Text("Подписка истекла").lineLimit(1)
+                Text("Проездной закончился").lineLimit(1)
                 Spacer(minLength: 8)
                 Text("Продлить").fontWeight(.bold).lineLimit(1)
                 Image(systemName: "chevron.right").font(.scaled(12, weight: .bold))
@@ -237,7 +237,7 @@ struct HomeView: View {
             .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(PressableStyle())
-        .accessibilityLabel("Подписка истекла. Продлить")
+        .accessibilityLabel("Проездной закончился. Продлить")
     }
     #else
     /// One line, the same look: only that it has run out (no payments in this build,
@@ -245,7 +245,7 @@ struct HomeView: View {
     private var expiredBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.circle.fill")
-            Text("Подписка истекла").lineLimit(1)
+            Text("Проездной закончился").lineLimit(1)
             Spacer(minLength: 0)
         }
         .font(.scaled(14, weight: .semibold))
@@ -254,7 +254,7 @@ struct HomeView: View {
         .frame(minHeight: 44)
         .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Подписка истекла")
+        .accessibilityLabel("Проездной закончился")
     }
     #endif
 
@@ -275,11 +275,11 @@ struct HomeView: View {
         if on {
             guard !vpn.isOn else { return true }
             guard let server = store.selected else {
-                store.showToast("Выберите сервер в списке ниже", .warning, haptic: false)
+                store.showToast("Выберите направление в списке ниже", .warning, haptic: false)
                 return false
             }
             if store.blockedOnWifi(server) {
-                store.showToast("Обходы недоступны на Wi-Fi — выберите сервер во вкладке «Страны»", .warning, haptic: false)
+                store.showToast("Объезды недоступны на Wi-Fi — выберите направление во вкладке «Направления»", .warning, haptic: false)
                 return false
             }
             Task { await vpn.connect(server, byUser: true) }
@@ -295,7 +295,7 @@ struct HomeView: View {
                 .foregroundStyle(statusColor)
                 .animation(.easeInOut(duration: 0.25), value: statusTitle)
             if paused {
-                Text("VPN включится сам, когда пинг закончится")
+                Text("Поедем дальше сами, когда пинг закончится")
                     .font(.scaled(14)).foregroundStyle(.secondary)
             } else if case .connected(let since) = vpn.state {
                 TimelineView(.periodic(from: .now, by: 1)) { ctx in
@@ -310,10 +310,10 @@ struct HomeView: View {
                     FlagCircle(server: s.name, size: 20)
                     // The server's Пинг is a cold delay (a fresh handshake), not latency: not under the
                     // status while connected, where «Проверить соединение» shows the warm one (as on Android).
-                    Text(s.name.splitFlag.1 + (vpn.isConnected ? "" : store.pings[s.id].flatMap { $0 >= 0 ? " · \($0) мс" : nil } ?? ""))
+                    Text(RouteName.shown(s.name.splitFlag.1) + (vpn.isConnected ? "" : store.pings[s.id].flatMap { $0 >= 0 ? " · \($0) мс" : nil } ?? ""))
                         .lineLimit(1)
                 } else {
-                    Text("Выберите сервер")
+                    Text("Выберите направление")
                 }
             }
             .font(.scaled(16, weight: .medium))
@@ -368,7 +368,7 @@ struct HomeView: View {
                         Image(systemName: "arrow.clockwise").font(.scaled(12, weight: .bold)).foregroundStyle(.secondary)
                     case .failed:
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        Text("Нет ответа через VPN")
+                        Text("Маршрут не отвечает")
                         Image(systemName: "arrow.clockwise").font(.scaled(12, weight: .bold)).foregroundStyle(.secondary)
                     }
                 }
@@ -389,7 +389,7 @@ struct HomeView: View {
                         .textSelection(.enabled)
                 }
             case .failed(let why):
-                Text(why.isEmpty || !techMode ? "Попробуйте ещё раз или выберите другой сервер" : "\(why). Попробуйте другой сервер")
+                Text(why.isEmpty || !techMode ? "Попробуйте ещё раз или выберите другое направление" : "\(why). Попробуйте другое направление")
                     .font(.scaled(12)).foregroundStyle(.red.opacity(0.85)).multilineTextAlignment(.center)
             default:
                 EmptyView()
@@ -405,7 +405,7 @@ struct HomeView: View {
         case .ok(let r):
             if let ms = Latency.shown(r.ms) { return "Соединение работает, \(ms) миллисекунд. Проверить ещё раз" }
             return r.ms == nil ? "Соединение работает. Проверить ещё раз" : "Соединение работает, медленно. Проверить ещё раз"
-        case .failed: return "Нет ответа через VPN. Проверить ещё раз"
+        case .failed: return "Маршрут не отвечает. Проверить ещё раз"
         }
     }
 
@@ -434,7 +434,7 @@ struct HomeView: View {
                         Text("Безлимит · работают и на Wi‑Fi, и в мобильной сети")
                     } else if sub.info.total > 0 {
                         HStack(spacing: 6) {
-                            Text("Трафик: \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
+                            Text("Объезды: осталось \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
                             #if TITAN_PAYMENTS
                             // Тарифы (the App Store first).
                             Button("Добавить ГБ") { store.paywall = .traffic }.font(.scaled(13, weight: .semibold))
@@ -448,7 +448,7 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
 
                 if page == .bypass && store.bypassLockedOnWifi {
-                    Text("Вы подключены к Wi-Fi. Обходы работают только через мобильный интернет — на Wi-Fi используйте «Страны».")
+                    Text("Вы подключены к Wi-Fi. Объезды работают только через мобильный интернет — на Wi-Fi используйте «Направления».")
                         .font(.scaled(13)).foregroundStyle(.orange)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
                 }
@@ -519,7 +519,7 @@ struct HomeView: View {
             .animation(.easeInOut(duration: 0.2), value: store.pinging)
         }
         .buttonStyle(PressableStyle())
-        .accessibilityLabel(store.pinging ? "Остановить пинг" : "Пинг всех серверов")
+        .accessibilityLabel(store.pinging ? "Остановить пинг" : "Пинг всех направлений")
     }
 
     private func pick(_ s: Server) {
@@ -531,7 +531,7 @@ struct HomeView: View {
         if changed, !store.resumingAfterPing { Task { await vpn.switchTo(s, byUser: true) } }
     }
 
-    /// Страны and Обходы (a group with no servers has no tab).
+    /// Направления and Объезды (a group with no servers has no tab).
     private func tabs(_ groups: [ServerGroup: [Server]], oneLine: Bool) -> some View {
         HStack(spacing: 2) {
             ForEach(ServerGroup.allCases) { g in
@@ -545,8 +545,8 @@ struct HomeView: View {
     /// The name and count, the networks its servers work on under them (beside them on one line).
     private func tabChip(_ g: ServerGroup, _ count: Int, oneLine: Bool) -> some View {
         let selected = g == page
-        // At the largest text on a 375 pt iPhone «Обходы 57» gets its room from a compact Пинг
-        // (list); the title shrinks only past that (Bold Text, a zoomed 320 pt screen).
+        // «Направления 57» gets its room from a compact Пинг first (list); the title shrinks
+        // past that (a 375 pt iPhone at large text, Bold Text, a zoomed 320 pt screen).
         let title = HStack(spacing: 6) {
             Image(systemName: g.icon)
             Text(g.rawValue).lineLimit(1).minimumScaleFactor(0.6)
@@ -597,18 +597,18 @@ private extension Palette {
     static let softPrimary = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x8AB0FF) : UIColor(hex: 0x3D7BFF) })
 }
 
-/// A tab's look on Главная.
+/// A tab's look on Маршрут: a signpost for Направления, the detour sign for Объезды.
 private extension ServerGroup {
-    var icon: String { self == .servers ? "globe" : "shuffle" }
+    var icon: String { self == .servers ? "signpost.right.fill" : "arrow.triangle.turn.up.right.diamond.fill" }
     /// Обходы work only over mobile internet (store.bypassLockedOnWifi).
     var networks: String { self == .servers ? "Wi‑Fi / LTE" : "только LTE" }
     var networksIcon: String { self == .servers ? "wifi" : "cellularbars" }
     var spokenNetworks: String { self == .servers ? "работают на Wi-Fi и LTE" : "только LTE" }
 
-    /// 1 сервер, 3 сервера, 29 серверов.
+    /// 1 направление, 3 направления, 29 направлений.
     static func spokenCount(_ n: Int) -> String {
-        let word = (11...14).contains(n % 100) ? "серверов"
-            : n % 10 == 1 ? "сервер" : (2...4).contains(n % 10) ? "сервера" : "серверов"
+        let word = (11...14).contains(n % 100) ? "направлений"
+            : n % 10 == 1 ? "направление" : (2...4).contains(n % 10) ? "направления" : "направлений"
         return "\(n) \(word)"
     }
 }
@@ -691,7 +691,7 @@ struct ServerRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        let name = server.name.splitFlag.1
+        let name = RouteName.shown(server.name.splitFlag.1)
         Button(action: onTap) {
             HStack(spacing: 14) {
                 FlagCircle(server: server.name, size: 34)

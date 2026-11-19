@@ -102,17 +102,17 @@ struct PaywallView: View {
         let info = store.subscription?.info
         switch reason {
         case .expired:
-            return ("Подписка истекла — продлите её, чтобы VPN снова работал", .red)
+            return ("Проездной закончился — продлите его, чтобы снова поехать", .red)
         case .traffic:
-            guard let info, info.total > 0 else { return ("Трафик на обходах", .secondary) }
-            return ("На обходах осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total))",
+            guard let info, info.total > 0 else { return ("Трафик на объездах", .secondary) }
+            return ("Объезды: осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total))",
                     info.remaining * 10 < info.total ? .orange : .secondary)
         case .renew:
-            guard let info, info.expire > 0 else { return ("Продление подписки", .secondary) }
+            guard let info, info.expire > 0 else { return ("Продление проездного", .secondary) }
             let active = info.expire > Int64(Date().timeIntervalSince1970)
-            return (active ? "Подписка активна до " + Fmt.date(info.expire) : "Подписка истекла", active ? .secondary : .red)
+            return (active ? "Проездной действует до " + Fmt.date(info.expire) : "Проездной закончился", active ? .secondary : .red)
         case .start:
-            return ("Подписка через App Store — ключ появится в приложении сам", .secondary)
+            return ("Подписка через App Store — код проездного появится в приложении сам", .secondary)
         }
     }
 
@@ -123,7 +123,7 @@ struct PaywallView: View {
                 cardTitle("checkmark.seal.fill", Palette.primary, "Подписка через App Store",
                           "Продлевается сама, отменить можно в любой момент")
                 // What a plan gives (App Review 3.1.2(c)); the rest is in each one's description.
-                Text("Подписка открывает все серверы Titan VPS с безлимитным трафиком на обычных серверах. Лимит устройств и гигабайты на обходах — как в описании тарифа.")
+                Text("Подписка открывает все направления Titan VPS с безлимитным трафиком на обычных направлениях. Лимит устройств и гигабайты на объездах — как в описании тарифа.")
                     .font(.scaled(12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 products(purchases.subscriptions, picked: $picked, empty: "Тарифы App Store скоро появятся")
@@ -151,12 +151,12 @@ struct PaywallView: View {
         }
     }
 
-    /// Гигабайты для обходов (consumables), for «Добавить ГБ».
+    /// Гигабайты для объездов (consumables), for «Добавить ГБ».
     private var packsCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
-                cardTitle("chart.pie.fill", Palette.violet, "Гигабайты для обходов",
-                          "Разовая покупка: добавятся к трафику на обходах")
+                cardTitle("chart.pie.fill", Palette.violet, "Гигабайты для объездов",
+                          "Разовая покупка: добавятся к трафику на объездах")
                 products(purchases.packs, picked: $pickedPack, empty: "Пакеты гигабайт в App Store скоро появятся")
             }
             .padding(18)

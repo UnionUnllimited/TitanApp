@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Подписка: expiry, bypass traffic, «Продлить подписку» (Тарифы) and a "Личный кабинет"
-/// button with what it has. Without TITAN_PAYMENTS (no payments, renewal or cabinet in this
-/// build, docs/HANDOFF.md): expiry, bypass traffic, devices and support.
+/// Проездной (the subscription tab): expiry, bypass traffic, «Продлить проездной» (Тарифы) and
+/// a "Личный кабинет" button with what it has. Without TITAN_PAYMENTS (no payments, renewal or
+/// cabinet in this build, docs/HANDOFF.md): expiry, bypass traffic, devices and support.
 struct SubscriptionView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.openURL) private var openURL
@@ -34,20 +34,20 @@ struct SubscriptionView: View {
                 let active = info.expire <= 0 || info.expire > now
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("Подписка").font(.scaled(28, weight: .bold))
+                        Text("Проездной").font(.scaled(28, weight: .bold))
                         Spacer()
                         CircleIconButton(icon: "arrow.clockwise", spinning: store.busy, size: 42) {
                             Task { await store.refreshByHand() }
                         }
                         .disabled(store.busy)
-                        .accessibilityLabel("Обновить подписку")
+                        .accessibilityLabel("Обновить проездной")
                     }
                     .padding(.top, 8)
                     Card {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 6) {
                                 Circle().fill(active ? Palette.green : .red).frame(width: 8, height: 8)
-                                Text(active ? "Подписка активна" : "Подписка истекла")
+                                Text(active ? "Проездной действует" : "Проездной закончился")
                                     .font(.scaled(13, weight: .semibold))
                             }
                             .foregroundStyle(active ? Palette.green : .red)
@@ -63,7 +63,7 @@ struct SubscriptionView: View {
                     }
                     Card {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Трафик на обходах").foregroundStyle(.secondary).font(.scaled(14))
+                            Text(info.total > 0 ? "Объезды: осталось" : "Объезды").foregroundStyle(.secondary).font(.scaled(14))
                             if info.total > 0 {
                                 Text("\(formatBytes(info.remaining)) из \(formatBytes(info.total))").font(.scaled(26, weight: .bold))
                                 GradientBar(value: Double(info.remaining) / Double(max(info.total, 1)),
@@ -71,7 +71,7 @@ struct SubscriptionView: View {
                             } else {
                                 Text("Безлимит").font(.scaled(26, weight: .bold))
                             }
-                            Text("На обычных серверах — безлимит").font(.scaled(13)).foregroundStyle(.secondary)
+                            Text("По обычным направлениям — безлимит").font(.scaled(13)).foregroundStyle(.secondary)
                             Text(bypassNote(info))
                                 .font(.scaled(12)).foregroundStyle(.secondary).padding(.top, 4)
                             #if TITAN_PAYMENTS
@@ -90,7 +90,7 @@ struct SubscriptionView: View {
                     }
                     #if TITAN_PAYMENTS
                     Button { store.paywall = renewReason } label: {
-                        Label("Продлить подписку", systemImage: "crown.fill")
+                        Label("Продлить проездной", systemImage: "ticket.fill")
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     // Without the site's link, the bot instead: the United States storefront only,
@@ -107,7 +107,7 @@ struct SubscriptionView: View {
                     if let acc = store.account, acc.devicesEnabled {
                         Card {
                             Button { showDevices = true } label: {
-                                SettingsRow(icon: "iphone.and.arrow.forward", color: Palette.primary, title: "Подключённые устройства", chevron: true) {
+                                SettingsRow(icon: "iphone.and.arrow.forward", color: Palette.primary, title: "Устройства", chevron: true) {
                                     Text("\(acc.devices.count)" + (acc.deviceLimit > 0 ? " из \(acc.deviceLimit)" : ""))
                                         .font(.scaled(15, weight: .medium)).foregroundStyle(.secondary)
                                 }
@@ -123,7 +123,7 @@ struct SubscriptionView: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("В личном кабинете").fontWeight(.semibold)
                                 feature("calendar", "Сколько дней осталось")
-                                feature("chart.pie", "Трафик на обходах")
+                                feature("chart.pie", "Трафик на объездах")
                                 feature("person.text.rectangle", "Устройства и ваш ID")
                                 if purchases.otherMethods { feature("tag", "Тарифы и коды на продление") }
                             }
@@ -205,9 +205,9 @@ struct SubscriptionView: View {
         #endif
     }
 
-    /// Обходы explained; with TITAN_PAYMENTS, where more ГБ come from.
+    /// Объезды explained; with TITAN_PAYMENTS, where more ГБ come from.
     private func bypassNote(_ info: SubscriptionInfo) -> String {
-        let note = "Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные серверы не работают. Гигабайты списываются только пока вы подключены к обходу. На Wi-Fi обходы не нужны и недоступны."
+        let note = "Объезды — направления для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные направления не работают. Гигабайты списываются, только пока вы едете по объезду. На Wi-Fi объезды не нужны и недоступны."
         #if TITAN_PAYMENTS
         return note + (info.total > 0 ? " Закончились ГБ — нажмите «Добавить ГБ»." : "")
         #else
@@ -269,7 +269,7 @@ struct DevicesView: View {
             List {
                 Section {
                     HStack {
-                        Text("Подключено")
+                        Text("Привязано")
                         Spacer()
                         Text("\(account.devices.count)" + (account.deviceLimit > 0 ? " из \(account.deviceLimit)" : ""))
                             .foregroundStyle(.secondary)
@@ -408,13 +408,13 @@ struct ProfileView: View {
                         SectionTitle("Оформление")
                         Card { ThemePicker(theme: $theme) }
 
-                        SectionTitle("Подключение")
+                        SectionTitle("Поездка")
                         Card {
                             Button {
                                 Haptics.selection()
                                 openHome()
                             } label: {
-                                SettingsRow(icon: "server.rack", color: Palette.primary, title: "Сервер", chevron: true) {
+                                SettingsRow(icon: "signpost.right.fill", color: Palette.primary, title: "Направление", chevron: true) {
                                     HStack(spacing: 6) {
                                         if let s = store.selected { FlagCircle(server: s.name, size: 20) }
                                         Text(serverName).font(.scaled(15)).foregroundStyle(.secondary).lineLimit(1)
@@ -426,11 +426,11 @@ struct ProfileView: View {
                             RowDivider()
                             Toggle(isOn: $autoconnect) {
                                 HStack(spacing: 14) {
-                                    IconTile(icon: "bolt.fill", color: Palette.green)
+                                    IconTile(icon: "car.fill", color: Palette.green)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("Автоподключение").font(.scaled(16, weight: .medium))
+                                        Text("Сразу в путь").font(.scaled(16, weight: .medium))
                                             .lineLimit(1).minimumScaleFactor(0.75)
-                                        Text("VPN включится сам при открытии приложения")
+                                        Text("Поедем сами, как только откроете приложение")
                                             .font(.scaled(12)).foregroundStyle(.secondary)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
@@ -442,9 +442,9 @@ struct ProfileView: View {
                             // VPN On Demand: on by default, applies to the running VPN at once.
                             Toggle(isOn: $keepAlive) {
                                 HStack(spacing: 14) {
-                                    IconTile(icon: "checkmark.shield.fill", color: Palette.green)
+                                    IconTile(icon: "arrow.triangle.2.circlepath", color: Palette.green)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("Не отключать VPN").font(.scaled(16, weight: .medium))
+                                        Text("Всегда в пути").font(.scaled(16, weight: .medium))
                                             .lineLimit(1).minimumScaleFactor(0.75)
                                         Text(keepAliveNote)
                                             .font(.scaled(12)).foregroundStyle(.secondary)
@@ -466,7 +466,7 @@ struct ProfileView: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("Напоминания").font(.scaled(16, weight: .medium))
                                             .lineLimit(1).minimumScaleFactor(0.75)
-                                        Text("За 3 дня и за день до конца подписки и когда на обходах кончается трафик")
+                                        Text("За 3 дня и за день до конца проездного и когда на объездах кончается трафик")
                                             .font(.scaled(12)).foregroundStyle(.secondary)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
@@ -501,7 +501,7 @@ struct ProfileView: View {
                             .buttonStyle(RowButtonStyle())
                             RowDivider()
                             Button { Task { await store.refreshByHand() } } label: {
-                                SettingsRow(icon: "arrow.clockwise", color: Palette.green, title: "Обновить подписку",
+                                SettingsRow(icon: "arrow.clockwise", color: Palette.green, title: "Обновить проездной",
                                             subtitle: store.subscription.map { "Обновлено " + Fmt.ago($0.fetchedAt) }) {
                                     if store.busy { ProgressView() }
                                 }
@@ -603,13 +603,13 @@ struct ProfileView: View {
                 }
                 Button("Отмена", role: .cancel) {}
             } message: {
-                Text("Тема, избранное, автоподключение, «Не отключать VPN» и выбранный сервер вернутся к исходным. Ключ останется.")
+                Text("Тема, избранное, «Сразу в путь», «Всегда в пути» и выбранное направление вернутся к исходным. Код проездного останется.")
             }
             .alert("Выйти из аккаунта?", isPresented: $confirmLogout) {
                 Button("Выйти", role: .destructive) { signOut() }
                 Button("Отмена", role: .cancel) {}
             } message: {
-                Text("VPN отключится, ключ, избранное и VPN-профиль удалятся с этого устройства. Ключ нужно будет вставить заново.")
+                Text("Поездка остановится, а код проездного, избранное и профиль приложения в Настройках iOS удалятся с этого устройства. Код нужно будет вставить заново.")
             }
             .alert("Удалить аккаунт?", isPresented: $confirmDelete) {
                 #if TITAN_PAYMENTS
@@ -650,8 +650,8 @@ struct ProfileView: View {
     /// else a request for the support chat.
     private var deleteMessage: String {
         let how = Config.deletionEndpoint != nil
-            ? "Аккаунт и подписка в боте удалятся сразу, ключ и все данные — с этого устройства. Если сервер не ответит, мы скопируем запрос и откроем чат поддержки."
-            : "Мы скопируем запрос на удаление и откроем чат поддержки — отправьте его там. Аккаунт и подписку в боте удалим в течение 7 дней, поддержка ответит, когда всё будет удалено. Ключ и все данные с этого устройства удалятся сразу."
+            ? "Аккаунт и проездной в боте удалятся сразу, код проездного и все данные — с этого устройства. Если сервер не ответит, мы скопируем запрос и откроем чат поддержки."
+            : "Мы скопируем запрос на удаление и откроем чат поддержки — отправьте его там. Аккаунт и проездной в боте удалим в течение 7 дней, поддержка ответит, когда всё будет удалено. Код проездного и все данные с этого устройства удалятся сразу."
         #if TITAN_PAYMENTS
         let apple = appleSubscribed
             ? "У вас есть подписка App Store: Apple продолжит её списывать, пока вы её не отмените. Сначала отмените её в «Управлении подпиской»."
@@ -688,13 +688,13 @@ struct ProfileView: View {
         }
     }
 
-    /// Не отключать VPN's line. On iOS 16 the tunnel can't turn on demand off when the VPN is
-    /// switched off in iOS Settings (PacketTunnelProvider.holdOnDemand needs iOS 17), so iOS turns
-    /// it on again: where to turn it off, then.
+    /// Всегда в пути's line (Не отключать VPN before «Маршрут»). On iOS 16 the tunnel can't turn
+    /// on demand off when the VPN is switched off in iOS Settings (PacketTunnelProvider.holdOnDemand
+    /// needs iOS 17), so iOS turns it on again: where to turn it off, then.
     private var keepAliveNote: String {
-        let note = "Сам переподключится при смене Wi‑Fi и мобильной сети, после сбоя и перезагрузки"
+        let note = "Сам перестроит маршрут при смене Wi‑Fi и мобильной сети, после сбоя и перезагрузки"
         if #available(iOS 17.0, *) { return note }
-        return note + ". Выключайте VPN в приложении: выключенный в Настройках iOS, он включится снова"
+        return note + ". Останавливайтесь в приложении: выключенный в Настройках iOS, маршрут включится снова"
     }
 
     /// Dynamic Island: the Live Activity, the VPN on or off (on by default). Off ends it at once;
@@ -707,7 +707,7 @@ struct ProfileView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Dynamic Island").font(.scaled(16, weight: .medium))
                             .lineLimit(1).minimumScaleFactor(0.75)
-                        Text("Сервер, скорость и пинг на экране блокировки — и когда VPN выключен")
+                        Text("Направление, скорость и пинг на экране блокировки — и когда стоим")
                             .font(.scaled(12)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -740,10 +740,10 @@ struct ProfileView: View {
 
     /// Without the flag: its circle is beside it.
     private var serverName: String {
-        store.selected?.name.splitFlag.1 ?? "Автоматически"
+        store.selected.map { RouteName.shown($0.name.splitFlag.1) } ?? "Автоматически"
     }
 
-    /// Who this is: the subscription's state and devices, a tap opens Подписка.
+    /// Who this is: the subscription's state and devices, a tap opens Проездной.
     private func accountCard(_ sub: Subscription) -> some View {
         let now = Int64(Date().timeIntervalSince1970)
         let active = sub.info.expire <= 0 || sub.info.expire > now
@@ -759,7 +759,7 @@ struct ProfileView: View {
                     Text("Titan VPS").font(.scaled(19, weight: .bold))
                     HStack(spacing: 6) {
                         Circle().fill(active ? Palette.green : Color.red).frame(width: 8, height: 8)
-                        Text(active ? (sub.info.expire > 0 ? "Активна до " + Fmt.date(sub.info.expire) : "Подписка бессрочная") : "Подписка истекла")
+                        Text(active ? (sub.info.expire > 0 ? "Проездной до " + Fmt.date(sub.info.expire) : "Проездной бессрочный") : "Проездной закончился")
                             .font(.scaled(14, weight: .medium))
                             .foregroundStyle(active ? Color.primary : Color.red)
                     }
@@ -1006,7 +1006,7 @@ struct OpenSource {
         // No other platforms named (App Review 2.3.10): the repository shows the rest.
         OpenSource(name: "Titan VPS", detail: "Исходный код приложения Titan VPS",
                    links: [Link(title: "UnionUnllimited/TitanApp", url: Config.repository)]),
-        OpenSource(name: "Ядро VPN", detail: "Xray-core v26.9.30 (через libXray), с нашими патчами для iOS",
+        OpenSource(name: "Сетевое ядро", detail: "Xray-core v26.9.30 (через libXray), с нашими патчами для iOS",
                    links: [Link(title: "XTLS/Xray-core", url: github("XTLS/Xray-core")),
                            Link(title: "Патчи для iOS", url: Config.iosPatches)]),
         OpenSource(name: "libXray", detail: "Xray-core для мобильных приложений",
@@ -1016,7 +1016,7 @@ struct OpenSource {
                            Link(title: "SagerNet/cronet-go", url: github("SagerNet/cronet-go"))]),
         OpenSource(name: "mieru", detail: "Клиент протокола Mieru",
                    links: [Link(title: "enfein/mieru", url: github("enfein/mieru"))]),
-        OpenSource(name: "flag-icons", detail: "Флаги стран в списке серверов",
+        OpenSource(name: "flag-icons", detail: "Флаги стран в списке направлений",
                    links: [Link(title: "lipis/flag-icons", url: github("lipis/flag-icons"))]),
     ]
 }

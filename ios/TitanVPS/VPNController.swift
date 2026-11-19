@@ -206,7 +206,7 @@ final class VPNController: ObservableObject {
         connectsInFlight += 1
         defer { connectsInFlight -= 1 }
         guard let tunnelId = Self.tunnelBundleId else {
-            fail("В этой сборке нет VPN-расширения", attempt: attempt)
+            fail("В этой сборке нет сетевого расширения", attempt: attempt)
             return
         }
         // Подключаемся… at once: the build below may take seconds (a plugin server's DNS
@@ -518,7 +518,7 @@ final class VPNController: ObservableObject {
     private func adoptSettingsOff() {
         TunnelSwitch.noteSaved(false)
         UserDefaults.standard.set(false, forKey: Self.keepAliveKey)
-        AppStore.current?.showToast("«Не отключать VPN» выключен: в Настройках iOS выключили «Подключать по запросу»")
+        AppStore.current?.showToast("«Всегда в пути» выключен: в Настройках iOS выключили «Подключать по запросу»")
     }
 
     /// Back in the app (RootView) and on each save of the profile: on demand switched off in iOS
@@ -664,10 +664,11 @@ final class VPNController: ObservableObject {
     private static func describe(_ error: Error) -> String {
         let ns = error as NSError
         if ns.domain == NEVPNErrorDomain, ns.code == NEVPNError.configurationReadWriteFailed.rawValue {
-            return "Разрешите добавление VPN-конфигурации, чтобы подключиться"
+            // The system's own prompt says VPN: named so, to be found.
+            return "Разрешите добавление конфигурации VPN, чтобы поехать"
         }
         if let e = error as? SubscriptionError { return e.message }
-        return "Не удалось подключиться: \(error.localizedDescription)"
+        return "Не удалось построить маршрут: \(error.localizedDescription)"
     }
 }
 

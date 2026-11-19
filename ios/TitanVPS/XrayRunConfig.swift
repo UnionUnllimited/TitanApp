@@ -28,7 +28,7 @@ enum XrayRunConfig {
 
     static func build(serverJson: String) throws -> String {
         guard var cfg = (try? JSONSerialization.jsonObject(with: Data(serverJson.utf8))) as? [String: Any] else {
-            throw SubscriptionError(message: "Не удалось прочитать настройки сервера")
+            throw SubscriptionError(message: "Не удалось прочитать настройки направления")
         }
         // No access or DNS log: a line per connection or query that nobody reads in the tunnel.
         cfg["log"] = ["loglevel": "warning", "access": "none", "dnsLog": false]

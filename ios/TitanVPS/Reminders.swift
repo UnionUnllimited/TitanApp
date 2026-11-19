@@ -55,12 +55,12 @@ enum Reminders {
                 when.hour = 12
                 guard let fire = Calendar.current.date(from: when), fire > Date(), fire < end else { continue }
                 let content = UNMutableNotificationContent()
-                content.title = "Подписка Titan VPS"
+                content.title = "Проездной Titan VPS"
                 #if TITAN_PAYMENTS
-                content.body = "Подписка закончится \(endText(end)). Если ещё не продлили — продлите её на вкладке «Подписка», чтобы VPN не отключился."
+                content.body = "Проездной закончится \(endText(end)). Если ещё не продлили — продлите его на вкладке «Проездной», чтобы не остановиться в пути."
                 #else
                 // No payments in this build (docs/HANDOFF.md): the date only, no call to renew.
-                content.body = "Подписка закончится \(endText(end))."
+                content.body = "Проездной закончится \(endText(end))."
                 #endif
                 content.sound = .default
                 let request = UNNotificationRequest(identifier: id, content: content,
@@ -74,12 +74,12 @@ enum Reminders {
             guard (defaults.object(forKey: warnedKey) as? NSNumber)?.int64Value != info.total else { return }
             defaults.set(NSNumber(value: info.total), forKey: warnedKey)
             let content = UNMutableNotificationContent()
-            content.title = "Трафик на обходах заканчивается"
+            content.title = "Трафик на объездах заканчивается"
             #if TITAN_PAYMENTS
-            content.body = "Осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total)). Добавить ГБ можно на вкладке «Подписка»."
+            content.body = "Объезды: осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total)). Добавить ГБ можно на вкладке «Проездной»."
             #else
             // No payments in this build: what is left only.
-            content.body = "Осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total))."
+            content.body = "Объезды: осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total))."
             #endif
             content.sound = .default
             try? await center.add(UNNotificationRequest(identifier: trafficId, content: content,

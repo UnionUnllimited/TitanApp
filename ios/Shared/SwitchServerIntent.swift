@@ -6,7 +6,7 @@ import Foundation
 /// the app's process (launched in the background if need be), which switches the VPN there.
 @available(iOS 18.0, *)
 struct SwitchServerIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Сменить сервер"
+    static let title: LocalizedStringResource = "Сменить направление"
     /// Only the activity's buttons: not for Siri and Команды.
     static let isDiscoverable = false
 
@@ -28,12 +28,12 @@ struct SwitchServerIntent: LiveActivityIntent {
     }
 }
 
-/// The activity's ⏻ while the VPN is on: off, as Siri's «Выключить» (Не отключать VPN held off;
-/// the activity stays, «Выключено»). A LiveActivityIntent in both targets, so it runs in the
+/// The activity's ⏻ while the VPN is on: off, as Siri's «Остановиться» (Всегда в пути held off;
+/// the activity stays, «Стоим»). A LiveActivityIntent in both targets, so it runs in the
 /// app's process.
 @available(iOS 18.0, *)
 struct StopVPNIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Выключить Titan VPS"
+    static let title: LocalizedStringResource = "Остановиться"
     /// Only the activity's button: Siri and Команды have TurnOffVPNIntent.
     static let isDiscoverable = false
 
@@ -46,12 +46,12 @@ struct StopVPNIntent: LiveActivityIntent {
     }
 }
 
-/// The activity's ⏻ while the VPN is off: on, as Siri's «Включить», on the server the activity
+/// The activity's ⏻ while the VPN is off: on, as Siri's «Поехали», on the server the activity
 /// shows (the one picked in the app). A LiveActivityIntent in both targets, so it runs in the
-/// app's process; a failure («Обходы … только через мобильный интернет») goes back as its error.
+/// app's process; a failure («Объезды … только через мобильный интернет») goes back as its error.
 @available(iOS 18.0, *)
 struct StartVPNIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Включить Titan VPS"
+    static let title: LocalizedStringResource = "Поехали"
     /// Only the activity's button: Siri and Команды have TurnOnVPNIntent.
     static let isDiscoverable = false
 

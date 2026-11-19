@@ -221,11 +221,11 @@ struct RootView: View {
                     HomeView(openSettings: { tab = .profile }, toTop: toTop[.home] ?? 0)
                         .tabSwipe { swipeTab(from: .home, $0) }
                         .toolbar(.hidden, for: .tabBar)
-                        .tabItem { Label("Главная", systemImage: "house.fill") }.tag(Tab.home)
+                        .tabItem { Label("Маршрут", systemImage: "location.north.line.fill") }.tag(Tab.home)
                     SubscriptionView(toTop: toTop[.subscription] ?? 0)
                         .tabSwipe { swipeTab(from: .subscription, $0) }
                         .toolbar(.hidden, for: .tabBar)
-                        .tabItem { Label("Подписка", systemImage: "crown") }.tag(Tab.subscription)
+                        .tabItem { Label("Проездной", systemImage: "ticket") }.tag(Tab.subscription)
                     // Its swipe is put inside its NavigationStack: none on Технический режим pushed there.
                     ProfileView(openSubscription: { tab = .subscription }, openHome: { tab = .home },
                                 toTop: toTop[.profile] ?? 0, swipeTab: { swipeTab(from: .profile, $0) })
@@ -265,8 +265,9 @@ struct RootView: View {
     }
 }
 
-/// Главная / Подписка / Профиль: the picked one in the brand colour. Its surface goes down to
-/// the screen's edge; [bottom] is the room kept there for the home indicator.
+/// Маршрут / Проездной / Профиль (Tab.home, .subscription, .profile): the picked one in the brand
+/// colour. Its surface goes down to the screen's edge; [bottom] is the room kept there for the
+/// home indicator.
 struct TitanTabBar: View {
     @Binding var selection: Tab
     var bottom: CGFloat = 0
@@ -281,8 +282,8 @@ struct TitanTabBar: View {
     }
 
     private let items = [
-        Item(id: .home, title: "Главная", icon: "house.fill"),
-        Item(id: .subscription, title: "Подписка", icon: "crown"),
+        Item(id: .home, title: "Маршрут", icon: "location.north.line.fill"),
+        Item(id: .subscription, title: "Проездной", icon: "ticket"),
         Item(id: .profile, title: "Профиль", icon: "person"),
     ]
 
@@ -418,7 +419,7 @@ struct SplashView: View {
                 VStack(spacing: 6) {
                     Text("Titan VPS").font(.scaled(40, weight: .heavy))
                         .foregroundStyle(Palette.logoGradient)
-                    Text("Подключение в одно касание").font(.scaled(15, weight: .medium)).foregroundStyle(.secondary)
+                    Text("В путь — в одно касание").font(.scaled(15, weight: .medium)).foregroundStyle(.secondary)
                 }
                 .opacity(appeared ? 1 : 0)
                 .offset(y: appeared ? 0 : 14)
@@ -493,7 +494,7 @@ struct PrivacyNoticeView: View {
             point("lock.shield.fill", "Никакие данные мы не продаём, не используем ни для чего, кроме работы VPN, и не передаём третьим лицам.")
             point("network", "Трафик идёт через VPN-серверы только для того, чтобы попасть в интернет.")
             point("eye.slash.fill", "В приложении нет аналитики и трекеров.")
-            point("key.fill", "Ключ подписки хранится только на этом устройстве.")
+            point("ticket.fill", "Код проездного (ключ подписки) хранится только на этом устройстве.")
             point("iphone", "Для лимита устройств сервер подписки получает только модель устройства, версию iOS и идентификатор Titan VPS на этом устройстве.")
             #if TITAN_PAYMENTS
             point("creditcard.fill", "При покупке в App Store сервер получает запись Apple о покупке вместе с ключом (если он уже есть), чтобы продлить подписку или выдать ключ. Данные карты видит только Apple.")
@@ -545,7 +546,7 @@ struct WelcomeView: View {
                     GlowingLogo(size: 110)
                     Text("Titan VPS").font(.scaled(34, weight: .heavy))
                         .foregroundStyle(Palette.logoGradient)
-                    Text("Вставьте ключ подписки — и VPN включится сразу")
+                    Text("Вставьте код проездного — и сразу поехали")
                         .font(.scaled(15))
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -593,13 +594,13 @@ struct WelcomeView: View {
 
     private var keyCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Ключ подписки").font(.scaled(13, weight: .semibold)).kerning(0.4)
+            Text("Код проездного").font(.scaled(13, weight: .semibold)).kerning(0.4)
                 .foregroundStyle(.secondary)
             HStack(spacing: 10) {
-                Image(systemName: "key.fill")
+                Image(systemName: "ticket.fill")
                     .foregroundStyle(valid ? Palette.green : Palette.primary)
                     .frame(width: 22)
-                TextField("https://api1.titanvps.su/…", text: $key)
+                TextField("Вставьте код проездного", text: $key)
                     .font(.scaled(15))
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .keyboardType(.URL)
@@ -627,7 +628,7 @@ struct WelcomeView: View {
             .animation(.easeInOut(duration: 0.2), value: valid)
             .animation(.easeInOut(duration: 0.2), value: editing)
             if !key.isEmpty && !valid {
-                Text("Это не похоже на ключ Titan VPS. Скопируйте ссылку-ключ целиком.")
+                Text("Это не похоже на код проездного Titan VPS. Скопируйте его целиком — это ссылка.")
                     .font(.scaled(12)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -644,10 +645,10 @@ struct WelcomeView: View {
                 if store.busy {
                     HStack(spacing: 10) {
                         ProgressView().tint(.white)
-                        Text("Проверяем ключ…")
+                        Text("Проверяем проездной…")
                     }
                 } else {
-                    Label("Подключить", systemImage: "bolt.shield.fill")
+                    Label("Поехали", systemImage: "location.north.line.fill")
                 }
             }
             .buttonStyle(PrimaryButtonStyle())
@@ -670,8 +671,8 @@ struct WelcomeView: View {
     /// another iPhone or iPad back by Восстановить покупки (App Review 3.1.1, 3.1.3(b)).
     private var appStore: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Нет ключа?").font(.scaled(16, weight: .bold))
-            Text("Оформите подписку через App Store — ключ появится в приложении сам. Уже оформляли с этим Apple ID — восстановите покупки.")
+            Text("Нет проездного?").font(.scaled(16, weight: .bold))
+            Text("Оформите подписку через App Store — код проездного появится в приложении сам. Уже оформляли с этим Apple ID — восстановите покупки.")
                 .font(.scaled(14)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button {
@@ -710,10 +711,10 @@ struct WelcomeView: View {
     /// Где взять ключ (United States storefront only): the bot, its key, the link.
     private var steps: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Где взять ключ").font(.scaled(16, weight: .bold))
+            Text("Где взять проездной").font(.scaled(16, weight: .bold))
             step(1, "Откройте нашего бота в Telegram")
-            step(2, "Получите в нём ключ подписки")
-            step(3, "Скопируйте ссылку-ключ и вставьте её выше")
+            step(2, "Получите в нём код проездного")
+            step(3, "Скопируйте код и вставьте его выше")
             Link(destination: Config.telegram) {
                 Label("Открыть бота", systemImage: "paperplane.fill")
                     .font(.scaled(16, weight: .semibold))
@@ -752,7 +753,7 @@ struct WelcomeView: View {
                 .frame(width: 30, height: 30)
                 .background(Palette.accentGradient, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .accessibilityHidden(true)
-            Text("Уже есть ключ? Скопируйте ссылку-ключ и вставьте её выше")
+            Text("Уже есть проездной? Скопируйте его код и вставьте выше")
                 .font(.scaled(15)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -768,7 +769,7 @@ struct WelcomeView: View {
     /// errors send there). The bot as support only, nothing about where to get a key.
     private var support: some View {
         VStack(spacing: 8) {
-            Text("Не получается подключить? Напишите в поддержку")
+            Text("Не получается поехать? Напишите в поддержку")
                 .font(.scaled(13)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)

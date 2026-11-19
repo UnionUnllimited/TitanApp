@@ -16,7 +16,7 @@ enum TunnelSwitch {
 
     static func manager() async throws -> NETunnelProviderManager {
         guard let m = try await NETunnelProviderManager.loadAllFromPreferences().first else {
-            throw TunnelSwitchError("Откройте Titan VPS и подключитесь один раз — после этого VPN можно включать и отсюда")
+            throw TunnelSwitchError("Откройте Titan VPS и один раз нажмите «Поехали» — после этого можно ехать и отсюда")
         }
         return m
     }
@@ -68,12 +68,12 @@ enum TunnelSwitch {
     static func start(_ target: Target? = nil, onDemand: Bool? = nil, bypassOnWifi: Bool = false) async throws -> String {
         let m = try await manager()
         guard let proto = m.protocolConfiguration as? NETunnelProviderProtocol else {
-            throw TunnelSwitchError("Откройте Titan VPS и подключитесь один раз — после этого VPN можно включать и отсюда")
+            throw TunnelSwitchError("Откройте Titan VPS и один раз нажмите «Поехали» — после этого можно ехать и отсюда")
         }
         let name = target?.name ?? proto.serverAddress ?? "Titan VPS"
         if isOn(m.connection.status) { return proto.serverAddress ?? name }
         if !bypassOnWifi, isBypass(name), await onWifi() {
-            throw TunnelSwitchError("Обходы работают только через мобильный интернет. На Wi-Fi выберите другой сервер в приложении")
+            throw TunnelSwitchError("Объезды работают только через мобильный интернет. На Wi-Fi выберите другое направление в приложении")
         }
         var changed = false
         if let target {
@@ -188,8 +188,8 @@ enum TunnelSwitch {
     private static func lastError(_ connection: NEVPNConnection) async -> TunnelSwitchError {
         await withCheckedContinuation { cont in
             connection.fetchLastDisconnectError { error in
-                cont.resume(returning: TunnelSwitchError(error.map { "Не удалось подключиться: \($0.localizedDescription)" }
-                    ?? "Не удалось подключиться"))
+                cont.resume(returning: TunnelSwitchError(error.map { "Не удалось построить маршрут: \($0.localizedDescription)" }
+                    ?? "Не удалось построить маршрут. Попробуйте другое направление"))
             }
         }
     }

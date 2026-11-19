@@ -11,7 +11,7 @@ struct SetVPNIntent: SetValueIntent, LiveActivityIntent {
     /// Siri and Команды have the app's own intents (VPNIntents.swift).
     static let isDiscoverable = false
 
-    @Parameter(title: "Включён")
+    @Parameter(title: "В пути")
     var value: Bool
 
     func perform() async throws -> some IntentResult {

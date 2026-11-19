@@ -217,7 +217,7 @@ final class AppStorePurchases: ObservableObject {
         if signedIn {
             await AppStore.current?.refresh(quiet: true)
         } else {
-            AppStore.current?.showToast("Подписка оформлена", .success)
+            AppStore.current?.showToast("Проездной оформлен", .success)
         }
     }
 
@@ -292,11 +292,11 @@ extension AppStorePurchases.Outcome {
     /// What Тарифы and the key entry say about it, nil for nothing to say. [keyless]: bought or
     /// restored before a key was entered; [pack]: Гигабайты для обходов.
     func note(restored: Bool, keyless: Bool, pack: Bool = false) -> (text: String, warning: Bool)? {
-        let what = keyless ? "ключ появится в приложении" : pack ? "гигабайты добавятся" : "подписка продлится"
+        let what = keyless ? "код проездного появится в приложении" : pack ? "гигабайты добавятся" : "проездной продлится"
         switch self {
         case .delivered:
             if restored { return ("Покупки восстановлены", false) }
-            return (keyless ? "Подписка оформлена" : pack ? "Гигабайты добавлены" : "Подписка продлена", false)
+            return (keyless ? "Проездной оформлен" : pack ? "Гигабайты добавлены" : "Проездной продлён", false)
         case .held:
             return ((restored ? "Покупка найдена — " : "Покупка получена — ") + what + " после проверки", false)
         case .pending:
@@ -304,7 +304,7 @@ extension AppStorePurchases.Outcome {
         case .nothing:
             return ("Покупок в App Store не найдено", false)
         case .otherKey:
-            return ("Подписка App Store оформлена с другим ключом — напишите в поддержку", true)
+            return ("Подписка App Store оформлена с другим кодом проездного — напишите в поддержку", true)
         case .cancelled:
             return nil
         case .failed(let why):

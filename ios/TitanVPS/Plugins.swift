@@ -156,7 +156,7 @@ enum Plugins {
     /// forTunnel: for the VPN extension, which can't write into the app's folders (no log file).
     static func prepare(_ server: Server, forTunnel: Bool = false) throws -> PreparedServer {
         guard let json = server.xrayJson, let tag = server.proxyTag else {
-            throw SubscriptionError(message: "Обновите подписку: потяните список серверов вниз")
+            throw SubscriptionError(message: "Обновите проездной: потяните список направлений вниз")
         }
         // Emergency ICMP transport: a server marked "icmp" (its name or the Host Mapper "titan"
         // field, like the "tfo" / "pktup" markers) whose proxy outbound runs over UDP has that
@@ -171,7 +171,7 @@ enum Plugins {
             return PreparedServer(json: Techniques.apply(TechniqueStore.of(server.name), json: json, tag: tag), plugin: nil)
         }
         guard ep.kind.supportedOnIOS else {
-            throw SubscriptionError(message: "\(ep.kind.title) пока не работает на iPhone. Выберите другой сервер")
+            throw SubscriptionError(message: "\(ep.kind.title) пока не работает на iPhone. Выберите другое направление")
         }
         if ep.kind == .masque { return PreparedServer(json: withMasque(json, tag: tag, ep), plugin: nil) }
         // The clients' own DNS doesn't work on iOS (no resolv.conf): they get the address
