@@ -107,7 +107,7 @@ enum VPNIntents {
             // Off again, Не отключать VPN with it; the activity says «Выключено».
             await TunnelSwitch.stop()
             await LiveActivityController.turnedOff()
-            throw TunnelSwitchError("Остановились")
+            throw TunnelSwitchError(TunnelSwitch.stoppedWhileStarting)
         }
         await LiveActivityController.turnedOn()
         return RouteName.shown(name.splitFlag.1)

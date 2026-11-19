@@ -609,7 +609,7 @@ struct ProfileView: View {
                 Button("Выйти", role: .destructive) { signOut() }
                 Button("Отмена", role: .cancel) {}
             } message: {
-                Text("Поездка остановится, а код проездного, избранное и профиль приложения в Настройках iOS удалятся с этого устройства. Код нужно будет вставить заново.")
+                Text("Поездка остановится, а код проездного, избранное и конфигурация VPN в Настройках iOS удалятся с этого устройства. Код нужно будет вставить заново.")
             }
             .alert("Удалить аккаунт?", isPresented: $confirmDelete) {
                 #if TITAN_PAYMENTS
@@ -694,7 +694,7 @@ struct ProfileView: View {
     private var keepAliveNote: String {
         let note = "Сам перестроит маршрут при смене Wi‑Fi и мобильной сети, после сбоя и перезагрузки"
         if #available(iOS 17.0, *) { return note }
-        return note + ". Останавливайтесь в приложении: выключенный в Настройках iOS, маршрут включится снова"
+        return note + ". Останавливайтесь в приложении: если выключить VPN в Настройках iOS, он включится снова"
     }
 
     /// Dynamic Island: the Live Activity, the VPN on or off (on by default). Off ends it at once;

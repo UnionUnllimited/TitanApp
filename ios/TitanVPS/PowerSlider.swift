@@ -203,7 +203,9 @@ struct PowerSlider: View {
                     Text(lockedText)
                 } else if busy {
                     ProgressView().tint(Color.white)
-                    Text(phase == .connecting ? "Строим маршрут" : "Останавливаемся")
+                    // Short beside the spinner: the status under the slider says it whole
+                    // (Строим маршрут…, Останавливаемся…).
+                    Text(phase == .connecting ? "Строим…" : "Тормозим…")
                 } else if lit {
                     Image(systemName: "location.north.line.fill")
                     Text("В пути")
@@ -215,8 +217,8 @@ struct PowerSlider: View {
             .font(.scaled(22, weight: .bold))
             .foregroundStyle(locked && !lit ? Color.primary : Color.white)
             .lineLimit(1)
-            // «Останавливаемся» beside the spinner in half the track.
-            .minimumScaleFactor(0.5)
+            // «Тормозим…» beside the spinner in half the track (a 320 pt screen, large text).
+            .minimumScaleFactor(0.6)
             .padding(.horizontal, 12)
         }
         .allowsHitTesting(false)

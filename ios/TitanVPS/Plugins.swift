@@ -316,17 +316,17 @@ enum Plugins {
         guard var cfg = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
               var outbounds = cfg["outbounds"] as? [[String: Any]],
               let i = outbounds.firstIndex(where: { $0["tag"] as? String == tag }) else {
-            throw SubscriptionError(message: "Не удалось разобрать конфиг сервера для ICMP")
+            throw SubscriptionError(message: "Не удалось разобрать настройки направления для ICMP")
         }
         var proxy = outbounds[i]
         guard let kind = icmpProto(proxy), let host = icmpNodeHost(proxy, kind) else {
-            throw SubscriptionError(message: "«ICMP» включён для этого сервера, но его протокол работает не по UDP. ICMP-туннель подходит только для WireGuard, Hysteria2 или VLESS/VMess поверх mKCP. Выберите другой сервер.")
+            throw SubscriptionError(message: "«ICMP» включён для этого направления, но его протокол работает не по UDP. ICMP-туннель подходит только для WireGuard, Hysteria2 или VLESS/VMess поверх mKCP. Выберите другое направление.")
         }
         // The shim's unprivileged datagram ICMP socket is IPv4 only; resolve the node here (the Go
         // side has no resolv.conf on iOS), as the sing-box / mieru clients are resolved.
         let ip = resolve(host)
         guard IPv4Address(ip) != nil else {
-            throw SubscriptionError(message: "Адрес сервера для ICMP не удалось привести к IPv4: \(host)")
+            throw SubscriptionError(message: "Адрес направления для ICMP не удалось привести к IPv4: \(host)")
         }
         let port = try Titan.freePort()
         rewriteICMP(&proxy, kind, localPort: port)

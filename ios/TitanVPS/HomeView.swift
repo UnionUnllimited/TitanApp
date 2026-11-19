@@ -416,17 +416,20 @@ struct HomeView: View {
             // The tabs and the lines under them kept close: more rows on screen.
             VStack(spacing: 6) {
                 // The first that fits at full size; the last one otherwise. Пинг gives up its room
-                // before the tabs' titles shrink (a 375 pt iPhone with large text, a narrow window).
+                // before the tabs' titles shrink (a 375 pt iPhone with large text, a narrow window),
+                // then the tabs' icons («Направления» on a zoomed 320 pt screen, Bold Text).
                 if wide {
                     ViewThatFits(in: .horizontal) {
                         tabRow(groups, oneLine: true, compactPing: false)
                         tabRow(groups, oneLine: false, compactPing: false)
                         tabRow(groups, oneLine: false, compactPing: true)
+                        tabRow(groups, oneLine: false, compactPing: true, icons: false)
                     }
                 } else {
                     ViewThatFits(in: .horizontal) {
                         tabRow(groups, oneLine: false, compactPing: false)
                         tabRow(groups, oneLine: false, compactPing: true)
+                        tabRow(groups, oneLine: false, compactPing: true, icons: false)
                     }
                 }
                 Group {
@@ -474,10 +477,10 @@ struct HomeView: View {
         }
     }
 
-    /// The tabs and Пинг beside them.
-    private func tabRow(_ groups: [ServerGroup: [Server]], oneLine: Bool, compactPing: Bool) -> some View {
+    /// The tabs and Пинг beside them. icons: the tabs' own (signpost, detour sign) before their titles.
+    private func tabRow(_ groups: [ServerGroup: [Server]], oneLine: Bool, compactPing: Bool, icons: Bool = true) -> some View {
         HStack(spacing: 8) {
-            tabs(groups, oneLine: oneLine)
+            tabs(groups, oneLine: oneLine, icons: icons)
             pingButton(groups, compact: compactPing)
         }
     }
@@ -532,10 +535,10 @@ struct HomeView: View {
     }
 
     /// Направления and Объезды (a group with no servers has no tab).
-    private func tabs(_ groups: [ServerGroup: [Server]], oneLine: Bool) -> some View {
+    private func tabs(_ groups: [ServerGroup: [Server]], oneLine: Bool, icons: Bool) -> some View {
         HStack(spacing: 2) {
             ForEach(ServerGroup.allCases) { g in
-                if let items = groups[g], !items.isEmpty { tabChip(g, items.count, oneLine: oneLine) }
+                if let items = groups[g], !items.isEmpty { tabChip(g, items.count, oneLine: oneLine, icon: icons) }
             }
         }
         .padding(4)
@@ -543,12 +546,13 @@ struct HomeView: View {
     }
 
     /// The name and count, the networks its servers work on under them (beside them on one line).
-    private func tabChip(_ g: ServerGroup, _ count: Int, oneLine: Bool) -> some View {
+    /// icon: the tab's sign before the name; without it where the name wouldn't fit (list).
+    private func tabChip(_ g: ServerGroup, _ count: Int, oneLine: Bool, icon: Bool) -> some View {
         let selected = g == page
-        // «Направления 57» gets its room from a compact Пинг first (list); the title shrinks
-        // past that (a 375 pt iPhone at large text, Bold Text, a zoomed 320 pt screen).
+        // «Направления 57» gets its room from a compact Пинг first, then from the icons (list);
+        // the title shrinks past that (a 375 pt iPhone at large text, Bold Text).
         let title = HStack(spacing: 6) {
-            Image(systemName: g.icon)
+            if icon { Image(systemName: g.icon) }
             Text(g.rawValue).lineLimit(1).minimumScaleFactor(0.6)
             Text("\(count)").font(.scaled(12, weight: .semibold))
                 .foregroundStyle(selected ? .white : .secondary)

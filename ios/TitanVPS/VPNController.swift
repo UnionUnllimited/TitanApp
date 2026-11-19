@@ -668,6 +668,7 @@ final class VPNController: ObservableObject {
             return "Разрешите добавление конфигурации VPN, чтобы поехать"
         }
         if let e = error as? SubscriptionError { return e.message }
+        if let text = TunnelSwitch.routeMessage(error, inApp: true) { return text }
         return "Не удалось построить маршрут: \(error.localizedDescription)"
     }
 }

@@ -188,9 +188,34 @@ enum TunnelSwitch {
     private static func lastError(_ connection: NEVPNConnection) async -> TunnelSwitchError {
         await withCheckedContinuation { cont in
             connection.fetchLastDisconnectError { error in
-                cont.resume(returning: TunnelSwitchError(error.map { "Не удалось построить маршрут: \($0.localizedDescription)" }
+                cont.resume(returning: TunnelSwitchError(error.map { Self.routeMessage($0, inApp: false) ?? "Не удалось построить маршрут: \($0.localizedDescription)" }
                     ?? "Не удалось построить маршрут. Попробуйте другое направление"))
             }
+        }
+    }
+
+    /// An off that came while the route was being built (Siri's or the activity's on, the
+    /// tunnel's start).
+    static let stoppedWhileStarting = "Стоим: поездку остановили, пока строили маршрут"
+
+    /// The tunnel's own start errors (PacketTunnelProvider's, in its domain) that reach the app's
+    /// screen, Siri and Пункт управления, in «Маршрут»'s words; nil for any other, which keeps
+    /// its text after «Не удалось построить маршрут». By the tunnel's texts, which stay as they
+    /// are (docs/HANDOFF.md, «Тема «Маршрут» на iOS»). inApp: on the app's own screen.
+    static func routeMessage(_ error: Error, inApp: Bool) -> String? {
+        let ns = error as NSError
+        guard ns.domain == "com.titanvps.ios.tunnel" else { return nil }
+        // Its declinedCode: iOS's own VPN switch turned it off (holdOnDemand).
+        if ns.code == 2 { return "Стоим: VPN выключили в Настройках iOS" }
+        switch ns.localizedDescription {
+        case "Нет настроек сервера. Подключитесь из приложения":
+            return inApp ? "Не удалось построить маршрут: нажмите «Поехали» ещё раз" : "Откройте Titan VPS и нажмите «Поехали»"
+        case "VPN выключен":
+            return stoppedWhileStarting
+        case "Не удалось прочитать настройки сервера":
+            return "Не удалось построить маршрут: ошибка в настройках направления. Попробуйте другое направление"
+        default:
+            return nil
         }
     }
 
