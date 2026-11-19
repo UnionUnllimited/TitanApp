@@ -705,7 +705,7 @@ struct ServerRow: View {
                         MarqueeText(text: name, font: .scaled(16, weight: .semibold))
                     }
                     HStack(spacing: 6) {
-                        Text(unsupported ? "Пока не работает на iPhone" : limited ? "Лимитный · расходует ГБ" : "Безлимит")
+                        Text(unsupported ? "Не поддерживается в этой версии" : limited ? "Лимитный · расходует ГБ" : "Безлимит")
                             .font(.scaled(11))
                             .foregroundStyle(unsupported ? Color.secondary : limited ? Color.orange : Palette.green)
                         if tricks { Text("приёмы").font(.scaled(11)).foregroundStyle(.secondary) }

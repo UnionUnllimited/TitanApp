@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The widgets use no required-reason APIs and collect nothing. -->
+<!-- Required-reason APIs (App Store Connect checks them on upload): the on-demand note in the
+     app's own defaults (Shared/TunnelSwitch, compiled in here too). The widgets collect nothing. -->
 <plist version="1.0">
 <dict>
 	<key>NSPrivacyTracking</key>
@@ -10,6 +11,15 @@
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array/>
 	<key>NSPrivacyAccessedAPITypes</key>
-	<array/>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

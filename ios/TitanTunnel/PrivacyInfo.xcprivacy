@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Required-reason APIs (App Store Connect checks them on upload): the app's settings in
-     UserDefaults; the Go runtime of Xray reads the boot clock and file timestamps. -->
+<!-- Required-reason APIs (App Store Connect checks them on upload): the tunnel reads the boot
+     clock (kern.boottime, to tell one boot from the next), and the Go runtime of Xray the boot
+     clock and file timestamps. No UserDefaults here. -->
 <plist version="1.0">
 <dict>
 	<key>NSPrivacyTracking</key>

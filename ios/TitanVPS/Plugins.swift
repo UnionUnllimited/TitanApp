@@ -171,7 +171,7 @@ enum Plugins {
             return PreparedServer(json: Techniques.apply(TechniqueStore.of(server.name), json: json, tag: tag), plugin: nil)
         }
         guard ep.kind.supportedOnIOS else {
-            throw SubscriptionError(message: "\(ep.kind.title) пока не работает на iPhone. Выберите другое направление")
+            throw SubscriptionError(message: "\(ep.kind.title) не поддерживается в этой версии. Выберите другое направление")
         }
         if ep.kind == .masque { return PreparedServer(json: withMasque(json, tag: tag, ep), plugin: nil) }
         // The clients' own DNS doesn't work on iOS (no resolv.conf): they get the address

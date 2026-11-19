@@ -892,6 +892,11 @@ struct AboutSheet: View {
                 Text("Titan VPS").font(.scaled(26, weight: .bold))
                 Text("Версия \(version)").font(.scaled(15).monospacedDigit()).foregroundStyle(.secondary)
             }
+            // The theme's words said plainly once: what the app does (App Review 2.3.1, 2.3.7).
+            Text("«Маршрут» — это VPN-подключение через серверы Titan VPS: «Поехали» включает VPN, «Остановиться» выключает.")
+                .font(.scaled(13)).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
             chip("cpu", "Ядро Xray")
             VStack(spacing: 10) {
                 Button { openURL(support) } label: {
