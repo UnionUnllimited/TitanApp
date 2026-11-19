@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Подписка: expiry, bypass traffic, «Продлить подписку» (Тарифы) and a "Личный кабинет"
 /// button with what it has. Without TITAN_PAYMENTS (no payments, renewal or cabinet in this
-/// build, docs/HANDOFF.md): expiry, bypass traffic, devices and the bot for account settings.
+/// build, docs/HANDOFF.md): expiry, bypass traffic, devices and support.
 struct SubscriptionView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.openURL) private var openURL
@@ -130,16 +130,17 @@ struct SubscriptionView: View {
                             .padding(16)
                         }
                     }
-                    #endif
                     // What the in-app cabinet can't do: the bot, or (United States storefront
                     // only, App Review 3.1.1(a)) the full cabinet on the site, where it is sold too.
-                    // Without TITAN_PAYMENTS: the bot only.
                     Card {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Расширенные функции").fontWeight(.semibold)
-                            Text(advancedNote)
+                            Text("Отвязка устройств, рефералы и другие настройки аккаунта — в боте" + (purchases.linksOut ? " или в полном кабинете на сайте (вход по почте или через Telegram)." : "."))
                                 .font(.scaled(13)).foregroundStyle(.secondary)
-                            let site = siteLink(info)
+                            let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
+                                guard purchases.linksOut, let scheme = u.scheme, let host = u.host else { return nil }
+                                return URL(string: "\(scheme)://\(host)/auth")
+                            })
                             // Side by side where both fit, one under the other on a narrow phone.
                             ViewThatFits(in: .horizontal) {
                                 HStack(spacing: 10) { linkButtons(site) }
@@ -148,6 +149,18 @@ struct SubscriptionView: View {
                         }
                         .padding(16)
                     }
+                    #else
+                    // Without TITAN_PAYMENTS neither the bot nor the site, where it is sold, as such:
+                    // support only, for what the app can't do for the account (unlinking a device).
+                    Card {
+                        Button { openURL(store.supportURL) } label: {
+                            SettingsRow(icon: "headphones", color: Palette.primary, title: "Поддержка", subtitle: "Отвязка устройств и вопросы по аккаунту") {
+                                Image(systemName: "arrow.up.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
+                            }
+                        }
+                        .buttonStyle(RowButtonStyle())
+                    }
+                    #endif
                 }
                 .padding(16)
                 .frame(maxWidth: 640)
@@ -166,7 +179,13 @@ struct SubscriptionView: View {
         }
         #endif
         .sheet(isPresented: $showDevices) {
-            if let acc = store.account { DevicesView(account: acc) }
+            if let acc = store.account {
+                #if TITAN_PAYMENTS
+                DevicesView(account: acc)
+                #else
+                DevicesView(account: acc, support: store.supportURL)
+                #endif
+            }
         }
         #if TITAN_PAYMENTS
         // One sheet at a time: Тарифы (RootView's) once the cabinet is down.
@@ -196,30 +215,6 @@ struct SubscriptionView: View {
         #endif
     }
 
-    /// Расширенные функции: the bot, and the site's full cabinet as AppStorePurchases.linksOut
-    /// allows; the bot only without TITAN_PAYMENTS (as outside the United States storefront).
-    private var advancedNote: String {
-        let bot = "Отвязка устройств, рефералы и другие настройки аккаунта — в боте"
-        #if TITAN_PAYMENTS
-        return bot + (purchases.linksOut ? " или в полном кабинете на сайте (вход по почте или через Telegram)." : ".")
-        #else
-        return bot + "."
-        #endif
-    }
-
-    /// Открыть сайт: the site's full cabinet (its sign-in page), as AppStorePurchases.linksOut
-    /// allows; none without TITAN_PAYMENTS.
-    private func siteLink(_ info: SubscriptionInfo) -> URL? {
-        #if TITAN_PAYMENTS
-        return info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
-            guard purchases.linksOut, let scheme = u.scheme, let host = u.host else { return nil }
-            return URL(string: "\(scheme)://\(host)/auth")
-        })
-        #else
-        return nil
-        #endif
-    }
-
     #if TITAN_PAYMENTS
     /// Личный кабинет: in the app with the site's link; without it the bot, as linksOut allows.
     private func hasCabinet(_ info: SubscriptionInfo) -> Bool {
@@ -231,24 +226,20 @@ struct SubscriptionView: View {
         let expire = store.subscription?.info.expire ?? 0
         return expire <= 0 || expire > Int64(Date().timeIntervalSince1970) ? .renew : .expired
     }
-    #endif
 
     @ViewBuilder private func linkButtons(_ site: URL?) -> some View {
         Button { openURL(Config.telegram) } label: {
             Label("Открыть бота", systemImage: "paperplane.fill").lineLimit(1)
         }
         .buttonStyle(SecondaryButtonStyle(height: 46))
-        #if TITAN_PAYMENTS
         if let site {
             Button { openURL(site) } label: {
                 Label("Открыть сайт", systemImage: "globe").lineLimit(1)
             }
             .buttonStyle(SecondaryButtonStyle(height: 46))
         }
-        #endif
     }
 
-    #if TITAN_PAYMENTS
     private func feature(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon).foregroundStyle(Palette.primary).frame(width: 22)
@@ -266,6 +257,10 @@ struct SubscriptionView: View {
 /// The devices that used the key, and the limit (from the bot's /api/sub/…/info).
 struct DevicesView: View {
     let account: AccountAPI.Info
+    #if !TITAN_PAYMENTS
+    /// Отвязать устройство: support, not the bot where it is sold (docs/HANDOFF.md).
+    let support: URL
+    #endif
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -301,10 +296,18 @@ struct DevicesView: View {
                         .padding(.vertical, 2)
                     }
                 } footer: {
+                    #if TITAN_PAYMENTS
                     Text("Отвязать лишнее устройство можно в боте.")
+                    #else
+                    Text("Отвязать лишнее устройство поможет поддержка.")
+                    #endif
                 }
                 Section {
+                    #if TITAN_PAYMENTS
                     Button { openURL(Config.telegram) } label: { Label("Открыть бота", systemImage: "paperplane") }
+                    #else
+                    Button { openURL(support) } label: { Label("Поддержка", systemImage: "headphones") }
+                    #endif
                 }
             }
             .navigationTitle("Устройства")

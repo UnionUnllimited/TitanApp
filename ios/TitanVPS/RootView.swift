@@ -566,12 +566,16 @@ struct WelcomeView: View {
 
                 // Where to get a key is where it is sold (the bot), as AppStorePurchases.linksOut
                 // allows (the owner's switch); otherwise just how to enter one. Without
-                // TITAN_PAYMENTS (no payments, docs/HANDOFF.md) always just how to enter one.
+                // TITAN_PAYMENTS (no payments, docs/HANDOFF.md) always just how to enter one, and
+                // support for a key that doesn't connect.
                 Group {
                     #if TITAN_PAYMENTS
                     if purchases.linksOut { steps } else { haveKey }
                     #else
-                    haveKey
+                    VStack(spacing: 14) {
+                        haveKey
+                        support
+                    }
                     #endif
                 }
                 .opacity(appeared ? 1 : 0)
@@ -758,6 +762,27 @@ struct WelcomeView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 1))
     }
+
+    #if !TITAN_PAYMENTS
+    /// Without TITAN_PAYMENTS: support before sign-in, for a key that is turned down (the key's
+    /// errors send there). The bot as support only, nothing about where to get a key.
+    private var support: some View {
+        VStack(spacing: 8) {
+            Text("Не получается подключить? Напишите в поддержку")
+                .font(.scaled(13)).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Link(destination: store.supportURL) {
+                Label("Поддержка", systemImage: "headphones")
+                    .font(.scaled(16, weight: .semibold))
+                    .foregroundStyle(Palette.primary)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(Palette.primary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(PressableStyle())
+        }
+    }
+    #endif
 
     /// Key added: connect right away (same as Android). A tap now; how the connect ends is felt
     /// too (VPNController's byUser).
