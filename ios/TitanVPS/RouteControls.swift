@@ -14,9 +14,13 @@ enum RouteTone {
     /// The picked row of the list: the brand's tint, opaque (a swipe's action is under it).
     static let picked = dynamic(0xEEF3FF, 0x1B2540)
     static let ink2 = dynamic(0x535B6B, 0xA3AAB8)
-    static let ink3 = dynamic(0x6B7282, 0x8E95A5)
+    /// Deep enough for AA on the picked row, the wells and the glass, not only on white.
+    static let ink3 = dynamic(0x5D6475, 0x8E95A5)
     /// The brand blue as text: lighter on dark.
     static let accentInk = dynamic(0x1A66FF, 0x8AB0FF)
+    /// The brand blue as text on its own light tint (Проверить дороги, the picked tab on its
+    /// tinted thumb): accentInk is under AA there in light, so deeper.
+    static let accentInkOnTint = dynamic(0x1450D0, 0x8AB0FF)
     /// The route chip on the trip card («✦ Лучший маршрут»).
     static let chipInk = dynamic(0x2A46D8, 0x9DB6FF)
     static let chipFill = dynamic(0xEEF1FF, 0x1B2747)
@@ -398,14 +402,14 @@ struct TripStats: View {
         case .checking:
             return ("—", RouteTone.ink3, "проверяем", "проверяем")
         case .ok(let r):
-            guard let ms = r.ms, ms >= 0 else { return ("—", RouteTone.ink3, "мс", "едем, задержка не измерена") }
+            guard let ms = r.ms, ms >= 0 else { return ("—", RouteTone.ink3, "не измерено", "едем, задержка не измерена") }
             if ms < Latency.good { return ("свободна", RouteTone.good, "\(ms) мс", "свободна, \(ms) миллисекунд") }
             if ms < Latency.calm { return ("плотная", RouteTone.mid, "\(ms) мс", "плотная, \(ms) миллисекунд") }
             return ("пробки", RouteTone.bad, "\(Latency.calm)+ мс", "пробки, больше \(Latency.calm) миллисекунд")
         case .failed:
             return ("—", RouteTone.ink3, "нет ответа", "маршрут не отвечает")
         case .idle:
-            return ("—", RouteTone.ink3, "мс", "ещё не проверяли")
+            return ("—", RouteTone.ink3, "не проверяли", "ещё не проверяли")
         }
     }
 

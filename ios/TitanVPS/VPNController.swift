@@ -518,7 +518,7 @@ final class VPNController: ObservableObject {
     private func adoptSettingsOff() {
         TunnelSwitch.noteSaved(false)
         UserDefaults.standard.set(false, forKey: Self.keepAliveKey)
-        AppStore.current?.showToast("«Всегда в пути» выключен: в Настройках iOS выключили «Подключать по запросу»")
+        AppStore.current?.showToast("«Всегда в пути» выключили в Настройках iOS — включить снова можно в Профиле")
     }
 
     /// Back in the app (RootView) and on each save of the profile: on demand switched off in iOS

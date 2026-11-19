@@ -2,11 +2,12 @@ import Foundation
 
 /// A server's name as the screens show it («Маршрут», docs/HANDOFF.md): the panel's АВТО row as
 /// «Лучший маршрут», the unlimited servers' row as UnlimitedServer.shownName, the app's own
-/// «Сервер N» as «Направление N», any other as the panel sends it, without the words the screens
-/// never show (hiddenStems: «обход», «безлимит…», «VPN», «сервер») and the pointers and
-/// separators they leave. Display only, in the app, the Live Activity and Siri alike:
-/// Server.name stays as parsed, since favourites, Технический режим's techniques, the VPN
-/// profile, the server's id and the rules that match "авто", "обход" and "безлимитн" in it go by it.
+/// «Сервер N» as «Направление N», any other as the panel sends it, with a bypass's «обход…» as
+/// «объезд…» and without the words the screens never show (hiddenStems: «безлимит…», «VPN»,
+/// «сервер», «блокир…») and the pointers, separators and brackets they leave. Display only, in
+/// the app, the Live Activity and Siri alike: Server.name stays as parsed, since favourites,
+/// Технический режим's techniques, the VPN profile, the server's id and the rules that match
+/// "авто", "обход" and "безлимитн" in it go by it.
 enum RouteName {
     /// The АВТО row's name on screen.
     static let best = "Лучший маршрут"
@@ -48,9 +49,15 @@ enum RouteName {
     }
 
     /// Words of a panel's name the screens never show (the owner's rule, docs/HANDOFF.md), whole
-    /// words by how they start, in any case: «обход…» (a bypass is «объезд» on screen),
-    /// «безлимит…» (the list says «без ограничений»), «сервер…» and the service's own kind.
-    private static let hiddenStems = ["обход", "безлимит", "сервер", "vpn", "впн", "vps", "впс"]
+    /// words by how they start, in any case: «безлимит…» (the list says «без ограничений»),
+    /// «сервер…», «блокир…» and the service's own kind. «обход…» is swapped instead (bypassStem).
+    private static let hiddenStems = ["безлимит", "сервер", "блокир", "vpn", "впн", "vps", "впс"]
+
+    /// A bypass's own word, «объезд» on screen, in place: the rest reads as the panel put it
+    /// («Обход белых списков» → «Объезд белых списков», «LTE Обход 2» → «LTE Объезд 2»). Only a
+    /// bypass's name has it (TunnelSwitch.isBypass: "обход" in the name).
+    private static let bypassStem = "обход"
+    private static let bypassShown = "объезд"
 
     /// Pointing emoji and arrows round a panel's word («👇БЕЗЛИМИТНЫЕ👇»), by their first scalar:
     /// nothing is left to point at once the word is gone.
@@ -60,9 +67,10 @@ enum RouteName {
     /// What separates the parts of a panel's name.
     private static let separators = CharacterSet(charactersIn: "|·•-–—:/,;")
 
-    /// [name] without hiddenStems' words; nothing else changes if none is in it. Else the
-    /// pointers go too, and the separators left doubled or at an end. dropped: a word went;
-    /// droppedFirst: the name's first word did («Обход 1 бесплатный» → «1 бесплатный»).
+    /// [name] without hiddenStems' words and with «обход…» as «объезд…» (swapped); nothing else
+    /// changes if none of them is in it. Where a word went the pointers go too, the separators
+    /// left doubled or at an end, and the brackets round all that is left («VPN (Германия)» →
+    /// «Германия»). dropped: a word went; droppedFirst: the name's first word did («VPN 2» → «2»).
     private static func strip(_ name: String) -> (text: String, dropped: Bool, droppedFirst: Bool) {
         var out = ""
         var token = ""
@@ -74,7 +82,9 @@ enum RouteName {
             guard !token.isEmpty else { return }
             if tokenIsWord {
                 let lower = token.lowercased()
-                if hiddenStems.contains(where: { lower.hasPrefix($0) }) {
+                if lower.hasPrefix(bypassStem) {
+                    out += swapped(token)
+                } else if hiddenStems.contains(where: { lower.hasPrefix($0) }) {
                     dropped = true
                     if !seenWord { droppedFirst = true }
                 } else {
@@ -95,7 +105,7 @@ enum RouteName {
             token.append(c)
         }
         flush()
-        guard dropped else { return (name, false, false) }
+        guard dropped else { return (out, false, false) }
 
         var kept: [String] = []
         for part in out.split(whereSeparator: { $0.isWhitespace }) {
@@ -107,26 +117,54 @@ enum RouteName {
         }
         while let last = kept.last, isSeparators(last) { kept.removeLast() }
         let text = kept.joined(separator: " ").trimmingCharacters(in: separators.union(.whitespaces))
-        return (text, true, droppedFirst)
+        return (unwrapped(text), true, droppedFirst)
     }
 
     private static func isSeparators(_ s: String) -> Bool {
         !s.isEmpty && s.unicodeScalars.allSatisfy { separators.contains($0) }
     }
 
+    /// An «обход…» word as «объезд…», in its case and with its ending: «ОБХОДЫ» → «ОБЪЕЗДЫ»,
+    /// «Обход» → «Объезд», «обходной» → «объездной».
+    private static func swapped(_ word: String) -> String {
+        let stem = String(word.prefix(bypassStem.count))
+        let ending = String(word.dropFirst(bypassStem.count))
+        if stem == stem.uppercased() { return bypassShown.uppercased() + ending }
+        if stem.first?.isUppercase == true { return bypassShown.capitalized + ending }
+        return bypassShown + ending
+    }
+
+    /// What is left without the brackets round it all: «(Мегафон)» → «Мегафон», and «(Европа»
+    /// where bestSuffix trimmed the other one. A bracket inside the name stays («LTE (Мегафон)»).
+    private static func unwrapped(_ text: String) -> String {
+        var t = text
+        for (open, close) in [("(", ")"), ("[", "]")] as [(Character, Character)] {
+            let opens = t.filter { $0 == open }.count
+            let closes = t.filter { $0 == close }.count
+            guard opens <= 1, closes <= 1, opens + closes > 0,
+                  opens == 0 || t.first == open, closes == 0 || t.last == close else { continue }
+            var inner = Substring(t)
+            if inner.first == open { inner = inner.dropFirst() }
+            if inner.last == close { inner = inner.dropLast() }
+            t = inner.trimmingCharacters(in: .whitespaces)
+        }
+        return t
+    }
+
     /// A panel's name as shown: strip's, never empty. Where a word went from its start and a
     /// number is left first, or only a number (or nothing) is left, the theme's own word goes
-    /// before it: «Объезд 1 бесплатный», «Направление 2».
+    /// before it, unless it is there already: «Направление 2 Германия», «Направление 2».
     private static func tidy(_ name: String, bypass: Bool) -> String {
         let stripped = strip(name)
-        guard stripped.dropped else { return name }
-        let word = bypass ? "Объезд" : "Направление"
         let text = stripped.text
+        guard stripped.dropped else { return text }
+        let word = bypass ? "Объезд" : "Направление"
         guard text.contains(where: { $0.isLetter }) else {
             let digits = text.filter { $0.isNumber }
             return digits.isEmpty ? word : "\(word) \(digits)"
         }
-        if stripped.droppedFirst, text.first?.isNumber == true { return "\(word) \(text)" }
+        if stripped.droppedFirst, text.first?.isNumber == true,
+           !text.lowercased().contains(word.lowercased()) { return "\(word) \(text)" }
         return text
     }
 }

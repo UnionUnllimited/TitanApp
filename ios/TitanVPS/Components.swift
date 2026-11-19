@@ -708,12 +708,14 @@ enum SidewaysClaims {
 
 // MARK: - Back to the top
 
-/// Наверх: a round ↑ over a long list scrolled down, back to its top. Glass and the brand
-/// blue, as Маршрут's round buttons on the map (Glass.swift).
+/// Наверх: a round ↑ over a long list scrolled down, back to its top. A plain card's circle
+/// (the theme's surface, the hairline edge, a soft shadow on light) and the brand blue: it
+/// floats over the list, not the map, so no glass (Glass.swift).
 struct ScrollTopButton: View {
     /// Room the list keeps under its last row: at its end the button covers none.
     static let room: CGFloat = 48
     let action: () -> Void
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Button(action: action) {
@@ -721,7 +723,10 @@ struct ScrollTopButton: View {
                 .font(.scaled(18, weight: .bold))
                 .foregroundStyle(RouteTone.accentInk)
                 .frame(width: 46, height: 46)
-                .glassSurface(.chip, in: Circle())
+                .background(Palette.surface, in: Circle())
+                .overlay(Circle().strokeBorder(Palette.edge, lineWidth: 0.5))
+                // Under the opaque fill only the circle casts it; none on dark, as the glass.
+                .shadow(color: .black.opacity(scheme == .dark ? 0 : 0.12), radius: 8, y: 3)
                 .contentShape(Circle())
         }
         .buttonStyle(PressableStyle(scale: 0.9))

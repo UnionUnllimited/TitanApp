@@ -317,7 +317,7 @@ struct TitanTabBar: View {
                             .frame(height: 22)
                         Text(item.title).font(.scaled(10, weight: .semibold)).lineLimit(1)
                     }
-                    .foregroundStyle(on ? RouteTone.accentInk : RouteTone.ink2)
+                    .foregroundStyle(on ? RouteTone.accentInkOnTint : RouteTone.ink2)
                     .frame(maxWidth: .infinity, minHeight: 50)
                     .background {
                         if on {

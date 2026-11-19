@@ -708,7 +708,7 @@ struct ProfileView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Dynamic Island").font(.scaled(16, weight: .medium))
                             .lineLimit(1).minimumScaleFactor(0.75)
-                        Text("Направление, скорость и пинг в Dynamic Island — и когда стоим")
+                        Text("Направление, скорость и пинг на закрытом экране и в Dynamic Island — и когда стоим")
                             .font(.scaled(12)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

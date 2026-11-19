@@ -847,7 +847,7 @@ struct HomeView: View {
             }
             .font(.scaled(14, weight: .semibold))
             .lineLimit(1)
-            .foregroundStyle(busy ? Color.white : RouteTone.accentInk)
+            .foregroundStyle(busy ? Color.white : RouteTone.accentInkOnTint)
             .padding(.horizontal, 14)
             .frame(minHeight: 40)
             .background(busy ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Palette.primary.opacity(0.1)), in: Capsule())
