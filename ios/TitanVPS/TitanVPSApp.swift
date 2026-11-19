@@ -75,8 +75,13 @@ enum Palette {
     static let accentGradient = LinearGradient(colors: [primary, violet], startPoint: .topLeading, endPoint: .bottomTrailing)
     static let greenGradient = LinearGradient(colors: [Color(UIColor(hex: 0x16A34A)), Color(UIColor(hex: 0x15803D))],
                                               startPoint: .topLeading, endPoint: .bottomTrailing)
-    /// The Выкл | Вкл knob while off: raised above the track.
+    /// The Выкл | Вкл knob while off: raised above the track; the raised thumb of a segmented
+    /// control in the dark (GlassThumb).
     static let knob = dynamic(light: 0xFFFFFF, dark: 0x343D4F)
+    /// The cards' corners, as Маршрут's route card (design C).
+    static let cardRadius: CGFloat = 22
+    /// A card's hairline edge: a faint dark line on light, a faint white one on dark (design C).
+    static let edge = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.07) : UIColor(white: 0, alpha: 0.06) })
 
     private static func dynamic(light: UInt32, dark: UInt32) -> Color {
         Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) })
@@ -90,14 +95,17 @@ extension UIColor {
     }
 }
 
+/// A plain card (Проездной, Профиль): Маршрут's radius and a hairline edge, as design C's
+/// cards, without its glass (Glass.swift is for what floats over the map).
 struct Card<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: Palette.cardRadius, style: .continuous)
         // Clipped: a pressed row's highlight keeps the rounded corners.
         VStack(alignment: .leading, spacing: 0) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Palette.surface, in: shape)
             .clipShape(shape)
+            .overlay(shape.strokeBorder(Palette.edge, lineWidth: 0.5).allowsHitTesting(false))
     }
 }

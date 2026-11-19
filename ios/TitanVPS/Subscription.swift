@@ -174,7 +174,7 @@ enum SubscriptionAPI {
                 }
             }
         }
-        throw firstError ?? SubscriptionError(message: "Сервер проездных недоступен")
+        throw firstError ?? SubscriptionError(message: "Titan сейчас не отвечает")
     }
 
     private static func alternates(_ url: String) -> [String] {
@@ -194,16 +194,16 @@ enum SubscriptionAPI {
         do {
             (data, resp) = try await URLSession.shared.data(for: req)
         } catch {
-            throw SubscriptionError(message: "Нет связи с сервером проездных")
+            throw SubscriptionError(message: "Нет связи с Titan")
         }
-        guard let http = resp as? HTTPURLResponse else { throw SubscriptionError(message: "Сервер проездных недоступен") }
+        guard let http = resp as? HTTPURLResponse else { throw SubscriptionError(message: "Titan сейчас не отвечает") }
         let host = http.url?.host ?? ""
         if let final = http.url?.absoluteString, !isAllowed(final) { throw SubscriptionError(message: "Недопустимый код проездного") }
         if http.statusCode == 404 || http.statusCode == 403 {
             throw SubscriptionError(message: "Проездной не найден или отключён (\(http.statusCode), \(host))")
         }
         guard (200..<300).contains(http.statusCode) else {
-            throw SubscriptionError(message: "Сервер проездных недоступен (\(http.statusCode), \(host))")
+            throw SubscriptionError(message: "Titan сейчас не отвечает (\(http.statusCode), \(host))")
         }
         let header = { (name: String) in http.value(forHTTPHeaderField: name) }
         return (parseInfo(header), String(decoding: data, as: UTF8.self))
@@ -554,7 +554,7 @@ enum SubscriptionErrors {
     static func unusable(_ info: SubscriptionInfo, _ body: String) -> String {
         if let a = info.announce?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty { return a }
         if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Сервер проездных не прислал ни одного направления. Возможно, превышен лимит устройств или проездной не действует — напишите в поддержку"
+            return "Titan не прислал ни одного направления. Возможно, превышен лимит устройств или проездной не действует — напишите в поддержку"
         }
         return "Не удалось разобрать проездной. Напишите в поддержку"
     }

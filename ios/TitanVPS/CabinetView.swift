@@ -223,7 +223,7 @@ struct CabinetView: View {
                     HStack(spacing: 12) {
                         IconTile(icon: "chart.pie.fill", color: Palette.primary, size: 38)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Трафик").font(.scaled(13, weight: .semibold)).foregroundStyle(.secondary)
+                            Text("Гигабайты").font(.scaled(13, weight: .semibold)).foregroundStyle(.secondary)
                             Text(traffic).font(.scaled(16, weight: .bold)).monospacedDigit()
                                 .lineLimit(1).minimumScaleFactor(0.75)
                         }
@@ -417,7 +417,7 @@ private struct PayPane: View {
                              color: kind == "sub" ? Palette.primary : Palette.violet, size: 38)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(kind == "sub" ? "Продление проездного" : "Гигабайты для объездов").font(.scaled(17, weight: .bold))
-                        Text(kind == "sub" ? "Дни добавятся к текущему проездному" : "Добавятся к трафику на объездах")
+                        Text(kind == "sub" ? "Дни добавятся к текущему проездному" : "Добавятся к гигабайтам на объездах")
                             .font(.scaled(12)).foregroundStyle(.secondary)
                     }
                 }

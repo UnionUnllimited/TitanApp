@@ -304,7 +304,7 @@ extension AppStorePurchases.Outcome {
         case .nothing:
             return ("Покупок в App Store не найдено", false)
         case .otherKey:
-            return ("Подписка App Store оформлена с другим кодом проездного — напишите в поддержку", true)
+            return ("Проездной в App Store оформлен с другим кодом — напишите в поддержку", true)
         case .cancelled:
             return nil
         case .failed(let why):

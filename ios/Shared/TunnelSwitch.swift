@@ -16,7 +16,7 @@ enum TunnelSwitch {
 
     static func manager() async throws -> NETunnelProviderManager {
         guard let m = try await NETunnelProviderManager.loadAllFromPreferences().first else {
-            throw TunnelSwitchError("Откройте Titan VPS и один раз нажмите «Поехали» — после этого можно ехать и отсюда")
+            throw TunnelSwitchError("Откройте Titan и один раз нажмите «Поехали» — после этого можно ехать и отсюда")
         }
         return m
     }
@@ -68,9 +68,9 @@ enum TunnelSwitch {
     static func start(_ target: Target? = nil, onDemand: Bool? = nil, bypassOnWifi: Bool = false) async throws -> String {
         let m = try await manager()
         guard let proto = m.protocolConfiguration as? NETunnelProviderProtocol else {
-            throw TunnelSwitchError("Откройте Titan VPS и один раз нажмите «Поехали» — после этого можно ехать и отсюда")
+            throw TunnelSwitchError("Откройте Titan и один раз нажмите «Поехали» — после этого можно ехать и отсюда")
         }
-        let name = target?.name ?? proto.serverAddress ?? "Titan VPS"
+        let name = target?.name ?? proto.serverAddress ?? "Titan"
         if isOn(m.connection.status) { return proto.serverAddress ?? name }
         if !bypassOnWifi, isBypass(name), await onWifi() {
             throw TunnelSwitchError("Объезды работают только через мобильный интернет. На Wi-Fi выберите другое направление в приложении")
@@ -206,10 +206,10 @@ enum TunnelSwitch {
         let ns = error as NSError
         guard ns.domain == "com.titanvps.ios.tunnel" else { return nil }
         // Its declinedCode: iOS's own VPN switch turned it off (holdOnDemand).
-        if ns.code == 2 { return "Стоим: VPN выключили в Настройках iOS" }
+        if ns.code == 2 { return "Стоим: Titan выключили в Настройках iOS" }
         switch ns.localizedDescription {
         case "Нет настроек сервера. Подключитесь из приложения":
-            return inApp ? "Не удалось построить маршрут: нажмите «Поехали» ещё раз" : "Откройте Titan VPS и нажмите «Поехали»"
+            return inApp ? "Не удалось построить маршрут: нажмите «Поехали» ещё раз" : "Откройте Titan и нажмите «Поехали»"
         case "VPN выключен":
             return stoppedWhileStarting
         case "Не удалось прочитать настройки сервера":

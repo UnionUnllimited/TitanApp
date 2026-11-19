@@ -249,17 +249,17 @@ enum AccountAPI {
         let username: String?
     }
 
-    /// "Titan(IOS/0.2.29)" → "Titan VPS · iOS 0.2.29"; "Happ/5.9.0/ios/…" → "Happ 5.9.0".
+    /// "Titan(IOS/0.2.29)" → "Titan · iOS 0.2.29"; "Happ/5.9.0/ios/…" → "Happ 5.9.0".
     static func appName(_ userAgent: String) -> String {
         if let m = userAgent.range(of: #"^Titan\(([^/)]+)/([^)]*)\)"#, options: .regularExpression) {
             let inner = userAgent[m].dropFirst(6).dropLast()
             let parts = inner.split(separator: "/", maxSplits: 1).map(String.init)
             let platform = ["ios": "iOS", "android": "Android", "windows": "Windows"][parts[0].lowercased()] ?? parts[0]
-            return "Titan VPS · \(platform)" + (parts.count > 1 && !parts[1].isEmpty ? " \(parts[1])" : "")
+            return "Titan · \(platform)" + (parts.count > 1 && !parts[1].isEmpty ? " \(parts[1])" : "")
         }
         let parts = userAgent.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
         guard let name = parts.first, !name.isEmpty else { return "Неизвестное приложение" }
-        if name.lowercased() == "titan" { return "Titan VPS" }
+        if name.lowercased() == "titan" { return "Titan" }
         if parts.count > 1, parts[1].first?.isNumber == true { return "\(name) \(parts[1])" }
         return name
     }

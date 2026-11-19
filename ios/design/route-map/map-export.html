@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Route map export</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:transparent}
+#map{display:block}
+</style>
+</head>
+<body>
+<!-- Map units: the design's 390-wide phone coordinates, y from Y0 to Y1 (the app anchors the
+     route band at units 176...356, RouteBand in ios/TitanVPS/RouteMap.swift). -->
+<svg id="map"></svg>
+<script>
+const Y0=-120, Y1=900, W=390, H=Y1-Y0;
+const theme=(location.hash||'#light').slice(1);
+const P = theme==='dark' ? {
+  paper:'#0F1420', water:'#15263A', waterHi:'#1A2E45', park:'#13231F',
+  contour:'rgb(150,170,210)', contourA:.07, contourIdx:.12,
+  blockShadow:'#0A0E17', block:'#1A2131', blockEdge:'#212A3B',
+  minorCase:'#1A2130', minorFill:'#232B3B', mainCase:'#1C2332', mainFill:'#2A3346'
+} : {
+  paper:'#F3F1EC', water:'#D6E5EE', waterHi:'#E4EEF3', park:'#E2EBD7',
+  contour:'rgb(122,104,72)', contourA:.09, contourIdx:.17,
+  blockShadow:'#DCD5C8', block:'#ECE8E0', blockEdge:'#F7F5F0',
+  minorCase:'#E6E1D7', minorFill:'#FFFFFF', mainCase:'#E3DDD2', mainFill:'#FFFFFF'
+};
+function crPath(pts){
+  const n=pts.length; let d=`M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for(let i=0;i<n;i++){const p0=pts[(i-1+n)%n],p1=pts[i],p2=pts[(i+1)%n],p3=pts[(i+2)%n];
+    const c1=[p1[0]+(p2[0]-p0[0])/6,p1[1]+(p2[1]-p0[1])/6],c2=[p2[0]-(p3[0]-p1[0])/6,p2[1]-(p3[1]-p1[1])/6];
+    d+=`C${c1[0].toFixed(1)} ${c1[1].toFixed(1)} ${c2[0].toFixed(1)} ${c2[1].toFixed(1)} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;}
+  return d+'Z';
+}
+function contours(cx,cy,r0,step,count,seed,sx,sy){
+  let out='';
+  for(let k=0;k<count;k++){
+    const r=r0+k*step,pts=[];
+    for(let i=0;i<64;i++){const t=i/64*Math.PI*2;
+      const m=1+0.14*Math.sin(2*t+seed+k*0.32)+0.08*Math.sin(3*t+seed*1.7-k*0.21)+0.04*Math.sin(5*t+seed*0.6+k*0.5);
+      pts.push([cx+r*m*Math.cos(t)*sx,cy+r*m*Math.sin(t)*sy]);}
+    const idx=(k%5===4);
+    out+=`<path d="${crPath(pts)}" fill="none" stroke="${P.contour}" stroke-opacity="${idx?P.contourIdx:P.contourA}" stroke-width="${idx?1.2:1}"/>`;
+  }
+  return out;
+}
+function blob(cx,cy,rx,ry,seed,fill){
+  const pts=[];for(let i=0;i<20;i++){const t=i/20*Math.PI*2;const m=1+0.12*Math.sin(3*t+seed)+0.07*Math.sin(5*t+seed*2);pts.push([cx+rx*m*Math.cos(t),cy+ry*m*Math.sin(t)]);}
+  return `<path d="${crPath(pts)}" fill="${fill}"/>`;
+}
+// The design's roads; the first main road carries the route the app draws on top.
+const ROAD_MAIN=['M-60 346 C20 342 50 340 78 340 C110 340 122 316 150 308 L212 290 C236 283 240 262 262 252 L300 232 C336 215 356 178 420 168',
+  'M150 -10 C160 90 196 190 212 290 C226 380 196 470 232 560 C252 620 300 660 420 690',
+  'M-60 530 C80 500 150 470 226 452 C300 434 350 440 420 420',
+  // further roads above and below the design's frame (the app shows more map there)
+  'M150 -10 C146 -50 120 -90 100 -140',
+  'M-60 760 C60 740 160 770 240 820 C300 860 360 870 420 860'];
+const ROAD_MINOR=['M-60 236 C40 262 90 300 150 308','M262 252 C270 330 320 380 420 390','M30 -10 C40 80 20 160 60 220 C80 250 70 300 78 340 C84 400 60 470 90 560',
+  'M300 232 C296 160 320 100 340 -10','M226 452 C240 520 330 560 420 560','M-60 650 C60 620 120 640 180 700','M90 560 C150 580 200 600 232 560',
+  'M340 -10 C350 -60 330 -100 360 -140','M30 -10 C20 -60 40 -100 10 -140','M180 700 C200 760 190 820 220 920','M232 560 C280 600 300 700 330 920'];
+function blocks(list){
+  return list.map(([x,y,w,h,r])=>`<g transform="rotate(${r} ${x+w/2} ${y+h/2})"><rect x="${x}" y="${y+2.5}" width="${w}" height="${h}" rx="3" fill="${P.blockShadow}"/><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="${P.block}" stroke="${P.blockEdge}" stroke-width=".8"/></g>`).join('');
+}
+const BLOCKS=[[96,378,26,16,-8],[126,372,20,18,-8],[150,350,24,14,-16],[176,344,18,16,-16],[36,360,20,14,0],[34,380,26,12,0],
+  [240,300,20,14,-24],[226,322,24,12,-16],[188,262,18,12,-12],[160,272,22,12,-6],
+  [330,256,24,14,-24],[352,236,18,14,-24],[40,420,24,14,6],[180,404,22,14,8],[250,410,26,14,-6],[300,430,18,14,-6],[150,520,26,16,6],[60,560,20,14,0],
+  // a few more where the app shows map past the design's frame
+  [250,600,24,14,10],[280,620,20,16,10],[120,660,22,14,-4],[60,700,26,14,-4],[300,760,22,14,14],[150,790,24,14,6],[200,-40,20,14,-10],[60,-60,24,14,6]];
+function build(){
+  const svg=document.getElementById('map');
+  svg.setAttribute('width',W); svg.setAttribute('height',H);
+  svg.setAttribute('viewBox',`0 ${Y0} ${W} ${H}`);
+  let g=`<rect x="-10" y="${Y0-10}" width="${W+20}" height="${H+20}" fill="${P.paper}"/>`;
+  // water
+  g+=blob(372,470,70,46,1.3,P.water);
+  g+=blob(-10,720,60,40,2.7,P.water);
+  g+=`<path d="M-60 200 C60 186 110 238 170 236 S270 190 330 210 S400 252 420 246" stroke="${P.water}" stroke-width="18" fill="none" stroke-linecap="round"/>`;
+  g+=`<path d="M-60 200 C60 186 110 238 170 236 S270 190 330 210 S400 252 420 246" stroke="${P.waterHi}" stroke-width="5" fill="none" stroke-linecap="round" stroke-dasharray="40 60"/>`;
+  // parks
+  g+=blob(40,300,46,30,0.4,P.park);
+  g+=blob(300,330,52,30,2.1,P.park);
+  g+=blob(120,470,60,34,3.3,P.park);
+  g+=blob(320,640,50,30,4.1,P.park);
+  g+=blob(110,-30,44,26,5.2,P.park);
+  // contours
+  g+=contours(330,90,12,15,18,0.8,1.25,0.8);
+  g+=contours(30,640,14,16,14,2.4,1.1,0.9);
+  g+=contours(80,-90,12,15,9,1.6,1.2,0.8);
+  g+=blocks(BLOCKS);
+  ROAD_MINOR.forEach(d=>{g+=`<path d="${d}" stroke="${P.minorCase}" stroke-width="5.5" fill="none" stroke-linecap="round"/><path d="${d}" stroke="${P.minorFill}" stroke-width="3.5" fill="none" stroke-linecap="round"/>`});
+  ROAD_MAIN.forEach(d=>{g+=`<path d="${d}" stroke="${P.mainCase}" stroke-width="10" fill="none" stroke-linecap="round"/><path d="${d}" stroke="${P.mainFill}" stroke-width="7.5" fill="none" stroke-linecap="round"/>`});
+  svg.innerHTML=g;
+}
+build();
+// Route geometry the app draws (RouteBand): its length and the marker at 56 %.
+const ROUTE='M78 340 C110 340 122 316 150 308 L212 290 C236 283 240 262 262 252 L290 237.3';
+document.getElementById('map').insertAdjacentHTML('beforeend',`<path id="route" d="${ROUTE}"/>`);
+const p=document.getElementById('route');
+const L=p.getTotalLength(),a=p.getPointAtLength(L*0.56),b=p.getPointAtLength(L*0.56+1);
+window.routeInfo={length:L,marker:[a.x,a.y],angle:Math.atan2(b.y-a.y,b.x-a.x)*180/Math.PI+90};
+p.remove();
+</script>
+</body>
+</html>

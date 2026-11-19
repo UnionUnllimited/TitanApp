@@ -69,9 +69,9 @@ struct SubscriptionView: View {
                                 GradientBar(value: Double(info.remaining) / Double(max(info.total, 1)),
                                             gradient: info.remaining * 10 < info.total ? LinearGradient(colors: [.orange, .red], startPoint: .leading, endPoint: .trailing) : Palette.accentGradient)
                             } else {
-                                Text("Безлимит").font(.scaled(26, weight: .bold))
+                                Text("Без ограничений").font(.scaled(26, weight: .bold))
                             }
-                            Text("По обычным направлениям — безлимит").font(.scaled(13)).foregroundStyle(.secondary)
+                            Text("По обычным направлениям — без ограничений").font(.scaled(13)).foregroundStyle(.secondary)
                             Text(bypassNote(info))
                                 .font(.scaled(12)).foregroundStyle(.secondary).padding(.top, 4)
                             #if TITAN_PAYMENTS
@@ -123,7 +123,7 @@ struct SubscriptionView: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("В личном кабинете").fontWeight(.semibold)
                                 feature("calendar", "Сколько дней осталось")
-                                feature("chart.pie", "Трафик на объездах")
+                                feature("chart.pie", "Гигабайты на объездах")
                                 feature("person.text.rectangle", "Устройства и ваш ID")
                                 if purchases.otherMethods { feature("tag", "Тарифы и коды на продление") }
                             }
@@ -321,7 +321,8 @@ struct DevicesView: View {
     /// Ours, from this phone (same rule as Android: our app and the same model).
     private func isThis(_ d: AccountAPI.Device) -> Bool {
         let model = SubscriptionAPI.deviceModel()
-        return AccountAPI.appName(d.app).hasPrefix("Titan VPS") && !d.model.isEmpty && !model.isEmpty
+        let app = AccountAPI.appName(d.app)
+        return (app == "Titan" || app.hasPrefix("Titan · ")) && !d.model.isEmpty && !model.isEmpty
             && (d.model.localizedCaseInsensitiveContains(model) || model.localizedCaseInsensitiveContains(d.model))
     }
 
@@ -466,7 +467,7 @@ struct ProfileView: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("Напоминания").font(.scaled(16, weight: .medium))
                                             .lineLimit(1).minimumScaleFactor(0.75)
-                                        Text("За 3 дня и за день до конца проездного и когда на объездах кончается трафик")
+                                        Text("За 3 дня и за день до конца проездного и когда кончаются гигабайты на объездах")
                                             .font(.scaled(12)).foregroundStyle(.secondary)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
@@ -478,7 +479,7 @@ struct ProfileView: View {
                                 guard on else { Reminders.cancelAll(); return }
                                 Task {
                                     guard await Reminders.allowed() else {
-                                        store.showToast("Разрешите уведомления для Titan VPS в Настройках iOS", .warning)
+                                        store.showToast("Разрешите уведомления для Titan в Настройках iOS", .warning)
                                         return
                                     }
                                     if let info = store.subscription?.info { await Reminders.update(for: info) }
@@ -609,13 +610,13 @@ struct ProfileView: View {
                 Button("Выйти", role: .destructive) { signOut() }
                 Button("Отмена", role: .cancel) {}
             } message: {
-                Text("Поездка остановится, а код проездного, избранное и конфигурация VPN в Настройках iOS удалятся с этого устройства. Код нужно будет вставить заново.")
+                Text("Поездка остановится, а код проездного, избранное и конфигурация Titan в Настройках iOS удалятся с этого устройства. Код нужно будет вставить заново.")
             }
             .alert("Удалить аккаунт?", isPresented: $confirmDelete) {
                 #if TITAN_PAYMENTS
                 // Apple's rule: say billing goes on, and ask to cancel first.
                 if appleSubscribed {
-                    Button("Управление подпиской") { Task { await AppStorePurchases.shared.manageSubscriptions() } }
+                    Button("Автопродление в App Store") { Task { await AppStorePurchases.shared.manageSubscriptions() } }
                 }
                 #endif
                 Button("Удалить", role: .destructive) { deleteAccount() }
@@ -650,12 +651,12 @@ struct ProfileView: View {
     /// else a request for the support chat.
     private var deleteMessage: String {
         let how = Config.deletionEndpoint != nil
-            ? "Аккаунт и проездной в боте удалятся сразу, код проездного и все данные — с этого устройства. Если сервер не ответит, мы скопируем запрос и откроем чат поддержки."
+            ? "Аккаунт и проездной в боте удалятся сразу, код проездного и все данные — с этого устройства. Если бот не ответит, мы скопируем запрос и откроем чат поддержки."
             : "Мы скопируем запрос на удаление и откроем чат поддержки — отправьте его там. Аккаунт и проездной в боте удалим в течение 7 дней, поддержка ответит, когда всё будет удалено. Код проездного и все данные с этого устройства удалятся сразу."
         #if TITAN_PAYMENTS
         let apple = appleSubscribed
-            ? "У вас есть подписка App Store: Apple продолжит её списывать, пока вы её не отмените. Сначала отмените её в «Управлении подпиской»."
-            : "Подписку App Store, если она есть, удаление не отменяет: её отменяют в настройках Apple ID."
+            ? "У вас проездной с автопродлением в App Store: Apple продолжит списывать оплату, пока вы его не отмените. Сначала отключите автопродление."
+            : "Автопродление в App Store, если оно есть, удаление не отменяет: его отключают в настройках Apple ID."
         return how + "\n\n" + apple
         #else
         return how
@@ -694,7 +695,7 @@ struct ProfileView: View {
     private var keepAliveNote: String {
         let note = "Сам перестроит маршрут при смене Wi‑Fi и мобильной сети, после сбоя и перезагрузки"
         if #available(iOS 17.0, *) { return note }
-        return note + ". Останавливайтесь в приложении: если выключить VPN в Настройках iOS, он включится снова"
+        return note + ". Останавливайтесь в приложении: если выключить Titan в Настройках iOS, он включится снова"
     }
 
     /// Dynamic Island: the Live Activity, the VPN on or off (on by default). Off ends it at once;
@@ -707,7 +708,7 @@ struct ProfileView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Dynamic Island").font(.scaled(16, weight: .medium))
                             .lineLimit(1).minimumScaleFactor(0.75)
-                        Text("Направление, скорость и пинг на экране блокировки — и когда стоим")
+                        Text("Направление, скорость и пинг в Dynamic Island и на заблокированном экране — и когда стоим")
                             .font(.scaled(12)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -724,7 +725,7 @@ struct ProfileView: View {
             }
             if liveActivity && activitiesOff {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Live Activity для Titan VPS выключены в Настройках iOS")
+                    Text("Live Activity для Titan выключены в Настройках iOS")
                         .font(.scaled(12)).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                     Button("Открыть Настройки") {
@@ -756,7 +757,7 @@ struct ProfileView: View {
                     .padding(8)
                     .background(Palette.track, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Titan VPS").font(.scaled(19, weight: .bold))
+                    Text("Titan").font(.scaled(19, weight: .bold))
                     HStack(spacing: 6) {
                         Circle().fill(active ? Palette.green : Color.red).frame(width: 8, height: 8)
                         Text(active ? (sub.info.expire > 0 ? "Проездной до " + Fmt.date(sub.info.expire) : "Проездной бессрочный") : "Проездной закончился")
@@ -773,8 +774,8 @@ struct ProfileView: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Palette.primary.opacity(0.25), lineWidth: 1))
+            .background(Palette.surface, in: RoundedRectangle(cornerRadius: Palette.cardRadius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Palette.cardRadius, style: .continuous).stroke(Palette.primary.opacity(0.25), lineWidth: 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableStyle(scale: 0.98))
@@ -889,14 +890,9 @@ struct AboutSheet: View {
                 .shadow(color: Palette.primary.opacity(0.35), radius: 20, y: 8)
                 .padding(.top, 28)
             VStack(spacing: 4) {
-                Text("Titan VPS").font(.scaled(26, weight: .bold))
+                Text("Titan").font(.scaled(26, weight: .bold))
                 Text("Версия \(version)").font(.scaled(15).monospacedDigit()).foregroundStyle(.secondary)
             }
-            // The theme's words said plainly once: what the app does (App Review 2.3.1, 2.3.7).
-            Text("«Маршрут» — это VPN-подключение через серверы Titan VPS: «Поехали» включает VPN, «Остановиться» выключает.")
-                .font(.scaled(13)).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
             chip("cpu", "Ядро Xray")
             VStack(spacing: 10) {
                 Button { openURL(support) } label: {
@@ -929,7 +925,7 @@ struct AboutSheet: View {
     private var openSource: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Открытый исходный код").font(.scaled(17, weight: .bold))
-            Text("Код приложения и всего, на чём оно работает, открыт: что Titan VPS делает с трафиком, можно проверить.")
+            Text("Код приложения и всего, на чём оно работает, открыт: что Titan делает с вашими данными, можно проверить.")
                 .font(.scaled(13)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Card {
@@ -1009,17 +1005,17 @@ struct OpenSource {
 
     static let all = [
         // No other platforms named (App Review 2.3.10): the repository shows the rest.
-        OpenSource(name: "Titan VPS", detail: "Исходный код приложения Titan VPS",
+        OpenSource(name: "Titan", detail: "Исходный код приложения Titan",
                    links: [Link(title: "UnionUnllimited/TitanApp", url: Config.repository)]),
         OpenSource(name: "Сетевое ядро", detail: "Xray-core v26.9.30 (через libXray), с нашими патчами для iOS",
                    links: [Link(title: "XTLS/Xray-core", url: github("XTLS/Xray-core")),
                            Link(title: "Патчи для iOS", url: Config.iosPatches)]),
         OpenSource(name: "libXray", detail: "Xray-core для мобильных приложений",
                    links: [Link(title: "XTLS/libXray", url: github("XTLS/libXray"))]),
-        OpenSource(name: "sing-box", detail: "Клиенты протоколов TUIC, AnyTLS, ShadowTLS, SSH и Naive (Naive — на Cronet из Chromium)",
+        OpenSource(name: "sing-box", detail: "Клиенты TUIC, AnyTLS, ShadowTLS, SSH и Naive (Naive — на Cronet из Chromium)",
                    links: [Link(title: "SagerNet/sing-box", url: github("SagerNet/sing-box")),
                            Link(title: "SagerNet/cronet-go", url: github("SagerNet/cronet-go"))]),
-        OpenSource(name: "mieru", detail: "Клиент протокола Mieru",
+        OpenSource(name: "mieru", detail: "Клиент Mieru",
                    links: [Link(title: "enfein/mieru", url: github("enfein/mieru"))]),
         OpenSource(name: "flag-icons", detail: "Флаги стран в списке направлений",
                    links: [Link(title: "lipis/flag-icons", url: github("lipis/flag-icons"))]),

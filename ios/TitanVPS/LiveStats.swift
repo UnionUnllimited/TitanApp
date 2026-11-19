@@ -1,10 +1,10 @@
-import Charts
 import Darwin
 import SwiftUI
 
 /// Speed of the VPN: the byte counters of our tunnel's interface (the utun with
-/// the tunnel's address, see PacketTunnelProvider), read once a second while Главная is on
-/// screen. In = what the tunnel hands to the phone (загрузка), out = what goes into it.
+/// the tunnel's address, see PacketTunnelProvider), read once a second while Маршрут is on
+/// screen (the trip card's tiles, TripStats). In = what the tunnel hands to the phone
+/// (загрузка), out = what goes into it.
 @MainActor
 final class TrafficMonitor: ObservableObject {
     struct Sample: Identifiable {
@@ -104,40 +104,5 @@ final class TrafficMonitor: ObservableObject {
             cursor = p.pointee.ifa_next
         }
         return nil
-    }
-}
-
-/// Under the connection timer: the speed now, quietly.
-struct SpeedLine: View {
-    @ObservedObject var monitor: TrafficMonitor
-
-    var body: some View {
-        Text("↓ \(Fmt.speed(monitor.down))    ↑ \(Fmt.speed(monitor.up))")
-            .font(.scaled(12, weight: .medium).monospacedDigit())
-            .foregroundStyle(.tertiary)
-            .accessibilityLabel("Загрузка \(Fmt.speed(monitor.down)), отдача \(Fmt.speed(monitor.up))")
-    }
-}
-
-/// Behind the status: the last minute of download as a faint curve, barely there.
-struct SpeedBackdrop: View {
-    @ObservedObject var monitor: TrafficMonitor
-
-    var body: some View {
-        let top = max(monitor.history.map(\.down).max() ?? 0, 64 * 1024)
-        let lastId = monitor.history.last?.id ?? TrafficMonitor.window
-        Chart(monitor.history) { s in
-            AreaMark(x: .value("Время", s.id), y: .value("Загрузка", s.down))
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(LinearGradient(colors: [Palette.primary.opacity(0.14), Palette.primary.opacity(0)],
-                                                startPoint: .top, endPoint: .bottom))
-        }
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
-        .chartXScale(domain: (lastId - TrafficMonitor.window + 1)...lastId)
-        .chartYScale(domain: 0...(top * 1.2))
-        .animation(.easeOut(duration: 0.35), value: monitor.history.last?.id)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }

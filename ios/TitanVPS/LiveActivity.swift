@@ -284,7 +284,7 @@ enum LiveActivityController {
         switch state {
         case .connected(let since):
             // The server the tunnel runs: it may have been started from iOS Settings.
-            let name = await TunnelSwitch.serverName() ?? server ?? "Titan VPS"
+            let name = await TunnelSwitch.serverName() ?? server ?? "Titan"
             guard gen == generation else { return }
             await showOn(name, since: since, intent: intent)
         case .connecting:
@@ -337,7 +337,7 @@ enum LiveActivityController {
             if name == nil { name = await TunnelSwitch.serverName() }
             // A newer change has seen to it meanwhile.
             guard gen == generation, live() == nil else { return }
-            let (flag, rest) = (name ?? "Titan VPS").splitFlag
+            let (flag, rest) = (name ?? "Titan").splitFlag
             let state = VPNActivityAttributes.ContentState(server: rest, flag: flag, connected: false, phase: .connecting)
             await put(ActivityContent(state: state, staleDate: staleDate), intent: intent)
             return
@@ -402,7 +402,7 @@ enum LiveActivityController {
     @available(iOS 18.0, *)
     private static func showOff(intent: Bool) async {
         runningName = nil
-        let (flag, rest) = (VPNIntents.pickedName ?? "Titan VPS").splitFlag
+        let (flag, rest) = (VPNIntents.pickedName ?? "Titan").splitFlag
         let state = VPNActivityAttributes.ContentState(server: rest, flag: flag, connected: false, phase: .off)
         await put(ActivityContent(state: state, staleDate: nil), intent: intent)
     }
@@ -772,7 +772,7 @@ extension LiveActivityController {
         if !enabled {
             now = "выключена в настройках приложения"
         } else if !allowedInSettings {
-            now = "Live Activity запрещены для Titan VPS в Настройках iOS"
+            now = "Live Activity запрещены для Titan в Настройках iOS"
         } else if let activity = Activity<VPNActivityAttributes>.activities.first(where: { $0.isLive }) {
             if let at = starts[activity.id] {
                 let started = Date(timeIntervalSince1970: at)

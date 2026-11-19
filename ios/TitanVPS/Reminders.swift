@@ -55,7 +55,7 @@ enum Reminders {
                 when.hour = 12
                 guard let fire = Calendar.current.date(from: when), fire > Date(), fire < end else { continue }
                 let content = UNMutableNotificationContent()
-                content.title = "Проездной Titan VPS"
+                content.title = "Проездной Titan"
                 #if TITAN_PAYMENTS
                 content.body = "Проездной закончится \(endText(end)). Если ещё не продлили — продлите его на вкладке «Проездной», чтобы не остановиться в пути."
                 #else
@@ -74,7 +74,7 @@ enum Reminders {
             guard (defaults.object(forKey: warnedKey) as? NSNumber)?.int64Value != info.total else { return }
             defaults.set(NSNumber(value: info.total), forKey: warnedKey)
             let content = UNMutableNotificationContent()
-            content.title = "Трафик на объездах заканчивается"
+            content.title = "Объезды заканчиваются"
             #if TITAN_PAYMENTS
             content.body = "Объезды: осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total)). Добавить ГБ можно на вкладке «Проездной»."
             #else

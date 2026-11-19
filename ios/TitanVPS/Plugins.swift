@@ -320,7 +320,7 @@ enum Plugins {
         }
         var proxy = outbounds[i]
         guard let kind = icmpProto(proxy), let host = icmpNodeHost(proxy, kind) else {
-            throw SubscriptionError(message: "«ICMP» включён для этого направления, но его протокол работает не по UDP. ICMP-туннель подходит только для WireGuard, Hysteria2 или VLESS/VMess поверх mKCP. Выберите другое направление.")
+            throw SubscriptionError(message: "«ICMP» включён для этого направления, но оно идёт не по UDP. ICMP подходит только для WireGuard, Hysteria2 или VLESS/VMess поверх mKCP. Выберите другое направление.")
         }
         // The shim's unprivileged datagram ICMP socket is IPv4 only; resolve the node here (the Go
         // side has no resolv.conf on iOS), as the sing-box / mieru clients are resolved.

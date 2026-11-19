@@ -8,10 +8,11 @@ enum UnlimitedServer {
     /// Its name in the app, given once where the subscription is parsed (SubscriptionAPI.parseServers).
     /// As before «Маршрут»: favourites, techniques and the VPN profile know the row by it.
     static let name = "⚡ Безлимитные · все серверы"
-    /// The name on screen (RouteName.shown).
-    static let shownName = "⚡ Безлимитные · все направления"
+    /// The name on screen (RouteName.shown): the owner's words, Маршрут's list says «без
+    /// ограничений» under it.
+    static let shownName = "⚡ Все направления"
     /// What VoiceOver says for its bolt.
-    static let spokenName = "Безлимитные, все направления"
+    static let spokenName = "Все направления"
     /// Its id: the same after each refresh, wherever the panel puts the row.
     static let id = "json-unlimited"
 

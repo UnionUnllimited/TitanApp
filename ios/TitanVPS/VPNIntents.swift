@@ -7,7 +7,7 @@ import Foundation
 /// the server picked in the app.
 struct TurnOnVPNIntent: AppIntent {
     static var title: LocalizedStringResource = "Поехали"
-    static var description = IntentDescription("Строит маршрут по направлению, выбранному в приложении Titan VPS.")
+    static var description = IntentDescription("Строит маршрут по направлению, выбранному в приложении Titan.")
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -296,10 +296,10 @@ enum VPNIntents {
     /// The server picked in the app (AppStore keeps the pick under this key), with its config.
     private static func picked() throws -> TunnelSwitch.Target {
         guard let sub = savedSubscription() else {
-            throw TunnelSwitchError("Добавьте код проездного в приложении Titan VPS")
+            throw TunnelSwitchError("Добавьте код проездного в приложении Titan")
         }
         guard let server = pickedServer(in: sub) else {
-            throw TunnelSwitchError("В проездном нет направлений. Обновите его в приложении Titan VPS")
+            throw TunnelSwitchError("В проездном нет направлений. Обновите его в приложении Titan")
         }
         return try target(server)
     }

@@ -124,8 +124,8 @@ final class AppStore: ObservableObject {
     /// Удалить аккаунт: the request copied for support. The account by the cabinet's ID, else
     /// by the bot's username, else by the key's short hash (docs/BACKEND-APPSTORE.md).
     var deletionRequest: String {
-        let id = clientId ?? account?.username ?? subscription.map { "\($0.keyHash) (хеш ключа)" } ?? "—"
-        return "Прошу удалить мой аккаунт Titan VPS. ID: \(id)"
+        let id = clientId ?? account?.username ?? subscription.map { "\($0.keyHash) (хеш кода проездного)" } ?? "—"
+        return "Прошу удалить мой аккаунт Titan. ID: \(id)"
     }
 
     /// Удалить аккаунт through the bot (Config.deletionEndpoint, docs/BACKEND-APPSTORE.md): true
@@ -182,7 +182,7 @@ final class AppStore: ObservableObject {
     @discardableResult
     func activate(_ text: String) async -> Bool {
         guard let url = SubscriptionAPI.findLink(text) else {
-            message = "Это не код проездного Titan VPS"
+            message = "Это не код проездного Titan"
             return false
         }
         // A fetch of the old key still under way doesn't overwrite this one.
@@ -220,7 +220,7 @@ final class AppStore: ObservableObject {
         if ok {
             showToast("Проездной обновлён", .success)
         } else if !Task.isCancelled {
-            showToast("Не удалось обновить проездной: " + (lastLoadError ?? "сервер не ответил"), .warning)
+            showToast("Не удалось обновить проездной: " + (lastLoadError ?? "нет ответа"), .warning)
         }
         await loadAccount()
     }

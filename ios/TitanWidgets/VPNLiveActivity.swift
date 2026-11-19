@@ -75,7 +75,7 @@ private struct ActivityBanner: View {
         HStack(spacing: 12) {
             ServerCircle(state: state, size: 46)
             VStack(alignment: .leading, spacing: 3) {
-                Text("TITAN VPS")
+                Text("TITAN")
                     .font(.system(size: 11, weight: .bold))
                     .kerning(1.2)
                     .foregroundStyle(Color.white.opacity(0.5))

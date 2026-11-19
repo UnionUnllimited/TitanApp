@@ -7,7 +7,7 @@ import Foundation
 /// Live Activity there and knows the app's settings.
 @available(iOS 18.0, *)
 struct SetVPNIntent: SetValueIntent, LiveActivityIntent {
-    static let title: LocalizedStringResource = "Titan VPS"
+    static let title: LocalizedStringResource = "Titan"
     /// Siri and Команды have the app's own intents (VPNIntents.swift).
     static let isDiscoverable = false
 

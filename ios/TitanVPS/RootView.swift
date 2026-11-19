@@ -11,6 +11,8 @@ struct RootView: View {
     /// Конфиденциальность accepted (PrivacyNoticeView): nothing of the service is used before.
     @AppStorage(PrivacyNoticeView.key) private var privacyAccepted = false
     @State private var tab: Tab = .home
+    /// The floating tab bar's height as laid out (it grows with the text size).
+    @State private var barHeight: CGFloat = 62
     /// Bumped by a tap on the tab already picked: that tab back to its top.
     @State private var toTop: [Tab: Int] = [:]
     @State private var splash = true
@@ -212,29 +214,41 @@ struct RootView: View {
         }
     }
 
-    /// The three tabs. TabView keeps each one's state; its own bar is hidden for TitanTabBar,
-    /// which is thinner and sits lower, so Главная shows more servers.
+    /// The three tabs. TabView keeps each one's state; its own bar is hidden for TitanTabBar, a
+    /// glass capsule floating over the screens' lower edge (design C, a little of «Линза»): they
+    /// scroll on under it, each keeping room for it under its end (TabBarRoom), Технический
+    /// режим pushed in Профиль too.
     private var tabs: some View {
         GeometryReader { geo in
-            VStack(spacing: 0) {
-                TabView(selection: $tab) {
-                    HomeView(openSettings: { tab = .profile }, toTop: toTop[.home] ?? 0)
-                        .tabSwipe { swipeTab(from: .home, $0) }
-                        .toolbar(.hidden, for: .tabBar)
-                        .tabItem { Label("Маршрут", systemImage: "location.north.line.fill") }.tag(Tab.home)
-                    SubscriptionView(toTop: toTop[.subscription] ?? 0)
-                        .tabSwipe { swipeTab(from: .subscription, $0) }
-                        .toolbar(.hidden, for: .tabBar)
-                        .tabItem { Label("Проездной", systemImage: "ticket") }.tag(Tab.subscription)
-                    // Its swipe is put inside its NavigationStack: none on Технический режим pushed there.
-                    ProfileView(openSubscription: { tab = .subscription }, openHome: { tab = .home },
-                                toTop: toTop[.profile] ?? 0, swipeTab: { swipeTab(from: .profile, $0) })
-                        .toolbar(.hidden, for: .tabBar)
-                        .tabItem { Label("Профиль", systemImage: "person") }.tag(Tab.profile)
-                }
-                // Of the home indicator's 34 pt it needs 20 under the bar.
-                TitanTabBar(selection: $tab, bottom: min(geo.safeAreaInsets.bottom, 20),
-                            reselect: { toTop[$0, default: 0] += 1 })
+            // The bar's bottom: over the home indicator's strip, as iOS's floating bars sit.
+            let gap = max(geo.safeAreaInsets.bottom - 14, 8)
+            // Where the screens' content may end: above the bar, with a little air.
+            let clearance = gap + barHeight + 8
+            TabView(selection: $tab) {
+                HomeView(openSettings: { tab = .profile }, toTop: toTop[.home] ?? 0)
+                    .tabSwipe { swipeTab(from: .home, $0) }
+                    .modifier(TabBarRoom(clearance: clearance))
+                    .toolbar(.hidden, for: .tabBar)
+                    .tabItem { Label("Маршрут", systemImage: "location.north.line.fill") }.tag(Tab.home)
+                SubscriptionView(toTop: toTop[.subscription] ?? 0)
+                    .tabSwipe { swipeTab(from: .subscription, $0) }
+                    .modifier(TabBarRoom(clearance: clearance))
+                    .toolbar(.hidden, for: .tabBar)
+                    .tabItem { Label("Проездной", systemImage: "ticket") }.tag(Tab.subscription)
+                // Its swipe is put inside its NavigationStack: none on Технический режим pushed there.
+                ProfileView(openSubscription: { tab = .subscription }, openHome: { tab = .home },
+                            toTop: toTop[.profile] ?? 0, swipeTab: { swipeTab(from: .profile, $0) })
+                    .modifier(TabBarRoom(clearance: clearance))
+                    .toolbar(.hidden, for: .tabBar)
+                    .tabItem { Label("Профиль", systemImage: "person") }.tag(Tab.profile)
+            }
+            .overlay(alignment: .bottom) {
+                TitanTabBar(selection: $tab, reselect: { toTop[$0, default: 0] += 1 })
+                    .background(GeometryReader { g in
+                        Color.clear.onAppear { barHeight = g.size.height }.onChange(of: g.size.height) { barHeight = $0 }
+                    })
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, gap)
             }
             // Down to the screen's edge. A keyboard (in a sheet over it) doesn't lift the bar:
             // no tab has a text field of its own.
@@ -265,15 +279,15 @@ struct RootView: View {
     }
 }
 
-/// Маршрут / Проездной / Профиль (Tab.home, .subscription, .profile): the picked one in the brand
-/// colour. Its surface goes down to the screen's edge; [bottom] is the room kept there for the
-/// home indicator.
+/// Маршрут / Проездной / Профиль (Tab.home, .subscription, .profile) on a floating glass
+/// capsule (design C with «Линза»'s glass, Glass.swift): the picked one in the brand colour on
+/// a raised tinted thumb that slides over with a spring (none with Reduce Motion).
 struct TitanTabBar: View {
     @Binding var selection: Tab
-    var bottom: CGFloat = 0
     /// A tap on the tab already picked: its screen back to the top, as iOS's own bar does.
     var reselect: (Tab) -> Void = { _ in }
-    @Environment(\.displayScale) private var displayScale
+    @Namespace private var thumb
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Item: Identifiable {
         let id: Tab
@@ -299,13 +313,19 @@ struct TitanTabBar: View {
                     VStack(spacing: 2) {
                         // Filled, as the system bar drew them.
                         Image(systemName: item.icon).symbolVariant(.fill)
-                            .font(.scaled(20, weight: .semibold))
+                            .font(.scaled(19, weight: .semibold))
                             .frame(height: 22)
                         Text(item.title).font(.scaled(10, weight: .semibold)).lineLimit(1)
                     }
-                    .foregroundStyle(on ? Palette.primary : Color.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 46)
-                    .contentShape(Rectangle())
+                    .foregroundStyle(on ? RouteTone.accentInk : RouteTone.ink2)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background {
+                        if on {
+                            GlassThumb(shape: Capsule(), tinted: true)
+                                .matchedGeometryEffect(id: "tab", in: thumb)
+                        }
+                    }
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(PressableStyle(scale: 0.92))
                 .accessibilityLabel(item.title)
@@ -316,13 +336,27 @@ struct TitanTabBar: View {
                 }
             }
         }
+        // Only the thumb moves with the pick: the screens switch as before.
+        .animation(Glass.spring(reduceMotion), value: selection)
+        .padding(5)
+        .glassSurface(.bar, in: Capsule())
         // On an iPad the items stay together in the middle.
-        .frame(maxWidth: 560)
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, bottom)
-        .background(Palette.surface)
-        .overlay(alignment: .top) {
-            Palette.outline.frame(height: 1 / displayScale)
+        .frame(maxWidth: 420)
+    }
+}
+
+/// Room under a tab's content for the tab bar floating over it: its content ends [clearance]
+/// above the screen's bottom edge, whatever of that the screen's own safe area (the home
+/// indicator's, as UIKit gives it to the tab) already keeps.
+private struct TabBarRoom: ViewModifier {
+    let clearance: CGFloat
+
+    func body(content: Content) -> some View {
+        GeometryReader { g in
+            content
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    Color.clear.frame(height: max(clearance - g.safeAreaInsets.bottom, 0))
+                }
         }
     }
 }
@@ -417,7 +451,7 @@ struct SplashView: View {
                     .scaleEffect(appeared ? 1 : 0.8)
                     .opacity(appeared ? 1 : 0)
                 VStack(spacing: 6) {
-                    Text("Titan VPS").font(.scaled(40, weight: .heavy))
+                    Text("Titan").font(.scaled(40, weight: .heavy))
                         .foregroundStyle(Palette.logoGradient)
                     Text("В путь — в одно касание").font(.scaled(15, weight: .medium)).foregroundStyle(.secondary)
                 }
@@ -449,7 +483,7 @@ struct PrivacyNoticeView: View {
                     Text("Конфиденциальность").font(.scaled(30, weight: .heavy))
                         .foregroundStyle(Palette.logoGradient)
                         .lineLimit(1).minimumScaleFactor(0.7)
-                    Text("Прежде чем начать — как Titan VPS обращается с вашими данными")
+                    Text("Прежде чем начать — как Titan обращается с вашими данными")
                         .font(.scaled(15))
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -490,16 +524,16 @@ struct PrivacyNoticeView: View {
 
     private var points: some View {
         VStack(alignment: .leading, spacing: 16) {
-            point("hand.raised.fill", "Titan VPS не ведёт журнал посещённых сайтов и не продаёт ваши данные.")
-            point("lock.shield.fill", "Данные нужны только для работы VPN: мы не используем их ни для чего другого и не передаём третьим лицам.")
-            point("network", "Трафик идёт через VPN-серверы только для того, чтобы попасть в интернет.")
+            point("hand.raised.fill", "Titan не ведёт журнал посещённых сайтов и не продаёт ваши данные.")
+            point("lock.shield.fill", "Данные нужны только для работы приложения: мы не используем их ни для чего другого и не передаём третьим лицам.")
+            point("network", "По маршрутам Titan ваши данные идут только для того, чтобы попасть в интернет.")
             point("eye.slash.fill", "В приложении нет аналитики и трекеров.")
-            point("ticket.fill", "Код проездного (ключ подписки) хранится на этом устройстве и отправляется только серверам Titan VPS.")
-            point("iphone", "Для лимита устройств сервер подписки получает и хранит модель устройства, версию iOS и идентификатор Titan VPS на этом устройстве — пока вы не отвяжете устройство или не удалите аккаунт.")
+            point("ticket.fill", "Код проездного хранится на этом устройстве и отправляется только в Titan.")
+            point("iphone", "Для лимита устройств Titan получает и хранит модель устройства, версию iOS и идентификатор приложения на этом устройстве — пока вы не отвяжете устройство или не удалите аккаунт.")
             #if TITAN_PAYMENTS
-            point("creditcard.fill", "При покупке в App Store сервер получает запись Apple о покупке вместе с ключом (если он уже есть), чтобы продлить подписку или выдать ключ. Данные карты видит только Apple.")
+            point("creditcard.fill", "При покупке в App Store Titan получает запись Apple о покупке вместе с кодом проездного (если он уже есть), чтобы продлить проездной или выдать новый. Данные карты видит только Apple.")
             #endif
-            point("checkmark.shield.fill", "Нажимая «Принимаю», вы соглашаетесь с этим и разрешаете Titan VPS добавить VPN-конфигурацию на устройство. iOS спросит разрешение при первом подключении.")
+            point("checkmark.shield.fill", "Нажимая «Принимаю», вы соглашаетесь с этим и разрешаете Titan добавить на устройство свою конфигурацию. iOS спросит разрешение, когда вы впервые нажмёте «Поехали».")
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -544,7 +578,7 @@ struct WelcomeView: View {
             VStack(spacing: 22) {
                 VStack(spacing: 12) {
                     GlowingLogo(size: 110)
-                    Text("Titan VPS").font(.scaled(34, weight: .heavy))
+                    Text("Titan").font(.scaled(34, weight: .heavy))
                         .foregroundStyle(Palette.logoGradient)
                     Text("Вставьте код проездного — и сразу поехали")
                         .font(.scaled(15))
@@ -628,7 +662,7 @@ struct WelcomeView: View {
             .animation(.easeInOut(duration: 0.2), value: valid)
             .animation(.easeInOut(duration: 0.2), value: editing)
             if !key.isEmpty && !valid {
-                Text("Это не похоже на код проездного Titan VPS. Скопируйте его целиком — это ссылка.")
+                Text("Это не похоже на код проездного Titan. Скопируйте его целиком — это ссылка.")
                     .font(.scaled(12)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -672,7 +706,7 @@ struct WelcomeView: View {
     private var appStore: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Нет проездного?").font(.scaled(16, weight: .bold))
-            Text("Оформите подписку через App Store — код проездного появится в приложении сам. Уже оформляли с этим Apple ID — восстановите покупки.")
+            Text("Оформите проездной через App Store — его код появится в приложении сам. Уже оформляли с этим Apple ID — восстановите покупки.")
                 .font(.scaled(14)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button {
@@ -680,7 +714,7 @@ struct WelcomeView: View {
                 editing = false
                 store.paywall = .start
             } label: {
-                Label("Подписка через App Store", systemImage: "checkmark.seal.fill")
+                Label("Проездной через App Store", systemImage: "checkmark.seal.fill")
             }
             .buttonStyle(SecondaryButtonStyle(height: 50))
             Button(action: restore) {

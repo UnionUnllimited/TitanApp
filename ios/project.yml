@@ -44,10 +44,9 @@ targets:
         # Built with the iOS 26 SDK (App Store Connect requires it): keeps the app's own look on
         # iOS 26 instead of Liquid Glass bars and controls.
         UIDesignRequiresCompatibility: true
-        # Siri: how "Titan VPS" sounds in Russian.
+        # Siri: how "Titan" sounds in Russian.
         INAlternativeAppNames:
-          - INAlternativeAppName: Титан ВПС
-          - INAlternativeAppName: Титан ВПН
+          - INAlternativeAppName: Титан
     entitlements:
       path: TitanVPS/TitanVPS.entitlements
       properties:
@@ -59,7 +58,7 @@ targets:
         MARKETING_VERSION: "0.2.0"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Titan VPS
+        INFOPLIST_KEY_CFBundleDisplayName: Titan
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
@@ -95,7 +94,7 @@ targets:
     info:
       path: TitanTunnel/Info.plist
       properties:
-        CFBundleDisplayName: Titan VPS
+        CFBundleDisplayName: Titan
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
@@ -139,7 +138,7 @@ targets:
     info:
       path: TitanWidgets/Info.plist
       properties:
-        CFBundleDisplayName: Titan VPS
+        CFBundleDisplayName: Titan
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:

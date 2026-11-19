@@ -233,7 +233,7 @@ final class VPNController: ObservableObject {
             proto.providerConfiguration = provider
             proto.disconnectOnSleep = false
             m.protocolConfiguration = proto
-            m.localizedDescription = "Titan VPS"
+            m.localizedDescription = "Titan"
             m.isEnabled = true
             // Не отключать VPN: iOS itself brings the VPN back (after a failure, a restart, sleep,
             // a network change) until it is turned off by hand. Not if Выкл or a ping's pause came
@@ -665,7 +665,7 @@ final class VPNController: ObservableObject {
         let ns = error as NSError
         if ns.domain == NEVPNErrorDomain, ns.code == NEVPNError.configurationReadWriteFailed.rawValue {
             // The system's own prompt says VPN: named so, to be found.
-            return "Разрешите добавление конфигурации VPN, чтобы поехать"
+            return "Разрешите iOS добавить конфигурацию Titan, чтобы поехать"
         }
         if let e = error as? SubscriptionError { return e.message }
         if let text = TunnelSwitch.routeMessage(error, inApp: true) { return text }

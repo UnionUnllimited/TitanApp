@@ -398,6 +398,15 @@ enum Fmt {
         return p.number + " " + p.unit
     }
 
+    /// Speed in megabits a second, as Маршрут's trip card shows it (the owner's «24,1 Мбит/с»):
+    /// one decimal under 100, none from 100, a decimal comma. The Live Activity keeps its МБ/с
+    /// (TrafficText, ios/Shared: the widgets read it too).
+    static func megabits(_ bytesPerSecond: Double) -> String {
+        let m = max(bytesPerSecond, 0) * 8 / 1_000_000
+        let text = m >= 100 ? String(format: "%.0f", m) : String(format: "%.1f", m)
+        return text.replacingOccurrences(of: ".", with: ",")
+    }
+
     // Made once: the screens call these on every redraw (on the main thread).
     private static let dayFormat: DateFormatter = {
         let f = DateFormatter()
@@ -699,8 +708,8 @@ enum SidewaysClaims {
 
 // MARK: - Back to the top
 
-/// Наверх: a round ↑ over a long list scrolled down, back to its top. The theme's surface and
-/// the brand blue, as Главная's square buttons.
+/// Наверх: a round ↑ over a long list scrolled down, back to its top. Glass and the brand
+/// blue, as Маршрут's round buttons on the map (Glass.swift).
 struct ScrollTopButton: View {
     /// Room the list keeps under its last row: at its end the button covers none.
     static let room: CGFloat = 48
@@ -710,11 +719,9 @@ struct ScrollTopButton: View {
         Button(action: action) {
             Image(systemName: "arrow.up")
                 .font(.scaled(18, weight: .bold))
-                .foregroundStyle(Palette.primary)
+                .foregroundStyle(RouteTone.accentInk)
                 .frame(width: 46, height: 46)
-                .background(Palette.surface, in: Circle())
-                .overlay(Circle().stroke(Palette.outline.opacity(0.6), lineWidth: 1))
-                .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+                .glassSurface(.chip, in: Circle())
                 .contentShape(Circle())
         }
         .buttonStyle(PressableStyle(scale: 0.9))

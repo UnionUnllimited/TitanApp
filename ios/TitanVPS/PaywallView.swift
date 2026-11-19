@@ -89,7 +89,7 @@ struct PaywallView: View {
                 .background(Palette.accentGradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .shadow(color: Palette.primary.opacity(0.35), radius: 12, y: 6)
                 .accessibilityHidden(true)
-            Text("Titan VPS").font(.scaled(24, weight: .heavy))
+            Text("Titan").font(.scaled(24, weight: .heavy))
             Text(reasonText.0).font(.scaled(14, weight: .medium)).foregroundStyle(reasonText.1)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -104,7 +104,7 @@ struct PaywallView: View {
         case .expired:
             return ("Проездной закончился — продлите его, чтобы снова поехать", .red)
         case .traffic:
-            guard let info, info.total > 0 else { return ("Трафик на объездах", .secondary) }
+            guard let info, info.total > 0 else { return ("Гигабайты на объездах", .secondary) }
             return ("Объезды: осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total))",
                     info.remaining * 10 < info.total ? .orange : .secondary)
         case .renew:
@@ -112,7 +112,7 @@ struct PaywallView: View {
             let active = info.expire > Int64(Date().timeIntervalSince1970)
             return (active ? "Проездной действует до " + Fmt.date(info.expire) : "Проездной закончился", active ? .secondary : .red)
         case .start:
-            return ("Подписка через App Store — код проездного появится в приложении сам", .secondary)
+            return ("Проездной через App Store — его код появится в приложении сам", .secondary)
         }
     }
 
@@ -120,10 +120,10 @@ struct PaywallView: View {
     private var subscriptionsCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
-                cardTitle("checkmark.seal.fill", Palette.primary, "Подписка через App Store",
+                cardTitle("checkmark.seal.fill", Palette.primary, "Проездной через App Store",
                           "Продлевается сама, отменить можно в любой момент")
                 // What a plan gives (App Review 3.1.2(c)); the rest is in each one's description.
-                Text("Подписка открывает все направления Titan VPS с безлимитным трафиком на обычных направлениях. Лимит устройств и гигабайты на объездах — как в описании тарифа.")
+                Text("Проездной открывает все направления Titan, по обычным — без ограничений. Лимит устройств и гигабайты на объездах — как в описании тарифа.")
                     .font(.scaled(12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 products(purchases.subscriptions, picked: $picked, empty: "Тарифы App Store скоро появятся")
@@ -156,7 +156,7 @@ struct PaywallView: View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 cardTitle("chart.pie.fill", Palette.violet, "Гигабайты для объездов",
-                          "Разовая покупка: добавятся к трафику на объездах")
+                          "Разовая покупка: добавятся к гигабайтам на объездах")
                 products(purchases.packs, picked: $pickedPack, empty: "Пакеты гигабайт в App Store скоро появятся")
             }
             .padding(18)
@@ -239,14 +239,14 @@ struct PaywallView: View {
         .buttonStyle(SecondaryButtonStyle(height: 44))
         .disabled(buying != nil || restoring)
         Button { Task { await purchases.manageSubscriptions() } } label: {
-            Text("Управление подпиской").lineLimit(1).minimumScaleFactor(0.8)
+            Text("Автопродление в App Store").lineLimit(1).minimumScaleFactor(0.8)
         }
         .buttonStyle(SecondaryButtonStyle(height: 44))
     }
 
     /// What App Review asks next to an auto-renewable subscription.
     private var terms: some View {
-        Text("Подписка продлевается автоматически, пока вы её не отмените. Оплата списывается с Apple ID при подтверждении покупки и затем в течение 24 часов до конца каждого периода, если автопродление не отключено хотя бы за 24 часа до его конца. Отключить автопродление можно в настройках Apple ID («Управление подпиской»).")
+        Text("Проездной продлевается автоматически, пока вы не отключите автопродление. Оплата списывается с Apple ID при подтверждении покупки и затем в течение 24 часов до конца каждого периода, если автопродление не отключено хотя бы за 24 часа до его конца. Отключить автопродление можно в настройках Apple ID.")
             .font(.scaled(11)).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
