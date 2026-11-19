@@ -219,6 +219,7 @@ struct HomeView: View {
         }
     }
 
+    #if TITAN_PAYMENTS
     /// One line: a tap opens Тарифы.
     private var expiredBanner: some View {
         Button { store.paywall = .expired } label: {
@@ -238,6 +239,24 @@ struct HomeView: View {
         .buttonStyle(PressableStyle())
         .accessibilityLabel("Подписка истекла. Продлить")
     }
+    #else
+    /// One line, the same look: only that it has run out (no payments in this build,
+    /// docs/HANDOFF.md), nothing to tap.
+    private var expiredBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.circle.fill")
+            Text("Подписка истекла").lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .font(.scaled(14, weight: .semibold))
+        .foregroundStyle(.red)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 44)
+        .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Подписка истекла")
+    }
+    #endif
 
     private var powerPhase: PowerSlider.Phase {
         // Off for a ping: still shown on (it comes back by itself).
@@ -416,8 +435,10 @@ struct HomeView: View {
                     } else if sub.info.total > 0 {
                         HStack(spacing: 6) {
                             Text("Трафик: \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
+                            #if TITAN_PAYMENTS
                             // Тарифы (the App Store first).
                             Button("Добавить ГБ") { store.paywall = .traffic }.font(.scaled(13, weight: .semibold))
+                            #endif
                         }
                     } else {
                         Text("Для ограничений мобильного интернета")

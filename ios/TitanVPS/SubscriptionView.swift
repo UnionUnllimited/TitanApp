@@ -1,15 +1,18 @@
 import SwiftUI
 
 /// Подписка: expiry, bypass traffic, «Продлить подписку» (Тарифы) and a "Личный кабинет"
-/// button with what it has.
+/// button with what it has. Without TITAN_PAYMENTS (no payments, renewal or cabinet in this
+/// build, docs/HANDOFF.md): expiry, bypass traffic, devices and the bot for account settings.
 struct SubscriptionView: View {
     @EnvironmentObject var store: AppStore
-    @ObservedObject private var purchases = AppStorePurchases.shared
     @Environment(\.openURL) private var openURL
-    @State private var showCabinet = false
     @State private var showDevices = false
+    #if TITAN_PAYMENTS
+    @ObservedObject private var purchases = AppStorePurchases.shared
+    @State private var showCabinet = false
     /// Продлить подписку in the cabinet: Тарифы once its sheet is down.
     @State private var renewAfterCabinet = false
+    #endif
     /// Bumped by a tap on Подписка in the tab bar while it is on screen: back to the top.
     var toTop = 0
     private static let top = "subscription.top"
@@ -69,8 +72,9 @@ struct SubscriptionView: View {
                                 Text("Безлимит").font(.scaled(26, weight: .bold))
                             }
                             Text("На обычных серверах — безлимит").font(.scaled(13)).foregroundStyle(.secondary)
-                            Text("Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные серверы не работают. Гигабайты списываются только пока вы подключены к обходу. На Wi-Fi обходы не нужны и недоступны." + (info.total > 0 ? " Закончились ГБ — нажмите «Добавить ГБ»." : ""))
+                            Text(bypassNote(info))
                                 .font(.scaled(12)).foregroundStyle(.secondary).padding(.top, 4)
+                            #if TITAN_PAYMENTS
                             if info.total > 0 {
                                 // Тарифы (the App Store first); orange once less than 10 % is left.
                                 let low = info.remaining * 10 < info.total
@@ -80,17 +84,18 @@ struct SubscriptionView: View {
                                 .buttonStyle(SecondaryButtonStyle(height: 44, tint: low ? Color.orange : Palette.primary))
                                 .padding(.top, 4)
                             }
+                            #endif
                         }
                         .padding(16)
                     }
+                    #if TITAN_PAYMENTS
                     Button { store.paywall = renewReason } label: {
                         Label("Продлить подписку", systemImage: "crown.fill")
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     // Without the site's link, the bot instead: the United States storefront only,
                     // as it sells subscriptions too (App Review 3.1.1(a)).
-                    let cabinet = info.webPageUrl != nil || purchases.linksOut
-                    if cabinet {
+                    if hasCabinet(info) {
                         Button {
                             if info.webPageUrl != nil { showCabinet = true } else { openURL(Config.telegram) }
                         } label: {
@@ -98,6 +103,7 @@ struct SubscriptionView: View {
                         }
                         .buttonStyle(SecondaryButtonStyle())
                     }
+                    #endif
                     if let acc = store.account, acc.devicesEnabled {
                         Card {
                             Button { showDevices = true } label: {
@@ -109,9 +115,10 @@ struct SubscriptionView: View {
                             .buttonStyle(RowButtonStyle())
                         }
                     }
+                    #if TITAN_PAYMENTS
                     // What the in-app cabinet has; the site's tariffs and codes as
                     // AppStorePurchases.otherMethods allows.
-                    if cabinet {
+                    if hasCabinet(info) {
                         Card {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("В личном кабинете").fontWeight(.semibold)
@@ -123,17 +130,16 @@ struct SubscriptionView: View {
                             .padding(16)
                         }
                     }
+                    #endif
                     // What the in-app cabinet can't do: the bot, or (United States storefront
                     // only, App Review 3.1.1(a)) the full cabinet on the site, where it is sold too.
+                    // Without TITAN_PAYMENTS: the bot only.
                     Card {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Расширенные функции").fontWeight(.semibold)
-                            Text("Отвязка устройств, рефералы и другие настройки аккаунта — в боте" + (purchases.linksOut ? " или в полном кабинете на сайте (вход по почте или через Telegram)." : "."))
+                            Text(advancedNote)
                                 .font(.scaled(13)).foregroundStyle(.secondary)
-                            let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
-                                guard purchases.linksOut, let scheme = u.scheme, let host = u.host else { return nil }
-                                return URL(string: "\(scheme)://\(host)/auth")
-                            })
+                            let site = siteLink(info)
                             // Side by side where both fit, one under the other on a narrow phone.
                             ViewThatFits(in: .horizontal) {
                                 HStack(spacing: 10) { linkButtons(site) }
@@ -152,14 +158,17 @@ struct SubscriptionView: View {
         .background(Palette.background.ignoresSafeArea())
         .refreshable { await store.refreshFromPull() }
         .task { await store.loadAccount() }
+        #if TITAN_PAYMENTS
         // Тарифы from a reminder (RootView): this tab's sheets go down first.
         .onChange(of: store.closeSheets) { _ in
             showCabinet = false
             showDevices = false
         }
+        #endif
         .sheet(isPresented: $showDevices) {
             if let acc = store.account { DevicesView(account: acc) }
         }
+        #if TITAN_PAYMENTS
         // One sheet at a time: Тарифы (RootView's) once the cabinet is down.
         .sheet(isPresented: $showCabinet, onDismiss: {
             guard renewAfterCabinet else { return }
@@ -174,6 +183,47 @@ struct SubscriptionView: View {
                 .environmentObject(store)
             }
         }
+        #endif
+    }
+
+    /// Обходы explained; with TITAN_PAYMENTS, where more ГБ come from.
+    private func bypassNote(_ info: SubscriptionInfo) -> String {
+        let note = "Обходы — серверы для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные серверы не работают. Гигабайты списываются только пока вы подключены к обходу. На Wi-Fi обходы не нужны и недоступны."
+        #if TITAN_PAYMENTS
+        return note + (info.total > 0 ? " Закончились ГБ — нажмите «Добавить ГБ»." : "")
+        #else
+        return note
+        #endif
+    }
+
+    /// Расширенные функции: the bot, and the site's full cabinet as AppStorePurchases.linksOut
+    /// allows; the bot only without TITAN_PAYMENTS (as outside the United States storefront).
+    private var advancedNote: String {
+        let bot = "Отвязка устройств, рефералы и другие настройки аккаунта — в боте"
+        #if TITAN_PAYMENTS
+        return bot + (purchases.linksOut ? " или в полном кабинете на сайте (вход по почте или через Telegram)." : ".")
+        #else
+        return bot + "."
+        #endif
+    }
+
+    /// Открыть сайт: the site's full cabinet (its sign-in page), as AppStorePurchases.linksOut
+    /// allows; none without TITAN_PAYMENTS.
+    private func siteLink(_ info: SubscriptionInfo) -> URL? {
+        #if TITAN_PAYMENTS
+        return info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
+            guard purchases.linksOut, let scheme = u.scheme, let host = u.host else { return nil }
+            return URL(string: "\(scheme)://\(host)/auth")
+        })
+        #else
+        return nil
+        #endif
+    }
+
+    #if TITAN_PAYMENTS
+    /// Личный кабинет: in the app with the site's link; without it the bot, as linksOut allows.
+    private func hasCabinet(_ info: SubscriptionInfo) -> Bool {
+        info.webPageUrl != nil || purchases.linksOut
     }
 
     /// Продлить подписку: Тарифы, saying whether it is still running.
@@ -181,26 +231,31 @@ struct SubscriptionView: View {
         let expire = store.subscription?.info.expire ?? 0
         return expire <= 0 || expire > Int64(Date().timeIntervalSince1970) ? .renew : .expired
     }
+    #endif
 
     @ViewBuilder private func linkButtons(_ site: URL?) -> some View {
         Button { openURL(Config.telegram) } label: {
             Label("Открыть бота", systemImage: "paperplane.fill").lineLimit(1)
         }
         .buttonStyle(SecondaryButtonStyle(height: 46))
+        #if TITAN_PAYMENTS
         if let site {
             Button { openURL(site) } label: {
                 Label("Открыть сайт", systemImage: "globe").lineLimit(1)
             }
             .buttonStyle(SecondaryButtonStyle(height: 46))
         }
+        #endif
     }
 
+    #if TITAN_PAYMENTS
     private func feature(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon).foregroundStyle(Palette.primary).frame(width: 22)
             Text(text)
         }
     }
+    #endif
 
     private func expiry(_ expire: Int64) -> String {
         guard expire > 0 else { return "Бессрочно" }
@@ -311,8 +366,10 @@ struct ProfileView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var confirmLogout = false
     @State private var confirmDelete = false
+    #if TITAN_PAYMENTS
     /// Удалить аккаунт found an App Store subscription: Apple keeps billing it until cancelled.
     @State private var appleSubscribed = false
+    #endif
     @State private var deleting = false
     @State private var confirmReset = false
     @State private var about = false
@@ -525,8 +582,10 @@ struct ProfileView: View {
             .toolbar(.hidden, for: .tabBar)
             .navigationDestination(isPresented: $showTech) { TechModeView().toolbar(.hidden, for: .tabBar) }
             .sheet(isPresented: $about) { AboutSheet(version: version, support: store.supportURL) }
+            #if TITAN_PAYMENTS
             // Тарифы from a reminder (RootView): О приложении goes down first.
             .onChange(of: store.closeSheets) { _ in about = false }
+            #endif
             .alert("Код", isPresented: $askCode) {
                 SecureField("Код", text: $code).keyboardType(.numberPad)
                 Button("Открыть") { enterCode() }
@@ -550,10 +609,12 @@ struct ProfileView: View {
                 Text("VPN отключится, ключ, избранное и VPN-профиль удалятся с этого устройства. Ключ нужно будет вставить заново.")
             }
             .alert("Удалить аккаунт?", isPresented: $confirmDelete) {
+                #if TITAN_PAYMENTS
                 // Apple's rule: say billing goes on, and ask to cancel first.
                 if appleSubscribed {
                     Button("Управление подпиской") { Task { await AppStorePurchases.shared.manageSubscriptions() } }
                 }
+                #endif
                 Button("Удалить", role: .destructive) { deleteAccount() }
                 Button("Отмена", role: .cancel) {}
             } message: {
@@ -569,12 +630,17 @@ struct ProfileView: View {
         store.logout()
     }
 
-    /// Удалить аккаунт? asked once it is known whether an App Store subscription runs.
+    /// Удалить аккаунт? asked once it is known whether an App Store subscription runs; without
+    /// TITAN_PAYMENTS (nothing sold through the App Store) at once.
     private func askDelete() {
+        #if TITAN_PAYMENTS
         Task {
             appleSubscribed = await AppStorePurchases.shared.hasSubscription()
             confirmDelete = true
         }
+        #else
+        confirmDelete = true
+        #endif
     }
 
     /// What Удалить аккаунт does, as it will happen: through the bot if it has the endpoint,
@@ -583,16 +649,20 @@ struct ProfileView: View {
         let how = Config.deletionEndpoint != nil
             ? "Аккаунт и подписка в боте удалятся сразу, ключ и все данные — с этого устройства. Если сервер не ответит, мы скопируем запрос и откроем чат поддержки."
             : "Мы скопируем запрос на удаление и откроем чат поддержки — отправьте его там. Аккаунт и подписку в боте удалим в течение 7 дней, поддержка ответит, когда всё будет удалено. Ключ и все данные с этого устройства удалятся сразу."
+        #if TITAN_PAYMENTS
         let apple = appleSubscribed
             ? "У вас есть подписка App Store: Apple продолжит её списывать, пока вы её не отмените. Сначала отмените её в «Управлении подпиской»."
             : "Подписку App Store, если она есть, удаление не отменяет: её отменяют в настройках Apple ID."
         return how + "\n\n" + apple
+        #else
+        return how
+        #endif
     }
 
     /// Удалить аккаунт: through the bot (Config.deletionEndpoint) when it can; else the bot's
     /// subscription is removed by support, so the request is copied for the support chat,
     /// which opens a moment after the note. Either way this device is signed out as by Выйти,
-    /// its own App Store token goes too.
+    /// its own App Store token goes too (with TITAN_PAYMENTS).
     private func deleteAccount() {
         let request = store.deletionRequest
         let support = store.supportURL
@@ -601,7 +671,9 @@ struct ProfileView: View {
             let done = await store.deleteOnServer()
             deleting = false
             if !done { UIPasteboard.general.string = request }
+            #if TITAN_PAYMENTS
             AppStorePurchases.shared.forgetKeylessToken()
+            #endif
             signOut()
             guard !done else {
                 store.showToast("Аккаунт удалён", .success)
@@ -788,8 +860,10 @@ struct ThemePicker: View {
 struct AboutSheet: View {
     let version: String
     let support: URL
+    #if TITAN_PAYMENTS
     /// The storefront: the bot itself (where it sells too) only in the United States one.
     @ObservedObject private var purchases = AppStorePurchases.shared
+    #endif
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
 
@@ -822,12 +896,15 @@ struct AboutSheet: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 // With the links kept to the US (AppStorePurchases.linksOut) the bot is reached as support.
+                // Without TITAN_PAYMENTS too: Поддержка above only.
+                #if TITAN_PAYMENTS
                 if purchases.linksOut {
                     Button { openURL(Config.telegram) } label: {
                         Label("Telegram-бот", systemImage: "paperplane.fill")
                     }
                     .buttonStyle(SecondaryButtonStyle())
                 }
+                #endif
                 Button { openURL(Config.privacyPolicy) } label: {
                     Text("Политика конфиденциальности")
                         .font(.scaled(15, weight: .semibold))

@@ -10,8 +10,8 @@ enum Reminders {
     /// The traffic total the "running out" note was shown for (once per paid amount).
     private static let warnedKey = "titan.trafficWarned"
     private static let askedKey = "titan.remindersAsked"
-    /// A tap on a reminder opens Подписка (RootView listens); the traffic one Тарифы over it.
-    /// The notification's object is the reminder's id.
+    /// A tap on a reminder opens Подписка (RootView listens); the traffic one Тарифы over it
+    /// (with TITAN_PAYMENTS). The notification's object is the reminder's id.
     static let openSubscription = Notification.Name("titan.openSubscription")
     static let trafficId = "titan.traffic"
 
@@ -56,7 +56,12 @@ enum Reminders {
                 guard let fire = Calendar.current.date(from: when), fire > Date(), fire < end else { continue }
                 let content = UNMutableNotificationContent()
                 content.title = "Подписка Titan VPS"
+                #if TITAN_PAYMENTS
                 content.body = "Подписка закончится \(endText(end)). Если ещё не продлили — продлите её на вкладке «Подписка», чтобы VPN не отключился."
+                #else
+                // No payments in this build (docs/HANDOFF.md): the date only, no call to renew.
+                content.body = "Подписка закончится \(endText(end))."
+                #endif
                 content.sound = .default
                 let request = UNNotificationRequest(identifier: id, content: content,
                                                     trigger: UNCalendarNotificationTrigger(dateMatching: when, repeats: false))
@@ -70,7 +75,12 @@ enum Reminders {
             defaults.set(NSNumber(value: info.total), forKey: warnedKey)
             let content = UNMutableNotificationContent()
             content.title = "Трафик на обходах заканчивается"
+            #if TITAN_PAYMENTS
             content.body = "Осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total)). Добавить ГБ можно на вкладке «Подписка»."
+            #else
+            // No payments in this build: what is left only.
+            content.body = "Осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total))."
+            #endif
             content.sound = .default
             try? await center.add(UNNotificationRequest(identifier: trafficId, content: content,
                                                         trigger: UNTimeIntervalNotificationTrigger(timeInterval: 2, repeats: false)))

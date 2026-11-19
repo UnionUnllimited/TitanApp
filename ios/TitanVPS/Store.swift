@@ -35,11 +35,13 @@ final class AppStore: ObservableObject {
     private let pauseTime = BackgroundTime("VPN back after a ping")
     /// Servers in the running "Пинг" (for its progress ring).
     @Published private(set) var pingTotal = 0
+    #if TITAN_PAYMENTS
     /// Тарифы (PaywallView) on screen and why it opened; RootView shows it.
     @Published var paywall: PaywallReason?
     /// Bumped to close the tabs' own sheets (Личный кабинет, Устройства, О приложении): Тарифы
     /// from a reminder then opens over the app, not under one of them (RootView).
     @Published var closeSheets = 0
+    #endif
 
     /// Favourite servers, by name (ids change with the subscription).
     @Published private(set) var favorites: Set<String> = []
@@ -104,13 +106,15 @@ final class AppStore: ObservableObject {
         subscription?.info.supportUrl.flatMap { URL(string: $0) }.flatMap { $0.scheme == nil ? nil : $0 } ?? Config.telegram
     }
 
+    #if TITAN_PAYMENTS
     /// The cabinet showed «Ваш ID»: kept for this key, it names the account to support.
     func rememberClientId(_ id: String) {
         guard let key = subscription?.keyHash, clientId != id else { return }
         UserDefaults.standard.set(["key": key, "id": id], forKey: clientIdKey)
     }
+    #endif
 
-    /// «Ваш ID» from the cabinet, if it was shown for this key.
+    /// «Ваш ID» from the cabinet, if it was shown for this key (a build with it, TITAN_PAYMENTS).
     var clientId: String? {
         guard let saved = UserDefaults.standard.dictionary(forKey: clientIdKey) as? [String: String],
               let key = subscription?.keyHash, saved["key"] == key else { return nil }
@@ -309,7 +313,9 @@ final class AppStore: ObservableObject {
         // A ping's pause doesn't bring the VPN back behind the welcome screen.
         stopPing()
         Reminders.reset()
+        #if TITAN_PAYMENTS
         paywall = nil
+        #endif
         subscription = nil
         account = nil
         pings = [:]

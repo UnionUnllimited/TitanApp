@@ -1,3 +1,6 @@
+// Payments, renewal and Личный кабинет are cut from the iOS app for now (docs/HANDOFF.md):
+// this file is compiled only with TITAN_PAYMENTS.
+#if TITAN_PAYMENTS
 import Foundation
 import StoreKit
 import UIKit
@@ -344,3 +347,4 @@ extension Product {
         return (2...4).contains(n % 10) ? few : many
     }
 }
+#endif

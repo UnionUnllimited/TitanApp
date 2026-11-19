@@ -14,8 +14,10 @@ struct TitanVPSApp: App {
                 .environmentObject(vpn)
                 .onAppear {
                     store.vpn = vpn
+                    #if TITAN_PAYMENTS
                     // App Store purchases StoreKit hands over (renewals, undelivered ones) from launch on.
                     AppStorePurchases.shared.start()
+                    #endif
                 }
                 .preferredColorScheme(theme == "dark" ? .dark : theme == "light" ? .light : nil)
                 .tint(Palette.primary)

@@ -73,14 +73,19 @@ struct RootView: View {
             // Пункт управления's toggle and the Live Activity follow the VPN.
             LiveActivityController.vpnChanged(state, server: store.selected?.name, paused: store.vpnPaused)
         }
-        // A tap on a reminder: Подписка; on the bypass traffic one, Тарифы over it.
+        // A tap on a reminder: Подписка; on the bypass traffic one, Тарифы over it (with
+        // TITAN_PAYMENTS only: no payments otherwise, docs/HANDOFF.md).
         .onReceive(NotificationCenter.default.publisher(for: Reminders.openSubscription)) { note in
             guard store.subscription != nil else { return }
+            #if TITAN_PAYMENTS
             if (note.object as? String) == Reminders.trafficId, privacyAccepted {
                 openTrafficPaywall()
             } else {
                 tab = .subscription
             }
+            #else
+            tab = .subscription
+            #endif
         }
         // The pick moved in the app with the VPN off (Главная, a refreshed subscription): the
         // activity's «Выключено» names it, so its ⏻ connects to the server shown.
@@ -141,12 +146,15 @@ struct RootView: View {
         .alert(store.message ?? "", isPresented: Binding(get: { store.message != nil }, set: { if !$0 { store.message = nil } })) {
             Button("OK", role: .cancel) {}
         }
+        #if TITAN_PAYMENTS
         // Тарифы: from Главная, Подписка, the «Добавить ГБ» buttons and the key entry.
         .sheet(item: $store.paywall) { reason in
             PaywallView(reason: reason).environmentObject(store)
         }
+        #endif
     }
 
+    #if TITAN_PAYMENTS
     /// Тарифы from the bypass traffic reminder, over Подписка. UIKit shows one sheet at a time:
     /// the tabs' own (Личный кабинет, Устройства, О приложении) close first, while their tab is
     /// still on screen, and Тарифы opens once they are down. Something still up after 2 s (an
@@ -175,6 +183,7 @@ struct RootView: View {
     private static var presenting: Bool {
         AppStorePurchases.activeScene?.keyWindow?.rootViewController?.presentedViewController != nil
     }
+    #endif
 
     private func openLink(_ url: URL) {
         Task {
@@ -486,7 +495,9 @@ struct PrivacyNoticeView: View {
             point("eye.slash.fill", "В приложении нет аналитики и трекеров.")
             point("key.fill", "Ключ подписки хранится только на этом устройстве.")
             point("iphone", "Для лимита устройств сервер подписки получает только модель устройства, версию iOS и идентификатор Titan VPS на этом устройстве.")
+            #if TITAN_PAYMENTS
             point("creditcard.fill", "При покупке в App Store сервер получает запись Apple о покупке вместе с ключом (если он уже есть), чтобы продлить подписку или выдать ключ. Данные карты видит только Apple.")
+            #endif
             point("checkmark.shield.fill", "Нажимая «Принимаю», вы соглашаетесь с этим и разрешаете Titan VPS добавить VPN-конфигурацию на устройство. iOS спросит разрешение при первом подключении.")
         }
         .padding(18)
@@ -517,10 +528,12 @@ struct WelcomeView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var key = ""
     @State private var appeared = false
-    @State private var restoring = false
     @FocusState private var editing: Bool
+    #if TITAN_PAYMENTS
+    @State private var restoring = false
     /// The storefront: the way to the bot for a key shows only in the United States one.
     @ObservedObject private var purchases = AppStorePurchases.shared
+    #endif
 
     /// The key as typed has our subscription link in it.
     private var valid: Bool { SubscriptionAPI.findLink(key) != nil }
@@ -545,14 +558,21 @@ struct WelcomeView: View {
                     .opacity(appeared ? 1 : 0)
                     .offset(y: appeared ? 0 : 24)
 
+                #if TITAN_PAYMENTS
                 appStore
                     .opacity(appeared ? 1 : 0)
                     .offset(y: appeared ? 0 : 28)
+                #endif
 
                 // Where to get a key is where it is sold (the bot), as AppStorePurchases.linksOut
-                // allows (the owner's switch); otherwise just how to enter one.
+                // allows (the owner's switch); otherwise just how to enter one. Without
+                // TITAN_PAYMENTS (no payments, docs/HANDOFF.md) always just how to enter one.
                 Group {
+                    #if TITAN_PAYMENTS
                     if purchases.linksOut { steps } else { haveKey }
+                    #else
+                    haveKey
+                    #endif
                 }
                 .opacity(appeared ? 1 : 0)
                 .offset(y: appeared ? 0 : 32)
@@ -641,6 +661,7 @@ struct WelcomeView: View {
         return valid ? Palette.green : .orange
     }
 
+    #if TITAN_PAYMENTS
     /// Нет ключа: the App Store's subscription (its key comes by itself), or the one bought on
     /// another iPhone or iPad back by Восстановить покупки (App Review 3.1.1, 3.1.3(b)).
     private var appStore: some View {
@@ -705,7 +726,20 @@ struct WelcomeView: View {
         .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 1))
     }
 
-    /// Outside the United States storefront: a key got before, no way to the bot.
+    private func step(_ n: Int, _ text: String) -> some View {
+        HStack(spacing: 12) {
+            Text("\(n)")
+                .font(.scaled(14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(Palette.accentGradient, in: Circle())
+            Text(text).font(.scaled(15)).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    #endif
+
+    /// Outside the United States storefront, and without TITAN_PAYMENTS: a key got before, no
+    /// way to the bot.
     private var haveKey: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "doc.on.clipboard.fill")
@@ -723,17 +757,6 @@ struct WelcomeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 1))
-    }
-
-    private func step(_ n: Int, _ text: String) -> some View {
-        HStack(spacing: 12) {
-            Text("\(n)")
-                .font(.scaled(14, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(Palette.accentGradient, in: Circle())
-            Text(text).font(.scaled(15)).fixedSize(horizontal: false, vertical: true)
-        }
     }
 
     /// Key added: connect right away (same as Android). A tap now; how the connect ends is felt

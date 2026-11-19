@@ -1,3 +1,6 @@
+// Payments, renewal and Личный кабинет are cut from the iOS app for now (docs/HANDOFF.md):
+// this file is compiled only with TITAN_PAYMENTS.
+#if TITAN_PAYMENTS
 import Combine
 import SwiftUI
 import UIKit
@@ -454,3 +457,4 @@ private final class BlankWindow: NSObject, WKNavigationDelegate {
         onLoad(self, action.request)
     }
 }
+#endif

@@ -1,4 +1,7 @@
 import Foundation
+// The web cabinet (CabinetView) is cut from the iOS app for now with the payments
+// (docs/HANDOFF.md): compiled only with TITAN_PAYMENTS. AccountAPI below stays.
+#if TITAN_PAYMENTS
 import SwiftSoup
 
 /// The site's limited personal cabinet, read natively (same as Android's CabinetApi): signed
@@ -223,6 +226,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         completionHandler(nil)
     }
 }
+#endif
 
 /// The bot's public summary of a subscription (GET /api/sub/{uuid}/info on the subscription's
 /// own host): the devices that used the key and their limit. Same as Android's AccountApi.
