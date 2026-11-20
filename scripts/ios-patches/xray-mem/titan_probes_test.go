@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	gonet "net"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -75,6 +76,7 @@ func TestTitanProbeDeviation(t *testing.T) {
 			internet.TitanCloseTransports()
 			defer internet.TitanCloseTransports()
 			dest, subject := tr.setup(t, oneWay, handshake)
+			var lost atomic.Int32 // handshakes a busy runner's loopback lost (titanLostHandshake)
 			probeCtx := internet.TitanProbeContext(context.Background())
 			groups := []*titanGroup{
 				{name: "probes", ctx: probeCtx},
@@ -94,6 +96,15 @@ func TestTitanProbeDeviation(t *testing.T) {
 						flow, err := tr.dial(ctx, dest, ss)
 						if err == nil {
 							_, err = titanEcho(flow)
+						}
+						if titanLostHandshake(err) {
+							lost.Add(1)
+							if flow != nil {
+								flow.Close()
+							}
+							if flow, err = tr.dial(ctx, dest, ss); err == nil {
+								_, err = titanEcho(flow)
+							}
 						}
 						if err != nil {
 							t.Fatalf("a user's flow: %v", err)
@@ -117,6 +128,10 @@ func TestTitanProbeDeviation(t *testing.T) {
 									probe = subject()
 								}
 								took, err := titanTimedEcho(g.ctx, tr.dial, dest, probe)
+								if titanLostHandshake(err) { // as the observatory's next probe would
+									lost.Add(1)
+									took, err = titanTimedEcho(g.ctx, tr.dial, dest, probe)
+								}
 								if err != nil {
 									t.Errorf("%s: %v", g.name, err)
 									return
@@ -134,6 +149,12 @@ func TestTitanProbeDeviation(t *testing.T) {
 			wg.Wait()
 			if t.Failed() {
 				return
+			}
+			if n := lost.Load(); n > 0 {
+				t.Logf("%d handshakes lost on the loopback, each tried once more", n)
+				if n > 2 {
+					t.Fatalf("%d handshakes lost: more than a busy runner's now and then", n)
+				}
 			}
 			for _, g := range groups {
 				t.Logf("%-14s: %3d probes, %3.0f%% cold (warm %5.1f ms, cold %5.1f ms), deviation of the last %d: %5.1f ms on average",
@@ -235,6 +256,14 @@ func (g *titanGroup) deviation() time.Duration {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return titanMean(g.deviations)
+}
+
+// titanLostHandshake: quic-go's idle timeout on a dial, which a busy CI runner's loopback gives
+// now and then (Hysteria here, 1 probe of 800 in a TestFlight 23 LibXray build; the Go code as in
+// TestFlight 22, which passed). Only this one error gets a second try, two at most a transport;
+// any other fails the test as before.
+func titanLostHandshake(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no recent network activity")
 }
 
 // titanTimedEcho is one probe: a flow through ss on ctx, from its dial to its echo, then closed,

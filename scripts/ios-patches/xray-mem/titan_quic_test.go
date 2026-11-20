@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"runtime/metrics"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -737,6 +738,14 @@ func titanHyFlow(dest net.Destination, ss *internet.MemoryStreamConfig, open boo
 	return titanHyFlowCtx(context.Background(), dest, ss, open)
 }
 
+// titanHyLostHandshake: quic-go's idle timeout on a dial, which a busy CI runner's loopback
+// gives now and then (TestFlight 23's LibXray builds, twice: a probe in round 5 of 8 here, one of
+// 800 in TestTitanProbeDeviation; the Go code as in TestFlight 22, which passed). Only this one
+// error gets a second try; any other fails the test as before.
+func titanHyLostHandshake(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no recent network activity")
+}
+
 // titanHyProbe is an observatory probe's flow through ss (its context marked as the probes' are),
 // closed once it has echoed.
 func titanHyProbe(dest net.Destination, ss *internet.MemoryStreamConfig) error {
@@ -839,15 +848,15 @@ func TestTitanQUICIdleProbes(t *testing.T) {
 	var quiet []int64
 	for r := range rounds {
 		for _, ss := range subjects[:n] {
-			if err := titanHyProbe(dest, ss); err != nil {
-				// A busy CI runner's loopback can lose a handshake now and then (quic-go's
-				// "timeout: no recent network activity", round 5 of 8 once). Dials aren't what
-				// these rounds measure: one more try. The counts below still check that the
-				// failed probe left nothing pooled or open.
-				t.Logf("round %d: a probe failed (%v), once more", r, err)
-				if err := titanHyProbe(dest, ss); err != nil {
-					t.Fatal(err)
-				}
+			err := titanHyProbe(dest, ss)
+			if titanHyLostHandshake(err) {
+				// Dials aren't what these rounds measure: one more try. The counts below still
+				// check that the lost probe left nothing pooled or open.
+				t.Logf("round %d: a probe's handshake lost (%v), once more", r, err)
+				err = titanHyProbe(dest, ss)
+			}
+			if err != nil {
+				t.Fatal(err)
 			}
 		}
 		pooled := len(manager.titanClients())
