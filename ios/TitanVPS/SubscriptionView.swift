@@ -80,7 +80,7 @@ struct SubscriptionView: View {
                                 // Тарифы (the App Store first); orange once less than 10 % is left.
                                 let low = info.remaining * 10 < info.total
                                 Button { store.paywall = .traffic } label: {
-                                    Label("Добавить ГБ", systemImage: "plus.circle.fill").lineLimit(1)
+                                    Label(store.remote.text(.passAddGb), systemImage: "plus.circle.fill").lineLimit(1)
                                 }
                                 .buttonStyle(SecondaryButtonStyle(height: 44, tint: low ? RouteTone.warn : Palette.primary))
                                 .padding(.top, 4)
@@ -93,7 +93,7 @@ struct SubscriptionView: View {
                     // Тарифы, while the panel's config leaves a way to pay.
                     if store.remote.renewOn {
                         Button { store.paywall = renewReason } label: {
-                            Label("Продлить проездной", systemImage: "ticket.fill")
+                            Label(store.remote.text(.passRenew), systemImage: "ticket.fill")
                         }
                         .buttonStyle(PrimaryButtonStyle())
                     }
@@ -230,7 +230,8 @@ struct SubscriptionView: View {
     private func bypassNote(_ info: SubscriptionInfo) -> String {
         let note = "Объезды — направления для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные направления не работают. Гигабайты списываются, только пока вы едете по объезду. На Wi-Fi объезды не нужны и недоступны."
         #if TITAN_PAYMENTS
-        return note + (info.total > 0 && store.remote.renewOn ? " Закончились ГБ — нажмите «Добавить ГБ»." : "")
+        // The button as it is named now (texts' pass.addGb).
+        return note + (info.total > 0 && store.remote.renewOn ? " Закончились ГБ — нажмите «\(store.remote.text(.passAddGb))»." : "")
         #else
         return note
         #endif

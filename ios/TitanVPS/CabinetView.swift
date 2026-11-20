@@ -9,8 +9,9 @@ import SwiftUI
 /// App Store first); the site's own tariffs and codes are a tab of their own where
 /// AppStorePurchases.otherMethods allows. Only the tariff's own page is the provider's
 /// (PaymentView, inside the app; bank apps for SBP open from there). Buttons and titles on the
-/// way there are neutral (Тарифы, Продолжить). Design C: the app's card corners and hairline
-/// edge, RouteTone's red and orange.
+/// way there are neutral (Тарифы, Продолжить). The panel's config is asked again as it opens; with
+/// the cabinet turned off there (payments.cabinet) it closes. Design C: the app's card corners and
+/// hairline edge, RouteTone's red and orange.
 struct CabinetView: View {
     let link: String
     /// Connected devices and the limit from the subscription's account info, if known.
@@ -56,7 +57,7 @@ struct CabinetView: View {
                                     // Тарифы, while the panel's config leaves a way to pay.
                                     if store.remote.renewOn {
                                         Button(action: renew) {
-                                            Label("Продлить проездной", systemImage: "ticket.fill")
+                                            Label(store.remote.text(.passRenew), systemImage: "ticket.fill")
                                         }
                                         .buttonStyle(PrimaryButtonStyle())
                                         .padding(.top, 4)
@@ -110,13 +111,25 @@ struct CabinetView: View {
             }
             // Closed by hand or by itself on the return to the site: the cabinet shows the result.
             .sheet(item: $payment, onDismiss: {
+                // Turned off in the panel while paying: down now.
+                guard store.remote.cabinetOn else { return closeTurnedOff() }
                 Task { await load() }
                 recheck += 1
             }) { p in
                 PaymentView(url: p.url, subtitle: p.title, home: p.home) { note = Self.checking }
             }
         }
-        .task { await load() }
+        .task {
+            // The panel's config again (the cabinet turned off a moment ago: closed below).
+            store.refreshRemote(force: true)
+            await load()
+        }
+        // The cabinet turned off in the panel's config (payments.cabinet): down, with a word why;
+        // a payment on its page ends first (then onDismiss above).
+        .onChange(of: store.remote.cabinetOn) { on in
+            guard !on, payment == nil else { return }
+            closeTurnedOff()
+        }
         // After a payment: the provider may tell the site a moment after the user is back.
         .task(id: recheck) {
             guard recheck > 0 else { return }
@@ -130,6 +143,11 @@ struct CabinetView: View {
     }
 
     private static let checking = "Проверяем: кабинет обновится через несколько секунд"
+
+    private func closeTurnedOff() {
+        store.showToast("Кабинет сейчас недоступен", .warning)
+        dismiss()
+    }
 
     private func load() async {
         loading = true

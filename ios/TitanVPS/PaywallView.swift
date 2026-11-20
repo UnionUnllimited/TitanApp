@@ -18,8 +18,11 @@ enum PaywallReason: String, Identifiable {
 /// codes, the auto-renewal terms), then Другие методы: the site's cabinet in the browser,
 /// without a price beside it (showsOther). Opened from Главная's «Подписка истекла»,
 /// Подписка's «Продлить подписку», the «Добавить ГБ» buttons and the key entry. The panel's
-/// config may leave out either part (payments.appStore, payments.otherMethods). Design C: the
-/// app's cards (Card), the picked row on the brand's tint as Маршрут's cards, RouteTone's ink.
+/// config may leave out either part (payments.appStore, payments.otherMethods), adds products,
+/// orders them and gives them badges and notes (payments.products), and rewords its title and
+/// Другие методы (texts); asked again as it opens, it closes when the config leaves no way to pay.
+/// Design C: the app's cards (Card), the picked row on the brand's tint as Маршрут's cards,
+/// RouteTone's ink.
 struct PaywallView: View {
     let reason: PaywallReason
     @EnvironmentObject var store: AppStore
@@ -72,7 +75,7 @@ struct PaywallView: View {
                 .animation(.easeInOut(duration: 0.2), value: purchases.loaded)
             }
             .background(Palette.background.ignoresSafeArea())
-            .navigationTitle("Тарифы")
+            .navigationTitle(store.remote.text(.tariffsTitle))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -90,7 +93,18 @@ struct PaywallView: View {
         }
         // A purchase under way isn't dropped by a pull down.
         .interactiveDismissDisabled(buying != nil || restoring)
-        .task { if appStore { await purchases.loadProducts() } }
+        .task {
+            // The panel's config again (payments turned off a moment ago: closed below).
+            store.refreshRemote(force: true)
+            if appStore { await purchases.loadProducts() }
+        }
+        // No way to pay left in the config (payments, appStore and otherMethods): down, with a
+        // word why. A purchase or a restore under way ends here first, its outcome shown.
+        .onChange(of: store.remote.renewOn) { on in
+            guard !on, buying == nil, !restoring else { return }
+            store.showToast("Оплата сейчас недоступна", .warning)
+            dismiss()
+        }
     }
 
     /// The App Store's part: on unless the panel's config turned it off (payments.appStore).
@@ -285,8 +299,18 @@ struct PaywallView: View {
                     if on { Circle().fill(Palette.primary).frame(width: 12, height: 12).transition(.scale) }
                 }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(p.displayName.isEmpty ? p.periodName : p.displayName)
-                        .font(.scaled(16, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                    let info = store.remote.product(p.id)
+                    HStack(spacing: 6) {
+                        Text(p.displayName.isEmpty ? p.periodName : p.displayName)
+                            .font(.scaled(16, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                        if let badge = info?.badge { badgePill(badge, on: on) }
+                    }
+                    // The panel's word on it (payments.products' note).
+                    if let note = info?.note {
+                        Text(note).font(.scaled(12, weight: .semibold))
+                            .foregroundStyle(on ? RouteTone.accentInkOnTint : RouteTone.accentInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if p.subscription != nil {
                         Text("Продлевается " + p.renewal).font(.scaled(12)).foregroundStyle(.secondary)
                     }
@@ -314,6 +338,19 @@ struct PaywallView: View {
         .buttonStyle(PressableStyle(scale: 0.98))
         .disabled(buying != nil)
         .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    /// The panel's badge on a product («Выгодно»): a small pill as Проверить дороги, solid on the
+    /// picked row.
+    private func badgePill(_ text: String, on: Bool) -> some View {
+        Text(text)
+            .font(.scaled(11, weight: .bold))
+            .lineLimit(1)
+            .foregroundStyle(on ? Color.white : RouteTone.accentInkOnTint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(on ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Palette.primary.opacity(0.12)), in: Capsule())
+            .fixedSize()
     }
 
     /// Другие методы with a key: in every storefront as the owner chose
@@ -350,7 +387,7 @@ struct PaywallView: View {
     private var other: some View {
         VStack(spacing: 6) {
             Button(action: openOther) {
-                Label("Другие методы", systemImage: "arrow.up.right.square")
+                Label(store.remote.text(.tariffsOther), systemImage: "arrow.up.right.square")
             }
             .buttonStyle(SecondaryButtonStyle(height: 48, tint: .secondary))
             Text("Откроется в браузере").font(.scaled(12)).foregroundStyle(.tertiary)
@@ -372,7 +409,8 @@ struct PaywallView: View {
     private func buy(_ product: Product?) {
         guard let product, buying == nil else { return }
         let sub = store.subscription
-        let pack = ProductIDs.packs.contains(product.id)
+        // By type, as the cards are split: a pack the config added too.
+        let pack = product.type == .consumable
         guard sub != nil || !pack else { return }
         Haptics.tap(.medium)
         buying = product.id

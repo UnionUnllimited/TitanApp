@@ -730,6 +730,7 @@ struct HomeView: View {
 
     private var pill: some View {
         RoutePill(phase: pillPhase, locked: store.pingBusy, shines: onScreen, lockedText: paused ? "Пауза" : "Проверка…",
+                  goTitle: store.remote.text(.routeGo), stopTitle: store.remote.text(.routeStop),
                   failures: vpn.failures, onToggle: toggleVPN,
                   onLockedTap: { store.showToast("Идёт проверка дорог — кнопка вернётся через пару секунд", .info) })
     }
@@ -783,9 +784,9 @@ struct HomeView: View {
     private func choiceCard(_ kind: RouteChoice, server: Server, picked: Bool, detected: Bool = false) -> some View {
         let bypass = kind.isBypass
         let locked = bypass && store.bypassLockedOnWifi
-        let title = bypass ? "Авто · объезды" : "Авто"
-        let subtitle = locked ? "Только через мобильный интернет"
-            : bypass ? "Когда мобильный интернет ограничен" : "Сам выбирает быстрое направление"
+        // Their words as the panel's config may have them (texts); VoiceOver reads the same.
+        let title = store.remote.text(bypass ? .bypassTitle : .autoTitle)
+        let subtitle = locked ? "Только через мобильный интернет" : store.remote.text(bypass ? .bypassText : .autoText)
         let now = locked ? nil : choiceNow(server, bypass: bypass, picked: picked)
         let note: String? = detected && !locked ? "Похоже, мобильный интернет ограничен — поедем объездом" : nil
         let ping = store.pings[server.id]
@@ -1178,7 +1179,7 @@ struct HomeView: View {
                     .font(.scaled(15, weight: .semibold))
                     .foregroundStyle(RouteTone.accentInk)
                     .frame(width: 22)
-                Text("Выбрать направление вручную")
+                Text(store.remote.text(.listManual))
                     .font(.scaled(15, weight: .semibold))
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.leading)
@@ -1200,7 +1201,7 @@ struct HomeView: View {
             .contentShape(shape)
         }
         .buttonStyle(PressableStyle(scale: 0.98))
-        .accessibilityLabel("Выбрать направление вручную, " + ServerGroup.spokenCount(count))
+        .accessibilityLabel(store.remote.text(.listManual) + ", " + ServerGroup.spokenCount(count))
         .accessibilityValue(isOpen ? "список открыт" : "список скрыт")
     }
 
@@ -1316,7 +1317,7 @@ struct HomeView: View {
                     // Тарифы (the App Store first), while the panel's config leaves a way to pay.
                     if store.remote.renewOn {
                         Button { store.paywall = .traffic } label: {
-                            Text("Добавить ГБ")
+                            Text(store.remote.text(.passAddGb))
                                 .font(.scaled(13, weight: .semibold))
                                 .foregroundStyle(RouteTone.accentInk)
                                 .frame(minHeight: 28)
@@ -1348,7 +1349,7 @@ struct HomeView: View {
                 Image(systemName: "speedometer").opacity(busy ? 0 : 1).overlay {
                     if busy { ProgressRing(progress: store.pingProgress).frame(width: 16, height: 16) }
                 }
-                Text("Проверить дороги").opacity(busy ? 0 : 1).overlay {
+                Text(store.remote.text(.listRoads)).opacity(busy ? 0 : 1).overlay {
                     if busy { Text("Стоп") }
                 }
             }
@@ -1362,7 +1363,7 @@ struct HomeView: View {
         }
         .buttonStyle(PressableStyle())
         .fixedSize()
-        .accessibilityLabel(busy ? "Остановить проверку дорог" : "Проверить дороги всех направлений")
+        .accessibilityLabel(busy ? "Остановить проверку дорог" : store.remote.text(.listRoads, "Проверить дороги всех направлений"))
     }
 
     /// The list opening: its first rows come in one after another (RowEntrance), once; none

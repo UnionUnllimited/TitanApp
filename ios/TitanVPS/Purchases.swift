@@ -7,7 +7,8 @@ import StoreKit
 import UIKit
 
 /// What the App Store sells, in the order Тарифы shows it. Placeholders until they are made in
-/// App Store Connect.
+/// App Store Connect. The panel's config may add more (payments.products, schema 2), set the order,
+/// badges and notes, and hide some: AppStorePurchases.wanted.
 enum ProductIDs {
     /// Auto-renewable subscriptions (one subscription group): the subscription's time.
     static let month = "com.titanvps.ios.sub.month"
@@ -30,8 +31,8 @@ enum ProductIDs {
 final class AppStorePurchases: ObservableObject {
     static let shared = AppStorePurchases()
 
-    /// What the App Store has of ProductIDs, in their order. Empty while none are set up in
-    /// App Store Connect.
+    /// What the App Store has of the products asked for (wanted), as it answered. Empty while
+    /// none are set up in App Store Connect. Тарифы reads them through subscriptions and packs.
     @Published private(set) var products: [Product] = []
     @Published private(set) var loading = false
     /// The App Store has answered once (an empty list is then its answer).
@@ -46,8 +47,23 @@ final class AppStorePurchases: ObservableObject {
     /// then signs in, as a purchase made there.
     private var keylessRedeemUntil: Date?
 
-    var subscriptions: [Product] { products.filter { ProductIDs.subscriptions.contains($0.id) } }
-    var packs: [Product] { products.filter { ProductIDs.packs.contains($0.id) } }
+    /// The ids the last load asked for: a new one in the config's list asks again (wantedChanged).
+    private var asked: Set<String> = []
+
+    /// What the App Store is asked for, in Тарифы' order: the config's products first (the panel's
+    /// order), then ProductIDs not listed there; those it hides left out (RemoteConfig.storeProductIds).
+    static var wanted: [String] { RemoteConfig.current.storeProductIds(builtIn: ProductIDs.all) }
+
+    /// The products in the order the config wants now, those it hides now left out; told apart by
+    /// their type (subscriptions auto-renewable, the packs of гигабайты consumable), whatever their id.
+    private var shown: [Product] {
+        let order = Self.wanted
+        let place = Dictionary(order.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        return products.filter { place[$0.id] != nil }.sorted { (place[$0.id] ?? .max) < (place[$1.id] ?? .max) }
+    }
+
+    var subscriptions: [Product] { shown.filter { $0.type == .autoRenewable } }
+    var packs: [Product] { shown.filter { $0.type == .consumable } }
 
     /// Другие методы in Тарифы, the in-app cabinet's tariffs and codes (the site's own payment)
     /// and the other ways to the bot and the site (the key entry's «Где взять ключ», Подписка's
@@ -99,19 +115,34 @@ final class AppStorePurchases: ObservableObject {
         }
     }
 
+    /// The products of `wanted` from the App Store; asked again (twice more at most) when the
+    /// config listed a new one while it answered.
     func loadProducts() async {
         guard !loading else { return }
         loading = true
         defer { loading = false }
-        do {
-            let found = try await Product.products(for: ProductIDs.all)
-            products = found.sorted { (ProductIDs.all.firstIndex(of: $0.id) ?? .max) < (ProductIDs.all.firstIndex(of: $1.id) ?? .max) }
-            loaded = true
-            loadFailed = false
-        } catch {
-            // The last list stays.
-            loadFailed = true
+        for _ in 0..<3 {
+            let ids = Self.wanted
+            do {
+                products = try await Product.products(for: ids)
+                asked = Set(ids)
+                loaded = true
+                loadFailed = false
+            } catch {
+                // The last list stays.
+                loadFailed = true
+                return
+            }
+            if Set(Self.wanted).isSubset(of: asked) { return }
         }
+    }
+
+    /// The config's products changed (AppStore.applyRemote): order and hidden ones follow by
+    /// themselves (shown); one not asked for yet is asked for now, once the App Store has been asked
+    /// at all (Тарифы and the code screen ask as they open). A load under way asks again itself.
+    func wantedChanged() async {
+        guard loaded || loadFailed, !loading, !Set(Self.wanted).isSubset(of: asked) else { return }
+        await loadProducts()
     }
 
     /// Оплатить через Apple: with the key's appAccountToken, so the bot knows whose it is.
@@ -162,7 +193,8 @@ final class AppStorePurchases: ObservableObject {
         var other = false
         for sequence in [StoreKit.Transaction.unfinished, StoreKit.Transaction.currentEntitlements] {
             for await result in sequence {
-                guard case .verified(let t) = result, ProductIDs.all.contains(t.productID),
+                // Ours by id, or by type: one the config listed (and maybe no longer lists) too.
+                guard case .verified(let t) = result, Self.isOwnProduct(t),
                       seen.insert(t.id).inserted else { continue }
                 // Read for each one: the first delivered without a key signs in.
                 let sub = AppStore.current?.subscription
@@ -187,7 +219,8 @@ final class AppStorePurchases: ObservableObject {
     /// cancelled there, so the user is told first.
     func hasSubscription() async -> Bool {
         for await result in StoreKit.Transaction.currentEntitlements {
-            if case .verified(let t) = result, ProductIDs.subscriptions.contains(t.productID), t.revocationDate == nil {
+            if case .verified(let t) = result, t.productType == .autoRenewable || ProductIDs.subscriptions.contains(t.productID),
+               t.revocationDate == nil {
                 return true
             }
         }
@@ -241,6 +274,12 @@ final class AppStorePurchases: ObservableObject {
         } else {
             AppStore.current?.showToast("Проездной оформлен", .success)
         }
+    }
+
+    /// One of the app's own products: ProductIDs, or a subscription or a pack of гигабайты the
+    /// panel's config added (payments.products), told apart by type as Тарифы does.
+    private static func isOwnProduct(_ t: StoreKit.Transaction) -> Bool {
+        ProductIDs.all.contains(t.productID) || t.productType == .autoRenewable || t.productType == .consumable
     }
 
     /// Bought with this key, with this device's own token, or with none (an offer code).

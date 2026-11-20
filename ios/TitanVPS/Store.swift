@@ -44,11 +44,32 @@ final class AppStore: ObservableObject {
     #endif
 
     /// The panel's switches in force (RemoteConfig, docs/BACKEND-CONFIG.md): the saved ones from
-    /// launch, newer ones with each load of the pass (updateRemote). Code off the main thread reads
-    /// RemoteConfig.current, set at the same moment.
+    /// launch, newer ones with each load of the pass (updateRemote) and from its URL again while
+    /// the app is open (refreshRemote). Code off the main thread reads RemoteConfig.current, set at
+    /// the same moment.
     @Published private(set) var remote = RemoteConfig.current
     /// The config's URL being asked: one request at a time.
     private var remoteFetch: Task<Void, Never>?
+    /// While the app is on screen: the config's URL again every minute (remoteOnScreen).
+    private var remotePoll: Task<Void, Never>?
+    /// The last ask of the config's URL, this run (Технический режим; no second ask of the same URL
+    /// within a few seconds of it). Not published: a screen that shows it redraws by itself.
+    private(set) var remoteCheck: RemoteCheck?
+    /// The panel's blocks closed by their × (RemoteBlock.dismissible), by id: not shown again here.
+    @Published private(set) var closedBlocks: Set<String> = Set(UserDefaults.standard.stringArray(forKey: AppStore.closedBlocksKey) ?? [])
+    static let closedBlocksKey = "titan.blocksClosed"
+
+    struct RemoteCheck: Equatable {
+        enum Result: Equatable {
+            case asking
+            /// 200 with another config than the one in force; 200 with the same; 304.
+            case changed, same, unchanged
+            case failed
+        }
+        var at: Date
+        var url: String
+        var result: Result
+    }
 
     /// Favourite servers, by name (ids change with the subscription).
     @Published private(set) var favorites: Set<String> = []
@@ -333,49 +354,99 @@ final class AppStore: ObservableObject {
     // MARK: The panel's config (RemoteConfig)
 
     /// After a load of the pass: the config its headers bring. «titan-config-url» wins (its JSON,
-    /// asked with the last ETag), else «titan-config»; with neither, or a URL that didn't answer
-    /// with a config, the one in force stays.
+    /// asked with the last ETag; not again if it answered a few seconds ago), else «titan-config»;
+    /// with neither, or a URL that didn't answer with a config, the one in force stays.
     private func updateRemote(from info: SubscriptionInfo) {
         if let url = RemoteConfig.https(info.remoteConfigUrl) {
-            fetchRemote(url)
+            fetchRemote(url, force: false)
         } else if let header = info.remoteConfig, let config = RemoteConfig.parse(header: header) {
             applyRemote(config, source: RemoteConfig.Source(kind: "header", at: Date()))
         }
     }
 
-    /// Back in the app: the config's URL again once a quarter of an hour has passed since its
-    /// last answer (the pass itself comes again after half an hour, RootView). Not before
-    /// Конфиденциальность is accepted.
-    func refreshRemoteIfStale() {
+    /// The config's URL asked again, cheap with its ETag (an unchanged config is a 304): as the
+    /// app opens and each time it comes back, every minute while it is on screen (remoteOnScreen),
+    /// right before Тарифы and Личный кабинет and from Технический режим ([force]: even if it
+    /// answered a few seconds ago). Not before Конфиденциальность is accepted, nor without a
+    /// pass, nor where the config rides on the pass itself (titan-config: each load brings it).
+    func refreshRemote(force: Bool = false) {
         guard UserDefaults.standard.bool(forKey: PrivacyNoticeView.key), subscription != nil,
-              let source = RemoteConfig.source, source.kind == "url", let url = RemoteConfig.https(source.url),
-              Date().timeIntervalSince(source.at) >= 900 else { return }
-        fetchRemote(url)
+              let url = remoteURL else { return }
+        fetchRemote(url, force: force)
     }
 
-    private func fetchRemote(_ url: URL) {
-        guard remoteFetch == nil else { return }
-        let saved = RemoteConfig.source
-        // The ETag is only the same URL's.
-        let etag = saved?.url == url.absoluteString ? saved?.etag : nil
-        remoteFetch = Task {
-            defer { remoteFetch = nil }
-            switch await RemoteConfigAPI.fetch(url, etag: etag) {
-            case .config(let config, etag: let tag):
-                applyRemote(config, source: RemoteConfig.Source(kind: "url", url: url.absoluteString, etag: tag, at: Date()))
-            case .unchanged:
-                RemoteConfigCache.noteSource(RemoteConfig.Source(kind: "url", url: url.absoluteString, etag: etag, at: Date()))
-            case .failed:
-                break
+    /// Технический режим's «Проверить сейчас»: the ask, and its answer awaited.
+    func recheckRemote() async {
+        refreshRemote(force: true)
+        await remoteFetch?.value
+    }
+
+    /// The app on screen or not (RootView, by its scene's phase): on screen, the config's URL now
+    /// and then every minute; off screen, not at all (a Task cancelled, none left in the
+    /// background). Called again, the minute starts over.
+    func remoteOnScreen(_ on: Bool) {
+        remotePoll?.cancel()
+        remotePoll = nil
+        guard on else { return }
+        refreshRemote()
+        remotePoll = Task { [weak self] in
+            while true {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                self.refreshRemote()
             }
         }
     }
 
+    /// Where the config comes from: the pass's titan-config-url; with no URL and no config of its
+    /// own in the pass, the URL it last came from.
+    private var remoteURL: URL? {
+        if let info = subscription?.info {
+            if let url = RemoteConfig.https(info.remoteConfigUrl) { return url }
+            if info.remoteConfig != nil { return nil }
+        }
+        guard let source = RemoteConfig.source, source.kind == "url" else { return nil }
+        return RemoteConfig.https(source.url)
+    }
+
+    /// One ask at a time; without [force], none of a URL that answered under 10 s ago (the pass's
+    /// load right after the app came back asks once, not twice).
+    private func fetchRemote(_ url: URL, force: Bool) {
+        guard remoteFetch == nil else { return }
+        let address = url.absoluteString
+        if !force, let last = remoteCheck, last.url == address, last.result != .failed,
+           Date().timeIntervalSince(last.at) < 10 { return }
+        let saved = RemoteConfig.source
+        // The ETag is only the same URL's.
+        let etag = saved?.url == address ? saved?.etag : nil
+        remoteCheck = RemoteCheck(at: Date(), url: address, result: .asking)
+        remoteFetch = Task {
+            defer { remoteFetch = nil }
+            let result: RemoteCheck.Result
+            switch await RemoteConfigAPI.fetch(url, etag: etag) {
+            case .config(let config, etag: let tag):
+                let changed = applyRemote(config, source: RemoteConfig.Source(kind: "url", url: address, etag: tag, at: Date()))
+                result = changed ? .changed : .same
+            case .unchanged:
+                RemoteConfigCache.noteSource(RemoteConfig.Source(kind: "url", url: address, etag: etag, at: Date(),
+                                                                 changed: saved?.changed))
+                result = .unchanged
+            case .failed:
+                result = .failed
+            }
+            if remoteCheck?.url == address { remoteCheck?.result = result }
+        }
+    }
+
     /// Saved, and in force at once: the screens follow `remote`; what isn't on a screen is set here.
-    private func applyRemote(_ config: RemoteConfig, source: RemoteConfig.Source) {
+    /// True when it is another config than the one in force (its time noted: Source.changed).
+    @discardableResult
+    private func applyRemote(_ config: RemoteConfig, source: RemoteConfig.Source) -> Bool {
         let old = remote
+        var source = source
+        source.changed = config != old ? Optional(source.at) : RemoteConfig.source?.changed
         RemoteConfigCache.save(config, source: source)
-        guard config != old else { return }
+        guard config != old else { return false }
         remote = config
         let stopped = vpn.map { routeStopped($0) } ?? false
         fitChoice(stopped: stopped)
@@ -392,7 +463,77 @@ final class AppStore: ObservableObject {
         if old.purchaseEndpoint == nil, config.purchaseEndpoint != nil {
             Task { await AppStorePurchases.shared.deliverUnfinished() }
         }
+        // Products the panel lists anew: the App Store asked for them (Тарифы may be up).
+        if old.storeProductIds(builtIn: ProductIDs.all) != config.storeProductIds(builtIn: ProductIDs.all) {
+            Task { await AppStorePurchases.shared.wantedChanged() }
+        }
         #endif
+        return true
+    }
+
+    // MARK: The panel's blocks (RemoteBlock)
+
+    /// What a place on screen shows of the panel's blocks now: those for [slot] whose conditions
+    /// hold (the pass's status, on the way or standing, this build, the time), whose action this
+    /// build can do now (canDo), not closed by hand; three at most, in the panel's order. It reads
+    /// the route's state too (vpn): a screen that shows them observes the VPN itself, and the
+    /// time's bounds take effect at its next redraw.
+    func blocks(for slot: RemoteBlock.Slot, now: Date = Date()) -> [RemoteBlock] {
+        let pass: RemoteBlock.PassStatus? = subscription.map { (s: Subscription) -> RemoteBlock.PassStatus in
+            s.info.expire > 0 && s.info.expire <= Int64(now.timeIntervalSince1970) ? .expired : .active
+        }
+        let onTrip = (vpn?.isOn ?? false) || vpnPaused
+        let build = RemoteConfig.build
+        let shown = remote.blocks(for: slot).filter { b in
+            !(b.dismissible && closedBlocks.contains(b.id))
+                && b.when.allows(pass: pass, onTrip: onTrip, build: build, now: now) && canDo(b.action)
+        }
+        return Array(shown.prefix(RemoteConfig.blocksPerPlace))
+    }
+
+    /// A block's action this build can do now: Тарифы and the packs with a way to pay
+    /// (RemoteConfig.renewOn; the packs with a pass to add to), the cabinet where it is on and
+    /// has a way in (as Проездной's «Личный кабинет»), the bot where the app has its ways out
+    /// (AppStorePurchases.linksOut); none of those four without TITAN_PAYMENTS. Links, tabs,
+    /// copying and support always (a link that isn't https or titanvps:// makes no block).
+    func canDo(_ action: RemoteBlock.Action?) -> Bool {
+        guard let action else { return true }
+        switch action {
+        case .url, .screen, .copy, .deeplink, .support:
+            return true
+        case .tariffs:
+            #if TITAN_PAYMENTS
+            return remote.renewOn
+            #else
+            return false
+            #endif
+        case .packs:
+            #if TITAN_PAYMENTS
+            return remote.renewOn && subscription != nil
+            #else
+            return false
+            #endif
+        case .cabinet:
+            #if TITAN_PAYMENTS
+            return remote.cabinetOn && (subscription?.info.webPageUrl != nil || AppStorePurchases.shared.linksOut)
+            #else
+            return false
+            #endif
+        case .bot:
+            #if TITAN_PAYMENTS
+            return AppStorePurchases.shared.linksOut
+            #else
+            return false
+            #endif
+        }
+    }
+
+    /// A block's ×: not shown on this device again (the last 200 closed are remembered).
+    func closeBlock(_ id: String) {
+        guard !closedBlocks.contains(id) else { return }
+        let saved = Array(((UserDefaults.standard.stringArray(forKey: Self.closedBlocksKey) ?? []) + [id]).suffix(200))
+        UserDefaults.standard.set(saved, forKey: Self.closedBlocksKey)
+        closedBlocks = Set(saved)
     }
 
     /// The choice as the config allows it: «Авто · объезды» turned off (routes.autoBypass) goes to

@@ -114,6 +114,9 @@ struct RootView: View {
                 store.leftApp()
                 wasInBackground = true
             }
+            // The panel's config: asked again now and every minute while the app is on screen,
+            // not at all off it (AppStore.remoteOnScreen).
+            store.remoteOnScreen(phase == .active)
             guard phase == .active else { return }
             // Back in the app: the VPN may have changed while it was away (the tunnel fell, iOS
             // Settings); the Live Activity and Пункт управления's toggle follow it again.
@@ -127,8 +130,6 @@ struct RootView: View {
             let opened = wasInBackground
             wasInBackground = false
             if opened, !splash { Task { await autoconnectOnOpen() } }
-            // The panel's config from its URL, a quarter of an hour after its last answer.
-            store.refreshRemoteIfStale()
             // After a while: the subscription again (renewed in the bot meanwhile?), which also
             // moves the reminders.
             guard privacyAccepted, let sub = store.subscription, Date().timeIntervalSince(sub.fetchedAt) > 1800 else { return }
@@ -143,6 +144,9 @@ struct RootView: View {
             let inBackground = UIApplication.shared.applicationState == .background
             // Opened later: then Автоподключение (scenePhase above).
             if inBackground { wasInBackground = true }
+            // The panel's config each minute from now while on screen: a launch already active may
+            // not change the scene's phase (the ask itself waits for Конфиденциальность and a pass).
+            store.remoteOnScreen(!inBackground)
             withAnimation { splash = false }
             // Nothing of the service before Конфиденциальность is accepted (acceptPrivacy then).
             guard privacyAccepted else { return }

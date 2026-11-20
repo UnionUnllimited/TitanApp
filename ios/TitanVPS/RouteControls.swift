@@ -302,6 +302,10 @@ struct RoutePill: View {
     /// Its shine while locked runs: off while Маршрут isn't on screen.
     var shines = true
     var lockedText = "Проверка…"
+    /// Its words standing and on the way: the panel's config may reword them (texts' route.go and
+    /// route.stop); the way between keeps its own.
+    var goTitle = TitanText.routeGo.builtIn
+    var stopTitle = TitanText.routeStop.builtIn
     /// Failed connect attempts so far: a new one after a tap shakes it.
     var failures = 0
     /// Tapped by the user: true to go. False back means it can't be done now.
@@ -356,9 +360,9 @@ struct RoutePill: View {
 
     private var title: String {
         switch shown {
-        case .off: return "Поехали"
+        case .off: return goTitle
         case .connecting: return "Строим маршрут…"
-        case .on: return "Остановиться"
+        case .on: return stopTitle
         case .disconnecting: return "Останавливаемся…"
         }
     }

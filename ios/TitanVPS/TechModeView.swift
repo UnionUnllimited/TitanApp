@@ -324,6 +324,8 @@ struct TechModeView: View {
     @State private var icmpHost = ""
     @State private var icmpRows: [(String, String)] = []
     @State private var icmpBusy = false
+    /// «Проверить сейчас» on the panel's config: its answer awaited.
+    @State private var checkingRemote = false
 
     private static let stampFormat: DateFormatter = {
         let f = DateFormatter()
@@ -364,7 +366,19 @@ struct TechModeView: View {
                 icmpCard
                 card("Dynamic Island", islandRows, caption: Self.islandCaption)
                 card("Удалённые настройки", remoteRows,
-                     caption: "Настройки из панели (docs/BACKEND-CONFIG.md): заголовки подписки titan-config (JSON в base64) и titan-config-url (ссылка на JSON, ETag). Обновляются с каждым обновлением подписки и при открытии приложения не чаще раза в 15 мин; без заголовков действуют последние сохранённые. Ничего не прислано — всё как по умолчанию.")
+                     caption: "Настройки из панели (docs/BACKEND-CONFIG.md): заголовки подписки titan-config (JSON в base64) и titan-config-url (ссылка на JSON, ETag). По ссылке проверяются при каждом открытии приложения, каждые 60 с, пока оно на экране, и перед «Тарифами» и «Личным кабинетом» (без изменений — ответ 304); titan-config — с каждым обновлением подписки. Без заголовков действуют последние сохранённые. Ничего не прислано — всё как по умолчанию.") {
+                    Button {
+                        checkingRemote = true
+                        Task {
+                            await store.recheckRemote()
+                            checkingRemote = false
+                        }
+                    } label: {
+                        Text(checkingRemote ? "Проверяем…" : "Проверить сейчас").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(checkingRemote)
+                }
                 card("Память туннеля", memRows,
                      caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 8 МБ до лимита Go сначала возвращает свободную память; если не хватило (за 3 МБ до лимита — сразу), туннель перезапускает Xray, не выключая VPN, но только если это освободит хотя бы 3 МБ сверх того, что было после прошлого запуска Xray (в журнале — когда новый Xray проверил серверы, через 5–25 с после перезапуска). Перезапуски, которые не держатся, идут всё реже (до раза в 4 мин), у самого лимита — уже через 10 с после прошлого. При смене сети Xray перезапускается не чаще раза в 20 с; та же сеть после паузы короче 15 с с тем же адресом — без перезапуска. Обновляется каждые 2 с.")
                 journalCard
@@ -577,9 +591,25 @@ struct TechModeView: View {
         } else if let refused = c.purchaseEndpointRefused {
             purchases = (refused.host ?? "") + " отклонён — не хост подписки, покупки ждут"
         }
+        var check = "в этом запуске не было"
+        if let last = store.remoteCheck {
+            let result: String
+            switch last.result {
+            case .asking: result = "идёт"
+            case .changed: result = "200, новые настройки"
+            case .same: result = "200, те же настройки"
+            case .unchanged: result = "304, без изменений"
+            case .failed: result = "нет ответа — действуют прежние"
+            }
+            check = "\(stamp(last.at)) — \(result)"
+        }
+        var changed = "не было"
+        if let at = RemoteConfig.source?.changed { changed = stamp(at) }
         var rows: [(String, String)] = [
             ("Источник", from),
-            ("Схема", c.version.map { "\($0) (приложение читает \(RemoteConfig.schema))" } ?? "не указана"),
+            ("Последняя проверка", check),
+            ("Последнее изменение", changed),
+            ("Схема", c.version.map { "\($0) (приложение читает 1 и \(RemoteConfig.schema))" } ?? "не указана"),
             ("Оплата", "\(on(c.paymentsOn)); App Store \(on(c.appStoreOn)), другие методы \(on(c.otherMethodsOn)), кабинет \(on(c.cabinetOn))"),
             ("Адрес покупок", purchases),
             ("Объявление", c.notice.map { n in "\(n.warning ? "warning" : "info"): \(n.text)" } ?? "нет"),
@@ -598,7 +628,41 @@ struct TechModeView: View {
         rows.append(("Маршруты", "auto \(auto), autoBypass \(on(c.autoBypassOn)), manualList \(list), bypassTab \(on(c.bypassTabOn)), restrictedDetection \(on(c.detectionOn))"))
         rows.append(("Дороги", "свободно < \(limits.good) мс, плотное < \(limits.calm) мс"))
         rows.append(("Функции", "liveActivity \(on(c.liveActivityOn)), techMode \(on(c.techModeOn)), animations \(on(c.animationsOn)), tabSwipe \(on(c.tabSwipeOn))"))
+        rows.append(("Товары App Store", productsText(c)))
+        // Per place: accepted from the panel, and shown now (conditions, actions, closed by hand).
+        let sent = c.blocks?.count ?? 0
+        let accepted = c.allBlocks
+        var blocks = "нет"
+        if sent > 0 {
+            blocks = "прислано \(sent), принято \(accepted.count)\n" + RemoteBlock.Slot.allCases.map { slot in
+                "\(slot.rawValue): \(accepted.filter { $0.slot == slot }.count), сейчас видно \(store.blocks(for: slot).count)"
+            }.joined(separator: "\n")
+        }
+        rows.append(("Блоки", blocks))
+        let texts = c.overriddenTexts
+        rows.append(("Тексты", texts.isEmpty ? "свои" : texts.map { "\($0.rawValue): «\(c.text($0))»" }.joined(separator: "\n")))
         return rows
+    }
+
+    /// The panel's products (payments.products) and what the App Store is asked for, in order.
+    private func productsText(_ c: RemoteConfig) -> String {
+        let listed = c.productList.map { p -> String in
+            var line = p.id + (p.hidden ? " — скрыт" : "")
+            if let badge = p.badge { line += " [\(badge)]" }
+            if let note = p.note { line += " · \(note)" }
+            return line
+        }
+        #if TITAN_PAYMENTS
+        let asked = c.storeProductIds(builtIn: ProductIDs.all)
+        let purchases = AppStorePurchases.shared
+        let found = Set(purchases.products.map(\.id))
+        let answered = purchases.loaded
+        var order = "порядок: " + asked.map { !answered || found.contains($0) ? $0 : $0 + " (нет в App Store)" }.joined(separator: ", ")
+        if !answered { order += purchases.loadFailed ? " — App Store не ответил" : " — App Store ещё не спрашивали" }
+        #else
+        let order = "оплата не в сборке"
+        #endif
+        return (listed.isEmpty ? "из панели нет" : listed.joined(separator: "\n")) + "\n" + order
     }
 
     private static let islandCaption = "iOS сама завершает Live Activity через 8 часов после запуска и сразу убирает её из Dynamic Island (на экране блокировки карточка остаётся ещё до 4 часов). Запустить новую приложение может, только пока открыто, или по нажатию на Titan VPS в Пункте управления, Siri и кнопки Live Activity, поэтому при открытии приложения Live Activity старше часа заменяется новой. «Завершена iOS» примерно через 8 часов после запуска — это и есть лимит; «убрана с экрана блокировки» — её смахнули или прошли ещё 4 часа. Время — когда приложение это заметило."
