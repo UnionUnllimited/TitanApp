@@ -840,7 +840,14 @@ func TestTitanQUICIdleProbes(t *testing.T) {
 	for r := range rounds {
 		for _, ss := range subjects[:n] {
 			if err := titanHyProbe(dest, ss); err != nil {
-				t.Fatal(err)
+				// A busy CI runner's loopback can lose a handshake now and then (quic-go's
+				// "timeout: no recent network activity", round 5 of 8 once). Dials aren't what
+				// these rounds measure: one more try. The counts below still check that the
+				// failed probe left nothing pooled or open.
+				t.Logf("round %d: a probe failed (%v), once more", r, err)
+				if err := titanHyProbe(dest, ss); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		pooled := len(manager.titanClients())
