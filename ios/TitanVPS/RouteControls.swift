@@ -92,10 +92,13 @@ enum RouteTraffic {
 
 /// A server's Пинг as a tinted chip (design C): «85 мс» green, orange or red as on the road,
 /// «таймаут» red, a speedometer while not measured, a spinner while measuring (over the old
-/// value, dimmed).
+/// value, dimmed) with a light band running across it (ChipShimmer; none with Reduce Motion).
+/// A new number rolls in, its colour fades over.
 struct PingChip: View {
     let ping: Int?
     let pending: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let level = RouteTraffic.level(ping)
@@ -107,6 +110,7 @@ struct PingChip: View {
             }
             if let ping {
                 Text(ping >= 0 ? "\(ping) мс" : "таймаут").monospacedDigit().opacity(pending ? 0.5 : 1)
+                    .contentTransition(.numericText())
             } else if !pending {
                 Image(systemName: "speedometer")
             }
@@ -117,6 +121,14 @@ struct PingChip: View {
         .padding(.horizontal, 10)
         .frame(minHeight: 26)
         .background(Self.fill(level), in: Capsule())
+        .overlay {
+            if pending && !reduceMotion {
+                ChipShimmer(dark: scheme == .dark)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: ping)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Задержка" + Self.spokenTail(ping, pending: pending))
     }
@@ -153,6 +165,81 @@ struct PingChip: View {
         case .dense: return RouteTone.midFill
         case .jam, .timeout: return RouteTone.badFill
         case nil: return Glass.well
+        }
+    }
+}
+
+/// The light band across a road chip while its road is checked (PingChip): Core Animation's own
+/// gradient sweep, so a whole list's chips shining at once (Проверить дороги) cost no SwiftUI
+/// redraws and no offscreen masks. Every chip's band runs in step, whenever it came. It runs
+/// only while in a window (a tab off screen has none) and, as all of Core Animation, isn't drawn
+/// in the background.
+struct ChipShimmer: UIViewRepresentable {
+    var dark = false
+
+    func makeUIView(context: Context) -> Band {
+        let band = Band()
+        band.dark = dark
+        return band
+    }
+
+    func updateUIView(_ band: Band, context: Context) {
+        band.dark = dark
+    }
+
+    final class Band: UIView {
+        override class var layerClass: AnyClass { CAGradientLayer.self }
+        private static let sweepKey = "sweep"
+        private static let duration: CFTimeInterval = 1.3
+        private var gradient: CAGradientLayer { layer as! CAGradientLayer }
+
+        /// Softer on the dark theme's chips.
+        var dark = false {
+            didSet { if dark != oldValue { paint() } }
+        }
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            isAccessibilityElement = false
+            backgroundColor = .clear
+            gradient.startPoint = CGPoint(x: 0, y: 0.5)
+            gradient.endPoint = CGPoint(x: 1, y: 0.5)
+            gradient.locations = [-0.6, -0.3, 0]
+            // The chip's capsule: one layer's own rounded clip.
+            gradient.masksToBounds = true
+            paint()
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            layer.cornerRadius = bounds.height / 2
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            gradient.removeAnimation(forKey: Self.sweepKey)
+            guard window != nil else { return }
+            let sweep = CABasicAnimation(keyPath: "locations")
+            sweep.fromValue = [-0.6, -0.3, 0] as [NSNumber]
+            sweep.toValue = [1, 1.3, 1.6] as [NSNumber]
+            sweep.duration = Self.duration
+            sweep.repeatCount = .infinity
+            // Kept through a trip to the background (Core Animation would drop it as finished).
+            sweep.isRemovedOnCompletion = false
+            // On the media clock's beat: every chip's band crosses at the same time.
+            sweep.timeOffset = CACurrentMediaTime().truncatingRemainder(dividingBy: Self.duration)
+            gradient.add(sweep, forKey: Self.sweepKey)
+        }
+
+        private func paint() {
+            let clear = UIColor.white.withAlphaComponent(0)
+            let light = UIColor.white.withAlphaComponent(dark ? 0.16 : 0.6)
+            gradient.colors = [clear.cgColor, light.cgColor, clear.cgColor]
         }
     }
 }
@@ -211,6 +298,8 @@ struct RoutePill: View {
 
     let phase: Phase
     var locked = false
+    /// Its shine while locked runs: off while Маршрут isn't on screen.
+    var shines = true
     var lockedText = "Проверка…"
     /// Failed connect attempts so far: a new one after a tap shakes it.
     var failures = 0
@@ -239,7 +328,7 @@ struct RoutePill: View {
                 .padding(.horizontal, 20)
                 .frame(maxWidth: .infinity, minHeight: 58))
                 .saturation(locked ? 0.15 : 1)
-                .shimmer(locked, tint: Color.white.opacity(0.45), duration: 1.4)
+                .shimmer(locked && shines, tint: Color.white.opacity(0.45), duration: 1.4)
                 .contentShape(Capsule())
         }
         .buttonStyle(PressableStyle(scale: 0.97))
@@ -333,9 +422,11 @@ struct RoutePill: View {
     }
 }
 
-/// The trip card's clock, HH:MM:SS since the VPN came up: only this redraws each second.
+/// The trip card's clock, HH:MM:SS since the VPN came up: only this redraws each second, its
+/// digits rolling over (none with Reduce Motion).
 struct TripTimer: View {
     let since: Date
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
@@ -344,6 +435,8 @@ struct TripTimer: View {
                 .font(.scaled(46, weight: .bold).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
+                .contentTransition(.numericText())
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: s)
                 .accessibilityLabel("Время в пути")
                 .accessibilityValue(Self.spoken(s))
         }

@@ -283,12 +283,16 @@ struct RootView: View {
 
 /// Маршрут / Проездной / Профиль (Tab.home, .subscription, .profile) on a floating glass
 /// capsule (design C with «Линза»'s glass, Glass.swift): the picked one in the brand colour on
-/// a raised tinted thumb that slides over with a spring (none with Reduce Motion).
+/// a raised tinted thumb that slides over with a spring (none with Reduce Motion). A tapped
+/// icon bounces: the symbol's own bounce from iOS 17, a scale's spring on iOS 16 (BumpEffect);
+/// none with Reduce Motion.
 struct TitanTabBar: View {
     @Binding var selection: Tab
     /// A tap on the tab already picked: its screen back to the top, as iOS's own bar does.
     var reselect: (Tab) -> Void = { _ in }
     @Namespace private var thumb
+    /// Taps on each tab's icon so far: each one bounces it once.
+    @State private var bounces: [Tab: Int] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Item: Identifiable {
@@ -308,14 +312,13 @@ struct TitanTabBar: View {
             ForEach(items) { item in
                 let on = item.id == selection
                 Button {
+                    if !reduceMotion { bounces[item.id, default: 0] += 1 }
                     guard !on else { reselect(item.id); return }
                     Haptics.selection()
                     selection = item.id
                 } label: {
                     VStack(spacing: 2) {
-                        // Filled, as the system bar drew them.
-                        Image(systemName: item.icon).symbolVariant(.fill)
-                            .font(.scaled(19, weight: .semibold))
+                        icon(item.icon, bounce: bounces[item.id, default: 0])
                             .frame(height: 22)
                         Text(item.title).font(.scaled(10, weight: .semibold)).lineLimit(1)
                     }
@@ -344,6 +347,20 @@ struct TitanTabBar: View {
         .glassSurface(.bar, in: Capsule())
         // On an iPad the items stay together in the middle.
         .frame(maxWidth: 420)
+    }
+
+    /// A tab's symbol, filled as the system bar drew them, bounced once for each tap ([bounce]).
+    @ViewBuilder private func icon(_ name: String, bounce: Int) -> some View {
+        let image = Image(systemName: name).symbolVariant(.fill)
+            .font(.scaled(19, weight: .semibold))
+        if #available(iOS 17.0, *) {
+            image.symbolEffect(.bounce, value: bounce)
+        } else {
+            image
+                .modifier(BumpEffect(animatableData: CGFloat(bounce), scale: 0.2))
+                // Its own timing, not the thumb's spring that a tap brings too.
+                .animation(.linear(duration: 0.45), value: bounce)
+        }
     }
 }
 

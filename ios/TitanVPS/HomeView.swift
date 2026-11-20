@@ -24,6 +24,8 @@ struct HomeView: View {
     @State private var traffic = TrafficMonitor()
     /// Наверх: shown once the list is about a screen down.
     @State private var showTop = false
+    /// The list has just been opened: its first rows come in one after another (staggerRows).
+    @State private var rowsComing = false
     /// When the trip on screen began: kept while the route is built again to another direction
     /// (connecting from on the way), so the trip card stays through a switch.
     @State private var tripSince: Date?
@@ -43,6 +45,8 @@ struct HomeView: View {
     private static let choicesTop = "home.choicesTop"
     private static let listTop = "home.listTop"
     private static let listSpace = "home.list"
+    /// A phone's scroll content: the map's parallax is read in it against the list's ScrollView.
+    private static let contentSpace = "home.content"
     /// How far the sheet comes up over the map's lower edge.
     private static let sheetLift: CGFloat = 24
 
@@ -96,11 +100,14 @@ struct HomeView: View {
                 mapHeader(proxy, wide: false)
                 sheet(proxy)
             }
-            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: tripMode)
+            .animation(unfold, value: tripMode)
             .frame(maxWidth: 640)
             .frame(maxWidth: .infinity)
-            .backgroundPreferenceValue(RouteBandKey.self) { mapArt($0) }
+            .backgroundPreferenceValue(RouteBandKey.self) { mapArt($0, parallax: Self.parallax) }
             .background(depth(screen: geo.size.height))
+            // Here, over the background too: the picture behind and the route over it are read
+            // in the same space (MapParallax).
+            .coordinateSpace(name: Self.contentSpace)
             .id(Self.top)
         }
         .coordinateSpace(name: Self.listSpace)
@@ -125,8 +132,8 @@ struct HomeView: View {
         return HStack(alignment: .top, spacing: 0) {
             ScrollView {
                 mapHeader(proxy, wide: true)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.85), value: tripMode)
-                    .backgroundPreferenceValue(RouteBandKey.self) { mapArt($0) }
+                    .animation(unfold, value: tripMode)
+                    .backgroundPreferenceValue(RouteBandKey.self) { mapArt($0, parallax: nil) }
                     .id(Self.controlsTop)
             }
             .scrollDisabled(holdingDrag)
@@ -151,11 +158,15 @@ struct HomeView: View {
     }
 
     /// The map picture behind the content, laid by where the route band is (RouteMapArt).
-    private func mapArt(_ anchor: Anchor<CGRect>?) -> some View {
+    private func mapArt(_ anchor: Anchor<CGRect>?, parallax: MapParallax?) -> some View {
         GeometryReader { g in
-            if let anchor { RouteMapArt(band: g[anchor]) }
+            if let anchor { RouteMapArt(band: g[anchor], parallax: parallax) }
         }
     }
+
+    /// A phone's map goes up a little slower than the sheet over it (not in a wide window, where
+    /// the map has a column of its own).
+    private static var parallax: MapParallax { MapParallax(content: contentSpace, scroll: listSpace) }
 
     /// The sheet over the map's lower edge: «Авто» and «Авто · объезды», «Поехали» under them
     /// while standing, then the list tucked away. Glass where it lies over the map, solid under
@@ -253,9 +264,22 @@ struct HomeView: View {
         }
     }
 
-    /// The endpoint's rings pulse on the way, while Маршрут and the map are on screen.
-    private var pulsing: Bool {
-        tripMode && vpn.isConnected && onScreen && scenePhase == .active && !reduceMotion && !showTop
+    /// The map's repeating motion may run: Маршрут and the map on screen (the list not a screen
+    /// down), the app active, Reduce Motion off. Its frames are never asked for otherwise.
+    private var mapLive: Bool {
+        onScreen && scenePhase == .active && !reduceMotion && !showTop
+    }
+
+    /// The endpoint's rings pulse on the way, the route up.
+    private var pulsing: Bool { tripMode && vpn.isConnected && mapLive }
+
+    /// The arrow glides along the route on the way, through a switch to another direction too.
+    private var gliding: Bool { tripMode && mapLive }
+
+    /// The route is being built (Строим маршрут…, Меняем направление…): its dots run to the pin.
+    private var flowing: Bool {
+        if case .connecting = vpn.state { return mapLive }
+        return false
     }
 
     private var statusTitle: String {
@@ -327,11 +351,11 @@ struct HomeView: View {
             topBar
             notices
             titleBlock
-            band
+            band(wide: wide)
             if tripMode {
                 tripCard(proxy)
                     .padding(.horizontal, 16)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .transition(tripEntrance)
                 if wide {
                     choices(proxy)
                         .padding(16)
@@ -441,18 +465,24 @@ struct HomeView: View {
     }
     #endif
 
-    /// «Стоим», «В пути · Финляндия»…, the pause's line, the error in red.
+    /// «Стоим», «В пути · Финляндия»…, the pause's line, the error in red. A new title comes up
+    /// into its place as the old one goes up and out (a fade with Reduce Motion).
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(statusTitle)
-                .font(.scaled(34, weight: .heavy))
-                .foregroundStyle(statusColor)
-                // A long direction («В пути · Лучший маршрут · Европа»): two lines, smaller.
-                .lineLimit(2)
-                .minimumScaleFactor(0.6)
-                .fixedSize(horizontal: false, vertical: true)
-                .animation(.easeInOut(duration: 0.25), value: statusTitle)
-                .accessibilityAddTraits(.isHeader)
+            ZStack(alignment: .topLeading) {
+                Text(statusTitle)
+                    .font(.scaled(34, weight: .heavy))
+                    .foregroundStyle(statusColor)
+                    // A long direction («В пути · Лучший маршрут · Европа»): two lines, smaller.
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.6)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                    .id(statusTitle)
+                    .transition(titleChange)
+            }
+            .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.45, dampingFraction: 0.9),
+                       value: statusTitle)
             if paused {
                 Text("Поедем дальше сами, когда проверим дороги")
                     .font(.scaled(15, weight: .medium)).foregroundStyle(RouteTone.ink2)
@@ -468,13 +498,21 @@ struct HomeView: View {
         .padding(.top, 14)
     }
 
+    private var titleChange: AnyTransition {
+        reduceMotion ? .opacity
+            : .asymmetric(insertion: .opacity.combined(with: .offset(y: 12)),
+                          removal: .opacity.combined(with: .offset(y: -12)))
+    }
+
     /// The route drawn over the map (RouteBand, in the picture's units: its width sets its
-    /// height), Поддержка and Обновить проездной as the map's round buttons on its right.
-    private var band: some View {
+    /// height), Поддержка and Обновить проездной as the map's round buttons on its right (they
+    /// stay with the content, not the map's parallax).
+    private func band(wide: Bool) -> some View {
         let s = store.selected
         return RouteBand(mode: tripMode ? .driving : .parked, server: s?.name,
                          destination: s.map { destination($0, onTheWay: tripMode) } ?? "",
-                         pulsing: pulsing)
+                         pulsing: pulsing, gliding: gliding, flowing: flowing,
+                         parallax: wide ? nil : Self.parallax)
             .aspectRatio(RouteMap.width / RouteMap.bandHeight, contentMode: .fit)
             .anchorPreference(key: RouteBandKey.self, value: .bounds) { $0 }
             .overlay { mapButtons }
@@ -518,8 +556,18 @@ struct HomeView: View {
         }
     }
 
+    /// The trip card comes up from below on a spring of its own, a little bouncier than the
+    /// layout's; it goes down and out. A fade with Reduce Motion.
+    private var tripEntrance: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .bottom))
+                .animation(.spring(response: 0.5, dampingFraction: 0.78)),
+            removal: .opacity.combined(with: .move(edge: .bottom)))
+    }
+
     private var pill: some View {
-        RoutePill(phase: pillPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Проверка…",
+        RoutePill(phase: pillPhase, locked: store.pingBusy, shines: onScreen, lockedText: paused ? "Пауза" : "Проверка…",
                   failures: vpn.failures, onToggle: toggleVPN,
                   onLockedTap: { store.showToast("Идёт проверка дорог — кнопка вернётся через пару секунд", .info) })
     }
@@ -546,7 +594,8 @@ struct HomeView: View {
             }
             if choice == .manual, let s = store.selected {
                 manualRow(s, proxy)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                    .transition(reduceMotion ? AnyTransition.opacity
+                                : AnyTransition.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             }
         }
         .animation(unfold, value: choice)
@@ -594,7 +643,7 @@ struct HomeView: View {
                             .font(.scaled(13, weight: .semibold))
                             .foregroundStyle(RouteTone.warn)
                             .fixedSize(horizontal: false, vertical: true)
-                            .transition(.opacity)
+                            .transition(noteChange)
                     }
                 }
                 .multilineTextAlignment(.leading)
@@ -612,9 +661,17 @@ struct HomeView: View {
             .contentShape(shape)
         }
         .buttonStyle(PressableStyle(scale: 0.98))
+        // Picked: it gives a little and springs back as its tint comes.
+        .modifier(SelectionPop(on: picked))
         .accessibilityLabel(spoken)
         .accessibilityAddTraits(picked ? .isSelected : [])
         .accessibilityHint(locked ? "Недоступно на Wi‑Fi" : "")
+    }
+
+    /// The mobile internet check's note slides down into its card (a fade with Reduce Motion).
+    private var noteChange: AnyTransition {
+        reduceMotion ? .opacity
+            : .asymmetric(insertion: .opacity.combined(with: .offset(y: -8)), removal: .opacity)
     }
 
     /// «Авто»'s sparkles on the brand's gradient (as «Лучший маршрут»'s tile), «Авто · объезды»'s
@@ -715,6 +772,7 @@ struct HomeView: View {
         if tab != page { withAnimation(Glass.spring(reduceMotion)) { page = tab } }
         if !listOpen {
             Haptics.selection()
+            staggerRows()
             withAnimation(unfold) { listOpen = true }
         }
         // Once the list is laid out.
@@ -887,7 +945,8 @@ struct HomeView: View {
                 .background(RouteTone.detour, in: Capsule())
         }
         .buttonStyle(PressableStyle())
-        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
+        .transition(reduceMotion ? AnyTransition.opacity
+                    : AnyTransition.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
         .accessibilityHint("Через «Авто · объезды», когда мобильный интернет ограничен")
     }
 
@@ -912,10 +971,17 @@ struct HomeView: View {
                 listToggle(count: sub.servers.count)
                 if listOpen {
                     list(proxy, wide: wide)
-                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -10)), removal: .opacity))
+                        .transition(listChange)
                 }
             }
         }
+    }
+
+    /// The list comes down a little into its place as it fades in (its first rows one after
+    /// another, RowEntrance), and fades out as it closes; a fade only with Reduce Motion.
+    private var listChange: AnyTransition {
+        reduceMotion ? .opacity
+            : .asymmetric(insertion: .opacity.combined(with: .offset(y: -10)), removal: .opacity)
     }
 
     /// The row that opens and closes the list: how many directions there are, a chevron that
@@ -924,6 +990,7 @@ struct HomeView: View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         return Button {
             Haptics.selection()
+            if !listOpen { staggerRows() }
             withAnimation(unfold) { listOpen.toggle() }
         } label: {
             HStack(spacing: 10) {
@@ -1108,14 +1175,23 @@ struct HomeView: View {
         .accessibilityLabel(busy ? "Остановить проверку дорог" : "Проверить дороги всех направлений")
     }
 
+    /// The list opening: its first rows come in one after another (RowEntrance), once; none
+    /// with Reduce Motion. Rows of another tab or a refreshed list are simply there.
+    private func staggerRows() {
+        guard !reduceMotion else { return }
+        rowsComing = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { rowsComing = false }
+    }
+
     /// The tab's rows: favourites first, in the pass's order otherwise.
     private func rows(_ items: [Server], bypassTab: Bool) -> some View {
         // Read once for the list, not per row.
         let selectedId = store.selected?.id
         let wifiLock = store.bypassLockedOnWifi
         let tricked = Set(TechniqueStore.decode(techniquesData).keys)
+        let coming = rowsComing
         return VStack(spacing: 4) {
-            ForEach(ServerGroup.ordered(items, favorites: store.favorites)) { s in
+            ForEach(Array(ServerGroup.ordered(items, favorites: store.favorites).enumerated()), id: \.element.id) { i, s in
                 // As store.blockedOnWifi(s).
                 let locked = wifiLock && ServerGroup.isBypass(s)
                 ServerListRow(server: s, ping: store.pings[s.id], pending: store.measuring.contains(s.id),
@@ -1126,6 +1202,8 @@ struct HomeView: View {
                               onPing: { store.pingOne(s) }, onFavorite: { store.toggleFavorite(s) },
                               onHold: { holdingDrag = $0 })
                     .equatable()
+                    // The first eight as the list opens, 30 ms apart.
+                    .modifier(RowEntrance(delay: Double(min(i, 7)) * 0.03, active: coming && i < 8))
             }
         }
     }
@@ -1325,20 +1403,47 @@ struct ServerRow: View {
     }
 }
 
-/// A choice card's radio, as a row's in the list: a ring, a dot inside it when picked.
+/// A choice card's radio, as a row's in the list: a ring, a dot inside it when picked, which
+/// springs in (a fade with Reduce Motion).
 private struct RadioMark: View {
     let on: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
             Circle().strokeBorder(on ? Palette.primary : Palette.outline, lineWidth: on ? 2 : 1.5)
             if on {
                 Circle().fill(Palette.primary).frame(width: 12, height: 12)
-                    .transition(.scale(scale: 0.3).combined(with: .opacity))
+                    .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.scale(scale: 0.3).combined(with: .opacity))
             }
         }
         .frame(width: 24, height: 24)
+        // Its own spring, bouncier than the card's around it.
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.32, dampingFraction: 0.55), value: on)
         .accessibilityHidden(true)
+    }
+}
+
+/// A row of the list as it opens: from a little lower and clear into its place, [delay] after
+/// the list (the first ones one after another). active: it came with the opening; otherwise it
+/// is simply there. Only on its first appearance: the state is its own.
+private struct RowEntrance: ViewModifier {
+    let delay: Double
+    @State private var hidden: Bool
+
+    init(delay: Double, active: Bool) {
+        self.delay = delay
+        _hidden = State(initialValue: active)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(hidden ? 0 : 1)
+            .offset(y: hidden ? 10 : 0)
+            .onAppear {
+                guard hidden else { return }
+                withAnimation(.easeOut(duration: 0.3).delay(delay)) { hidden = false }
+            }
     }
 }
 

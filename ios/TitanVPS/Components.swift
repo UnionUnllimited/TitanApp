@@ -289,17 +289,19 @@ struct ProgressRing: View {
     }
 }
 
-/// A light band running across the view (a shine on something busy).
+/// A light band running across the view (a shine on something busy). Still while the app isn't
+/// active (its frames aren't asked for in the background or under Пункт управления).
 struct Shimmer: ViewModifier {
     var active = true
     var duration = 1.6
     var tint: Color = .white
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     func body(content: Content) -> some View {
         content.overlay {
             if active && !reduceMotion {
-                TimelineView(.animation) { ctx in
+                TimelineView(.animation(minimumInterval: nil, paused: scenePhase != .active)) { ctx in
                     let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: duration) / duration
                     GeometryReader { g in
                         LinearGradient(colors: [tint.opacity(0), tint.opacity(0.55), tint.opacity(0)],
@@ -327,6 +329,53 @@ struct ShakeEffect: GeometryEffect {
 
     func effectValue(size: CGSize) -> ProjectionTransform {
         ProjectionTransform(CGAffineTransform(translationX: 7 * sin(animatableData * .pi * 4), y: 0))
+    }
+}
+
+/// A short bump each time animatableData goes up by one, animated linearly (the curve is its
+/// own, as ShakeEffect's): [scale] bigger (smaller below zero) and [lift] points higher at its
+/// height, then a small rebound past rest, and still. A tab's icon on iOS 16 (TitanTabBar), a
+/// card as it is picked (SelectionPop), the map's pin as the route comes up (RouteBand).
+struct BumpEffect: GeometryEffect {
+    var animatableData: CGFloat
+    var scale: CGFloat = 0
+    var lift: CGFloat = 0
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        let k = Self.curve(animatableData - animatableData.rounded(.down))
+        let s = 1 + scale * k
+        // Scaled about its middle, then lifted.
+        let t = CGAffineTransform(translationX: size.width / 2, y: size.height / 2 - lift * k)
+            .scaledBy(x: s, y: s)
+            .translatedBy(x: -size.width / 2, y: -size.height / 2)
+        return ProjectionTransform(t)
+    }
+
+    /// Over one bump (0 … 1): out to 1 and back by 40 %, then the rebound to -0.3 and back.
+    static func curve(_ p: CGFloat) -> CGFloat {
+        if p <= 0 || p >= 1 { return 0 }
+        if p < 0.4 { return sin(.pi * p / 0.4) }
+        return -0.3 * sin(.pi * (p - 0.4) / 0.6)
+    }
+}
+
+/// A card picked (Маршрут's «Авто» / «Авто · объезды»): it gives a little as [on] turns true and
+/// springs back to its size (BumpEffect, 0.97 at its deepest). Not as it appears, nor with
+/// Reduce Motion: its tint changing says it then.
+struct SelectionPop: ViewModifier {
+    let on: Bool
+    var amount: CGFloat = -0.03
+    @State private var pops: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(BumpEffect(animatableData: pops, scale: amount))
+            // Its own timing, whatever animates the pick around it.
+            .animation(.linear(duration: 0.42), value: pops)
+            .onChange(of: on) { now in
+                if now && !reduceMotion { pops += 1 }
+            }
     }
 }
 
