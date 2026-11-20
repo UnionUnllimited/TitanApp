@@ -570,11 +570,18 @@ struct TechModeView: View {
             from = "\(header), \(stamp(src.at))\(etag)"
         }
         let limits = c.roadLimits
+        // Only on the pass's own hosts (RemoteConfig.purchaseEndpoint).
+        var purchases = "нет — покупки ждут"
+        if let host = c.purchaseEndpoint?.host {
+            purchases = host
+        } else if let refused = c.purchaseEndpointRefused {
+            purchases = (refused.host ?? "") + " отклонён — не хост подписки, покупки ждут"
+        }
         var rows: [(String, String)] = [
             ("Источник", from),
             ("Схема", c.version.map { "\($0) (приложение читает \(RemoteConfig.schema))" } ?? "не указана"),
             ("Оплата", "\(on(c.paymentsOn)); App Store \(on(c.appStoreOn)), другие методы \(on(c.otherMethodsOn)), кабинет \(on(c.cabinetOn))"),
-            ("Адрес покупок", c.purchaseEndpoint?.host ?? "нет — покупки ждут"),
+            ("Адрес покупок", purchases),
             ("Объявление", c.notice.map { n in "\(n.warning ? "warning" : "info"): \(n.text)" } ?? "нет"),
             ("Техработы", c.maintenanceText ?? "нет"),
             ("Сборка", "эта \(RemoteConfig.build); minBuild \(c.update?.minBuild ?? 0), latestBuild \(c.update?.latestBuild ?? 0)"

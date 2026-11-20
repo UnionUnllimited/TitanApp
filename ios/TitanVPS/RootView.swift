@@ -16,7 +16,8 @@ struct RootView: View {
     /// Bumped by a tap on the tab already picked: that tab back to its top.
     @State private var toTop: [Tab: Int] = [:]
     @State private var splash = true
-    /// A titanvps:// link opened before Конфиденциальность was accepted: added right after.
+    /// A titanvps:// link opened before Конфиденциальность was accepted, or while the panel's
+    /// config holds this build back (update.minBuild): added right after either.
     @State private var pendingLink: URL?
     /// The app went to the background: back in it is an opening for Автоподключение.
     @State private var wasInBackground = false
@@ -151,9 +152,17 @@ struct RootView: View {
         // Технический режим switched: a bypass server's on demand follows it (Wi-Fi or not).
         .onChange(of: techMode) { _ in Task { await vpn.applyOnDemandRules() } }
         // titanvps://import/<key>, titanvps://add?url=<key> (same as Android): add and connect.
-        // Before Конфиденциальность is accepted it waits for that.
+        // Before Конфиденциальность is accepted it waits for that (and openLink holds it while
+        // this build is held back).
         .onOpenURL { url in
             if privacyAccepted { openLink(url) } else { pendingLink = url }
+        }
+        // The panel's config lets this build go again (update.minBuild lowered): a link that
+        // waited behind «Обновите Titan» is added now.
+        .onChange(of: store.remote.mustUpdate) { held in
+            guard !held, privacyAccepted, let url = pendingLink else { return }
+            pendingLink = nil
+            openLink(url)
         }
         .alert(store.message ?? "", isPresented: Binding(get: { store.message != nil }, set: { if !$0 { store.message = nil } })) {
             Button("OK", role: .cancel) {}
@@ -201,6 +210,11 @@ struct RootView: View {
     #endif
 
     private func openLink(_ url: URL) {
+        // «Обновите Titan» on screen (update.minBuild): nothing is added or connected behind it.
+        guard !store.remote.mustUpdate else {
+            pendingLink = url
+            return
+        }
         Task {
             guard await store.activate(url.absoluteString) else { return }
             tab = .home
@@ -284,11 +298,15 @@ struct RootView: View {
 
     /// Автоподключение: on each time the app is opened, at launch or back from the background
     /// (Не отключать VPN keeps it on after that). Not while it is on, going off, being connected
-    /// or paused for a ping, nor before Конфиденциальность is accepted; the profile's own status
-    /// first, as the app's may lag after a suspension (iOS may have brought it back meanwhile).
+    /// or paused for a ping, nor before Конфиденциальность is accepted, nor with this build held
+    /// back by the panel's config (update.minBuild: «Обновите Titan» is all there is); the
+    /// profile's own status first, as the app's may lag after a suspension (iOS may have brought
+    /// it back meanwhile). On mobile internet the check whether it is restricted comes first
+    /// (AppStore.settleMobileNet, a few seconds at most): «Авто» then starts on «Авто · объезды».
     private func autoconnectOnOpen() async {
-        guard autoconnect, privacyAccepted, !vpn.isOn, !(await TunnelSwitch.isOn()) else { return }
-        guard autoconnect, !vpn.isOn, vpn.state != .disconnecting, !vpn.connectsUnderWay,
+        guard autoconnect, privacyAccepted, !store.remote.mustUpdate, !vpn.isOn, !(await TunnelSwitch.isOn()) else { return }
+        await store.settleMobileNet()
+        guard autoconnect, !store.remote.mustUpdate, !vpn.isOn, vpn.state != .disconnecting, !vpn.connectsUnderWay,
               !store.pingBusy, !store.vpnPaused, let s = store.selected, !store.blockedOnWifi(s) else { return }
         await vpn.connect(s)
     }

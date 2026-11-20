@@ -11,7 +11,7 @@ struct HomeView: View {
     @EnvironmentObject var vpn: VPNController
     /// Why a ping or a check failed is shown in Технический режим only.
     @AppStorage(TechMode.key) private var techMode = false
-    /// «Выбрать направление вручную» opened or closed by hand (listOpen): nil until then.
+    /// «Выбрать направление вручную» opened or closed by hand (listOpen(wide:)): nil until then.
     @AppStorage(RouteChoice.listOpenKey) private var listOpenSaved: Bool?
     /// The panel's announcement closed by its × (its id), and the newer build's card (its number).
     @AppStorage("titan.announceClosed") private var closedNotice = ""
@@ -178,7 +178,7 @@ struct HomeView: View {
     private func sheet(_ proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 18) {
             VStack(spacing: 14) {
-                choices(proxy)
+                choices(proxy, wide: false)
                 if !tripMode {
                     pill
                         .transition(.opacity)
@@ -246,11 +246,12 @@ struct HomeView: View {
 
     // MARK: - State
 
-    /// «Выбрать направление вручную» open: as last opened or closed by hand; until then closed,
-    /// or open where the panel's config says so (RemoteConfig.routes.manualList «expanded»).
-    private var listOpen: Bool {
-        get { listOpenSaved ?? (store.remote.manualList == .expanded) }
-        nonmutating set { listOpenSaved = newValue }
+    /// «Выбрать направление вручную» open: as last opened or closed by hand; until then closed on
+    /// a phone, or open where the panel's config says so (RemoteConfig.routes.manualList
+    /// «expanded»). Open in a wide window: the list has a column of its own there, which would
+    /// otherwise hold that one row.
+    private func listOpen(wide: Bool) -> Bool {
+        listOpenSaved ?? (wide || store.remote.manualList == .expanded)
     }
 
     /// No list at all, «Авто» and «Авто · объезды» only (the panel's config, manualList «hidden»).
@@ -377,7 +378,7 @@ struct HomeView: View {
                     .padding(.horizontal, 16)
                     .transition(tripEntrance)
                 if wide {
-                    choices(proxy)
+                    choices(proxy, wide: true)
                         .padding(16)
                         .glassSurface(.card, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
                         .padding(.horizontal, 16)
@@ -712,7 +713,7 @@ struct HomeView: View {
     /// «Авто», «Авто · объезды» and «Поехали» under them (a wide window's map column).
     private func parkedControls(_ proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 14) {
-            choices(proxy)
+            choices(proxy, wide: true)
             pill
         }
     }
@@ -742,27 +743,37 @@ struct HomeView: View {
     /// tinted), and the direction picked by hand when it is neither, so the pick is always in
     /// sight (the owner's ask: «Авто» to start with, the list tucked away). A card with nothing to
     /// go to (no bypass in the pass) isn't shown.
-    private func choices(_ proxy: ScrollViewProxy) -> some View {
+    private func choices(_ proxy: ScrollViewProxy, wide: Bool) -> some View {
         let choice = store.choice
         let auto = store.autoServer
         let bypass = store.bypassServer
         return VStack(spacing: 10) {
             if let auto {
-                choiceCard(.auto, server: auto, picked: choice == .auto)
+                choiceCard(.auto, server: cardServer(auto, picked: choice == .auto, bypass: false), picked: choice == .auto)
             }
             if let bypass {
-                choiceCard(.bypass, server: bypass, picked: choice.isBypass, detected: choice == .bypassDetected)
+                choiceCard(.bypass, server: cardServer(bypass, picked: choice.isBypass, bypass: true),
+                           picked: choice.isBypass, detected: choice == .bypassDetected)
             }
             // By hand; or «Авто · объезды» the panel's config turned off, until the next load
             // settles it (AppStore.fitChoice): the pick still in sight.
             if choice == .manual || (choice.isBypass && bypass == nil), let s = store.selected {
-                manualRow(s, proxy)
+                manualRow(s, proxy, wide: wide)
                     .transition(reduceMotion ? AnyTransition.opacity
                                 : AnyTransition.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             }
         }
         .animation(unfold, value: choice)
         .id(Self.choicesTop)
+    }
+
+    /// What a card names: the picked one, the direction the route really goes to (or «Поехали»
+    /// starts), which may lag behind what the card would pick now (a road checked by its own
+    /// button since, the tunnel's own direction, a pass refreshed on the way: AppStore.choice);
+    /// the other one, where it would go if tapped.
+    private func cardServer(_ resolved: Server, picked: Bool, bypass: Bool) -> Server {
+        guard picked, let s = store.selected, ServerGroup.isBypass(s) == bypass else { return resolved }
+        return s
     }
 
     /// One of the two: its sign, name, what it does («Сейчас 🇫🇮 Финляндия» once known), how its
@@ -866,7 +877,7 @@ struct HomeView: View {
 
     /// The direction picked by hand, neither card's: «Вручную · 🇩🇪 Германия», its road and its
     /// chip. A tap: the list, opened at its tab.
-    private func manualRow(_ s: Server, _ proxy: ScrollViewProxy) -> some View {
+    private func manualRow(_ s: Server, _ proxy: ScrollViewProxy, wide: Bool) -> some View {
         let shown = (s.name.splitFlag.0.map { $0 + " " } ?? "") + RouteTile.title(s.name)
         let note = routeNote(s)
         let ping = store.pings[s.id]
@@ -876,7 +887,7 @@ struct HomeView: View {
         if measured { spoken += ", задержка" + PingChip.spokenTail(ping, pending: pending) }
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         let hasList = !listHidden
-        return Button { if hasList { openList(proxy, at: s) } } label: {
+        return Button { if hasList { openList(proxy, at: s, wide: wide) } } label: {
             HStack(spacing: 10) {
                 RadioMark(on: true)
                 VStack(alignment: .leading, spacing: 1) {
@@ -925,6 +936,8 @@ struct HomeView: View {
         let target: RouteChoice = (kind == .bypass && was == .bypassDetected) ? .bypassDetected : kind
         let from = store.selected?.id
         let changed = kind.isBypass ? !was.isBypass : (was != kind)
+        // Tapped again while picked: it names where the route goes (cardServer), which stays.
+        if !changed, let s = store.selected, ServerGroup.isBypass(s) == kind.isBypass { return }
         if changed { Haptics.selection() }
         let to = withAnimation(unfold) { store.choose(target, byUser: true) }
         // Coming back after a check: that reconnect goes over to the pick itself. The switch's
@@ -933,13 +946,13 @@ struct HomeView: View {
     }
 
     /// The list opened (if tucked away) at [s]'s tab, and down to it.
-    private func openList(_ proxy: ScrollViewProxy, at s: Server) {
+    private func openList(_ proxy: ScrollViewProxy, at s: Server, wide: Bool) {
         let tab: ServerGroup = ServerGroup.isBypass(s) && store.remote.bypassTabOn ? .bypass : .servers
         if tab != page { withAnimation(Glass.spring(reduceMotion)) { page = tab } }
-        if !listOpen {
+        if !listOpen(wide: wide) {
             Haptics.selection()
             staggerRows()
-            withAnimation(unfold) { listOpen = true }
+            withAnimation(unfold) { listOpenSaved = true }
         }
         // Once the list is laid out.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { scrollToList(proxy) }
@@ -1134,8 +1147,8 @@ struct HomeView: View {
     @ViewBuilder private func manualList(_ proxy: ScrollViewProxy, wide: Bool) -> some View {
         if let sub = store.subscription, !listHidden {
             VStack(spacing: 12) {
-                listToggle(count: listed(sub).count)
-                if listOpen {
+                listToggle(count: listed(sub).count, wide: wide)
+                if listOpen(wide: wide) {
                     list(proxy, wide: wide)
                         .transition(listChange)
                 }
@@ -1152,12 +1165,13 @@ struct HomeView: View {
 
     /// The row that opens and closes the list: how many directions there are, a chevron that
     /// turns down when open.
-    private func listToggle(count: Int) -> some View {
+    private func listToggle(count: Int, wide: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        let isOpen = listOpen(wide: wide)
         return Button {
             Haptics.selection()
-            if !listOpen { staggerRows() }
-            withAnimation(unfold) { listOpen.toggle() }
+            if !isOpen { staggerRows() }
+            withAnimation(unfold) { listOpenSaved = !isOpen }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "list.bullet")
@@ -1178,7 +1192,7 @@ struct HomeView: View {
                 Image(systemName: "chevron.right")
                     .font(.scaled(13, weight: .bold))
                     .foregroundStyle(RouteTone.ink3)
-                    .rotationEffect(.degrees(listOpen ? 90 : 0))
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 50)
@@ -1187,7 +1201,7 @@ struct HomeView: View {
         }
         .buttonStyle(PressableStyle(scale: 0.98))
         .accessibilityLabel("Выбрать направление вручную, " + ServerGroup.spokenCount(count))
-        .accessibilityValue(listOpen ? "список открыт" : "список скрыт")
+        .accessibilityValue(isOpen ? "список открыт" : "список скрыт")
     }
 
     /// Направления | Объезды (a group with no servers has no tab), the line about the tab with

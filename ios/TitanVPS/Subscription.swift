@@ -22,8 +22,8 @@ enum Config {
     /// Apple ID → Подписки, if StoreKit's own sheet doesn't open.
     static let manageSubscriptions = URL(string: "https://apps.apple.com/account/subscriptions")!
     /// Where App Store purchases go to extend the subscription (docs/BACKEND-APPSTORE.md): the
-    /// panel's config sends it (RemoteConfig.payments.purchaseEndpoint, https only). Nil until it
-    /// does: purchases then stay unfinished and StoreKit hands them over again.
+    /// panel's config sends it (RemoteConfig.payments.purchaseEndpoint, https on one of [hosts]
+    /// only). Nil until it does: purchases then stay unfinished and StoreKit hands them over again.
     static var purchaseEndpoint: URL? { RemoteConfig.current.purchaseEndpoint }
     #endif
     /// Удалить аккаунт through the bot (docs/BACKEND-APPSTORE.md). Nil until the bot has it:

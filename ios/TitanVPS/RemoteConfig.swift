@@ -28,7 +28,8 @@ struct RemoteConfig: Codable, Equatable {
         var appStore: Bool? = nil
         var otherMethods: Bool? = nil
         var cabinet: Bool? = nil
-        /// Where App Store purchases go (docs/BACKEND-APPSTORE.md), https only: Config.purchaseEndpoint.
+        /// Where App Store purchases go (docs/BACKEND-APPSTORE.md), https on one of our own hosts
+        /// only: Config.purchaseEndpoint.
         var purchaseEndpoint: String? = nil
 
         enum CodingKeys: String, CodingKey {
@@ -280,8 +281,21 @@ extension RemoteConfig {
     var cabinetOn: Bool { paymentsOn && payments?.cabinet != false }
     /// Some way to pay is on: «Продлить проездной», «Добавить ГБ», the expired line's «Продлить».
     var renewOn: Bool { appStoreOn || otherMethodsOn }
-    /// Config.purchaseEndpoint (purchases keep being delivered with payments hidden too).
-    var purchaseEndpoint: URL? { Self.https(payments?.purchaseEndpoint) }
+    /// Config.purchaseEndpoint (purchases keep being delivered with payments hidden too). Only on
+    /// one of the pass's own hosts (Config.hosts): each purchase carries the code of the pass, the
+    /// app account token and the cabinet's ID, and those go only to Titan; the config itself may
+    /// come from a URL anywhere (titan-config-url). Elsewhere: refused, as if not sent.
+    var purchaseEndpoint: URL? {
+        guard let url = Self.https(payments?.purchaseEndpoint), let host = url.host?.lowercased(),
+              Config.hosts.contains(host) else { return nil }
+        return url
+    }
+
+    /// purchaseEndpoint sent but refused (not one of our hosts): Технический режим says so.
+    var purchaseEndpointRefused: URL? {
+        guard purchaseEndpoint == nil else { return nil }
+        return Self.https(payments?.purchaseEndpoint)
+    }
 
     /// Поддержка everywhere, over the subscription's support-url (AppStore.supportURL).
     var supportURL: URL? { Self.https(support?.url) }

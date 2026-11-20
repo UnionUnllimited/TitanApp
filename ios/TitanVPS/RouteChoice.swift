@@ -22,6 +22,9 @@ enum RouteChoice: String {
     static let pickKey = "titan.routeChoicePick"
     /// «Выбрать направление вручную» open (HomeView); Сбросить настройки closes it.
     static let listOpenKey = "titan.routeListOpen"
+    /// «Авто» picked over the «Авто · объезды» the mobile internet check switched to
+    /// (AppStore.detectionDeclined): kept through a restart of the app.
+    static let declinedKey = "titan.detectionDeclined"
 
     var isBypass: Bool { self == .bypass || self == .bypassDetected }
 
@@ -35,21 +38,32 @@ enum RouteChoice: String {
         return (prefer == .unlimited ? unlimited ?? best : best ?? unlimited) ?? regular.first
     }
 
-    /// «Авто · объезды»: the panel's own bypass АВТО (a bypass with «авто» in its name) if there is
-    /// one. Else a bypass the app picks by the list's cold check (Проверить дороги; [pings] in ms,
-    /// -1 for no answer): of those that answered, the quickest free one (not ServerGroup.isLimited)
-    /// whose road isn't «пробки» (RouteTraffic), else the quickest of all; with none answered, the
-    /// first free bypass, else the first bypass. [skip]: ids the app can't run. «пробки» by the
-    /// panel's thresholds (RemoteConfig.roads), as the list says it.
+    /// «Авто · объезды»: a free bypass (not ServerGroup.isLimited: it spends no GB) while there is
+    /// one left to try, as the app goes there by itself too (the mobile internet check, the
+    /// reconnect after Проверить дороги, «Поехать объездом»); one that spends GB only once every
+    /// free one was checked and didn't answer. In each of the two: see best(). None answered at
+    /// all: the first free bypass, else the first bypass. [skip]: ids the app can't run.
     static func bypassServer(_ servers: [Server], pings: [String: Int], skip: Set<String> = []) -> Server? {
         let bypass = servers.filter { ServerGroup.isBypass($0) && !ServerGroup.isHidden($0) && !skip.contains($0.id) }
-        if let own = bypass.first(where: { $0.name.lowercased().contains("авто") }) { return own }
+        let free = bypass.filter { !ServerGroup.isLimited($0) }
+        let paid = bypass.filter { ServerGroup.isLimited($0) }
+        return best(free, pings: pings) ?? best(paid, pings: pings) ?? free.first ?? bypass.first
+    }
+
+    /// Of [servers], those not checked yet or that answered the list's cold check (Проверить
+    /// дороги; [pings] in ms, -1 for no answer): the panel's own bypass АВТО (a bypass with «авто»
+    /// in its name), else the quickest that answered with its road not «пробки» (RouteTraffic, by
+    /// the panel's thresholds, RemoteConfig.roads, as the list says it), else the quickest that
+    /// answered, else the first not checked yet. Nil when each one was checked and none answered.
+    private static func best(_ servers: [Server], pings: [String: Int]) -> Server? {
+        let left = servers.filter { (pings[$0.id] ?? 0) >= 0 }
+        if let own = left.first(where: { $0.name.lowercased().contains("авто") }) { return own }
         var answered: [(server: Server, ms: Int)] = []
-        for s in bypass {
-            if let ms = pings[s.id], ms >= 0 { answered.append((s, ms)) }
+        for s in left {
+            if let ms = pings[s.id] { answered.append((s, ms)) }
         }
-        let clear = answered.filter { !ServerGroup.isLimited($0.server) && RouteTraffic.level($0.ms) != .jam }
-        if let best = clear.min(by: { $0.ms < $1.ms }) ?? answered.min(by: { $0.ms < $1.ms }) { return best.server }
-        return bypass.first { !ServerGroup.isLimited($0) } ?? bypass.first
+        let clear = answered.filter { RouteTraffic.level($0.ms) != .jam }
+        if let quickest = clear.min(by: { $0.ms < $1.ms }) ?? answered.min(by: { $0.ms < $1.ms }) { return quickest.server }
+        return left.first
     }
 }

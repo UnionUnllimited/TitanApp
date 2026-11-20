@@ -53,6 +53,10 @@ enum ConnectionCheck {
     /// Each timed request's wait. One with no answer by then counts as this long (slow) and ends
     /// the measurement: its answer may still come.
     private static let sampleTimeout: TimeInterval = 1.5
+    /// What the requests made with URLSession here say they are: a plain iPhone browser, not
+    /// CFNetwork's default User-Agent, which names the app and its build. MobileNetCheck's go
+    /// straight to the sites, from the phone's own address.
+    static let plainAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
 
     private struct Warm {
         /// The first request was answered: the VPN carries traffic.
@@ -100,13 +104,16 @@ enum ConnectionCheck {
         return Warm(answered: true, ms: times.sorted()[times.count / 2], why: nil)
     }
 
-    /// No cache, no cookies: each request on a new connection.
+    /// No cache, no cookies, no app name (plainAgent): each request on a new connection.
     private static func freshSession(timeout: TimeInterval) -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout + 2
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.urlCache = nil
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        config.httpAdditionalHeaders = ["User-Agent": plainAgent]
         return URLSession(configuration: config)
     }
 
@@ -128,7 +135,9 @@ enum ConnectionCheck {
 /// the route: AppStore.checkMobileNet runs it only while the route is stopped, on mobile
 /// internet, as the app comes to the front or the network changes, once a minute at most. Public
 /// check pages only (Google's, as ConnectionCheck asks, and Apple's captive one; Yandex and
-/// Госуслуги, which such whitelists keep), HEAD with nothing of the user's in it.
+/// Госуслуги, which such whitelists keep), HEAD with nothing of the user's or the app's in it:
+/// a plain browser's User-Agent (ConnectionCheck.plainAgent, CFNetwork's own names the app),
+/// no cookies kept or sent.
 enum MobileNetCheck {
     enum Verdict: Equatable {
         /// The world and the whitelisted sites both answer.
@@ -152,6 +161,11 @@ enum MobileNetCheck {
         config.waitsForConnectivity = false
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.urlCache = nil
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        config.httpCookieStorage = nil
+        // Each request's own too (below): a redirect's request keeps the session's.
+        config.httpAdditionalHeaders = ["User-Agent": ConnectionCheck.plainAgent]
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
         async let worldAnswers = anyAnswers(world, session)
@@ -170,6 +184,7 @@ enum MobileNetCheck {
                 group.addTask {
                     var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: Self.timeout)
                     request.httpMethod = "HEAD"
+                    request.setValue(ConnectionCheck.plainAgent, forHTTPHeaderField: "User-Agent")
                     guard let answer = try? await session.data(for: request) else { return false }
                     return answer.1 is HTTPURLResponse
                 }

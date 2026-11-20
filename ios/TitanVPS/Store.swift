@@ -69,8 +69,13 @@ final class AppStore: ObservableObject {
     /// The last MobileNetCheck and when (Технический режим).
     private(set) var mobileNet: (verdict: MobileNetCheck.Verdict, at: Date)?
     /// «Авто» picked over the «Авто · объезды» the check switched to: not switched again until
-    /// mobile internet opens or Wi-Fi comes.
-    private var detectionDeclined = false
+    /// mobile internet opens or Wi-Fi comes. Saved: the check at the next launch doesn't switch
+    /// it back either.
+    private var detectionDeclined = UserDefaults.standard.bool(forKey: RouteChoice.declinedKey) {
+        didSet {
+            if detectionDeclined != oldValue { UserDefaults.standard.set(detectionDeclined, forKey: RouteChoice.declinedKey) }
+        }
+    }
     /// Servers the iPhone app can't run yet, by id: worked out once per subscription (it parses
     /// each server's whole config), not on every redraw of Главная. Changes only with
     /// `subscription`, which publishes it.
@@ -314,6 +319,15 @@ final class AppStore: ObservableObject {
                 break
             }
         }
+    }
+
+    /// Автоподключение waits for this (RootView): the mobile internet check, started if it is due,
+    /// and its verdict in, so on restricted mobile internet «Авто» starts on «Авто · объезды».
+    /// A few seconds at most (MobileNetCheck's timeouts); nothing to wait for where checkMobileNet
+    /// doesn't run (Wi-Fi, a check under a minute ago, a pick by hand).
+    func settleMobileNet() async {
+        checkMobileNet()
+        await netCheck?.value
     }
 
     // MARK: The panel's config (RemoteConfig)
@@ -579,7 +593,9 @@ final class AppStore: ObservableObject {
         detectionDeclined = false
         netCheckedAt = nil
         mobileNet = nil
-        for key in [subKey, favKey, clientIdKey, RouteChoice.key, RouteChoice.pickKey] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in [subKey, favKey, clientIdKey, RouteChoice.key, RouteChoice.pickKey, RouteChoice.declinedKey] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 
     /// Servers being measured right now (spinners).
