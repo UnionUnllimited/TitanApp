@@ -34,16 +34,20 @@ struct SubscriptionView: View {
                 let now = Int64(Date().timeIntervalSince1970)
                 let active = info.expire <= 0 || info.expire > now
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Проездной").font(.scaled(28, weight: .bold))
-                        Spacer()
-                        CircleIconButton(icon: "arrow.clockwise", spinning: store.busy, size: 42) {
-                            Task { await store.refreshByHand() }
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack {
+                            Text("Проездной").font(.scaled(28, weight: .bold))
+                            Spacer()
+                            CircleIconButton(icon: "arrow.clockwise", spinning: store.busy, size: 42) {
+                                Task { await store.refreshByHand() }
+                            }
+                            .disabled(store.busy)
+                            .accessibilityLabel("Обновить проездной")
                         }
-                        .disabled(store.busy)
-                        .accessibilityLabel("Обновить проездной")
+                        .padding(.top, 8)
+                        // The panel's blocks for pass.top: nothing, not even the gap, without.
+                        ServerBlocks(slot: .passTop, padding: EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0))
                     }
-                    .padding(.top, 8)
                     Card {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 6) {
@@ -177,6 +181,11 @@ struct SubscriptionView: View {
             showCabinet = false
             showDevices = false
         }
+        // Личный кабинет from one of the panel's blocks (RootView brings this tab up first).
+        .onAppear { openAskedCabinet() }
+        .onChange(of: store.cabinetRequest) { asked in
+            if asked { openAskedCabinet() }
+        }
         #endif
         .sheet(isPresented: $showDevices) {
             if let acc = store.account {
@@ -242,6 +251,15 @@ struct SubscriptionView: View {
     /// Neither with the cabinet turned off in the panel's config (payments.cabinet).
     private func hasCabinet(_ info: SubscriptionInfo) -> Bool {
         store.remote.cabinetOn && (info.webPageUrl != nil || purchases.linksOut)
+    }
+
+    /// The panel's block asked for Личный кабинет (AppStore.cabinetRequest): as its button here
+    /// does, while the cabinet is on and has a way in.
+    private func openAskedCabinet() {
+        guard store.cabinetRequest else { return }
+        store.cabinetRequest = false
+        guard let info = store.subscription?.info, hasCabinet(info) else { return }
+        if info.webPageUrl != nil { showCabinet = true } else { openURL(Config.telegram) }
     }
 
     /// Продлить подписку: Тарифы, saying whether it is still running.
@@ -423,7 +441,11 @@ struct ProfileView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
-                        if let sub = store.subscription { accountCard(sub) }
+                        VStack(alignment: .leading, spacing: 0) {
+                            // The panel's blocks for profile.top: nothing, not even the gap, without.
+                            ServerBlocks(slot: .profileTop, padding: EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            if let sub = store.subscription { accountCard(sub) }
+                        }
 
                         SectionTitle("Оформление")
                         Card { ThemePicker(theme: $theme) }

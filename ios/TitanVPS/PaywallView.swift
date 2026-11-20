@@ -19,8 +19,9 @@ enum PaywallReason: String, Identifiable {
 /// without a price beside it (showsOther). Opened from Главная's «Подписка истекла»,
 /// Подписка's «Продлить подписку», the «Добавить ГБ» buttons and the key entry. The panel's
 /// config may leave out either part (payments.appStore, payments.otherMethods), adds products,
-/// orders them and gives them badges and notes (payments.products), and rewords its title and
-/// Другие методы (texts); asked again as it opens, it closes when the config leaves no way to pay.
+/// orders them and gives them badges and notes (payments.products), rewords its title and
+/// Другие методы (texts) and puts its blocks under the header (tariffs.top, ServerBlocks); asked
+/// again as it opens, it closes when the config leaves no way to pay.
 /// Design C: the app's cards (Card), the picked row on the brand's tint as Маршрут's cards,
 /// RouteTone's ink.
 struct PaywallView: View {
@@ -35,6 +36,11 @@ struct PaywallView: View {
     @State private var buying: String?
     @State private var restoring = false
     @State private var note: Note?
+    /// A block of the panel's here asked for the packs (its «packs»): their card even when Тарифы
+    /// opened for a renewal.
+    @State private var packsAsked = false
+    private static let subscriptionsId = "paywall.subscriptions"
+    private static let packsId = "paywall.packs"
 
     private struct Note: Equatable {
         let text: String
@@ -43,51 +49,64 @@ struct PaywallView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 14) {
-                    header
-                    if let note {
-                        banner(note).transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                    // Гигабайты go to a key; none in the App Store (not made yet): no card for
-                    // them, not a «скоро» at the top.
-                    if appStore && reason == .traffic && store.subscription != nil && !(purchases.loaded && purchases.packs.isEmpty) {
-                        packsCard
-                    }
-                    if appStore { subscriptionsCard }
-                    if showsOther { other }
-                    if !appStore && !showsOther { nothingToPay }
-                    // The privacy policy a tap away without the App Store's card too.
-                    if !appStore {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 14) { legalLinks }
-                            VStack(spacing: 6) { legalLinks }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 14) {
+                        VStack(spacing: 0) {
+                            header
+                            // The panel's blocks for tariffs.top: nothing, not even the gap, without.
+                            ServerBlocks(slot: .tariffsTop, padding: EdgeInsets(top: 14, leading: 0, bottom: 0, trailing: 0),
+                                         handle: { inPlace($0, proxy) })
                         }
-                        .font(.scaled(12, weight: .semibold))
-                        .tint(RouteTone.accentInk)
+                        if let note {
+                            banner(note).transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                        // Гигабайты go to a key; none in the App Store (not made yet): no card for
+                        // them, not a «скоро» at the top.
+                        if appStore && (reason == .traffic || packsAsked) && store.subscription != nil
+                            && !(purchases.loaded && purchases.packs.isEmpty) {
+                            packsCard
+                                .id(Self.packsId)
+                        }
+                        if appStore {
+                            subscriptionsCard
+                                .id(Self.subscriptionsId)
+                        }
+                        if showsOther { other }
+                        if !appStore && !showsOther { nothingToPay }
+                        // The privacy policy a tap away without the App Store's card too.
+                        if !appStore {
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 14) { legalLinks }
+                                VStack(spacing: 6) { legalLinks }
+                            }
+                            .font(.scaled(12, weight: .semibold))
+                            .tint(RouteTone.accentInk)
+                        }
                     }
+                    .padding(16)
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
+                    .animation(.easeInOut(duration: 0.2), value: note)
+                    .animation(.easeInOut(duration: 0.2), value: packsAsked)
+                    // The App Store's answer: the cards come in (and an empty packs card goes) gently.
+                    .animation(.easeInOut(duration: 0.2), value: purchases.loaded)
                 }
-                .padding(16)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
-                .animation(.easeInOut(duration: 0.2), value: note)
-                // The App Store's answer: the cards come in (and an empty packs card goes) gently.
-                .animation(.easeInOut(duration: 0.2), value: purchases.loaded)
-            }
-            .background(Palette.background.ignoresSafeArea())
-            .navigationTitle(store.remote.text(.tariffsTitle))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.scaled(13, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 32, height: 32)
-                            .background(Palette.track, in: Circle())
+                .background(Palette.background.ignoresSafeArea())
+                .navigationTitle(store.remote.text(.tariffsTitle))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .font(.scaled(13, weight: .bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 32, height: 32)
+                                .background(Palette.track, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Закрыть")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Закрыть")
                 }
             }
         }
@@ -109,6 +128,25 @@ struct PaywallView: View {
 
     /// The App Store's part: on unless the panel's config turned it off (payments.appStore).
     private var appStore: Bool { store.remote.appStoreOn }
+
+    /// A block's action that is on this screen already (ServerBlocks' handle): «tariffs» scrolls
+    /// to the App Store's subscriptions, «packs» brings the packs' card (if the App Store has
+    /// packs) and scrolls to it. The rest as anywhere: true when done here.
+    private func inPlace(_ action: RemoteBlock.Action, _ proxy: ScrollViewProxy) -> Bool {
+        let target: String
+        switch action {
+        case .tariffs: target = Self.subscriptionsId
+        case .packs:
+            packsAsked = true
+            target = Self.packsId
+        default: return false
+        }
+        // Once the card is laid out (packs), as Маршрут's list is scrolled to.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(target, anchor: .top) }
+        }
+        return true
+    }
 
     private var header: some View {
         VStack(spacing: 8) {

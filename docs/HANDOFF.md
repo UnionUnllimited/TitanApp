@@ -183,15 +183,15 @@ CI теперь собирает его всегда.
   заголовок «Тарифов» и «Другие методы», «Продлить проездной» (Проездной и кабинет), «Добавить ГБ» (Проездной,
   объезды на «Маршруте» и подсказка «нажмите «…»»). VoiceOver читает те же слова. Экран ввода кода, «Обновите
   Titan», напоминания, Live Activity, Siri и виджеты — словами сборки.
-- Блоки (рисует шаг B): разбор и проверка — `RemoteBlock` (`RemoteConfig.swift`: места `Slot`, вид `Kind`, цвет `Tone`,
+- Блоки (рисует `ServerBlocks`, шаг B — раздел ниже): разбор и проверка — `RemoteBlock` (`RemoteConfig.swift`: места `Slot`, вид `Kind`, цвет `Tone`,
   значки `Icon.symbol` — SF Symbols iOS 16, действие `Action`, условия `When`); `remote.allBlocks` (первые 20, без
   неподходящих и повторов `id`), `remote.blocks(for:)` — блоки места до условий. Для экранов —
   `AppStore.blocks(for:)`: условия `when` (статус проездного, в пути или стоим — `vpn.isOn` или пауза на проверку
   дорог, сборка, время), действие, которое сейчас можно (`AppStore.canDo`: `tariffs` / `packs` — `renewOn`,
   `packs` ещё и с кодом; `cabinet` — `cabinetOn` и ссылка кабинета или путь в бота; `bot` — `linksOut`; все четыре —
   только с `TITAN_PAYMENTS`), не закрытые крестиком (`AppStore.closeBlock`, `titan.blocksClosed`, последние 200);
-  не больше трёх на место. Экран, который их рисует, сам наблюдает за `vpn`; границы `from` / `until` срабатывают
-  при перерисовке.
+  не больше трёх на место. Экран, который их рисует, сам наблюдает за `vpn`; границы `from` / `until` — раз в
+  минуту (шаг B).
 - Технический режим → «Удалённые настройки»: последняя проверка (время и ответ: 200 новые / 200 те же / 304 / нет
   ответа; `AppStore.remoteCheck`, не `@Published`, чтобы не перерисовывать экраны раз в минуту), последнее изменение
   (`Source.changed`), схема, товары панели и порядок запроса к App Store (с пометкой, чего App Store не знает), блоки:
@@ -199,6 +199,57 @@ CI теперь собирает его всегда.
   (`AppStore.recheckRemote`).
 - Ревью: всё, что может показать панель, — в сборке; в Review Notes написать, что тарифы, карточки и надписи приходят
   с сервера; ревьюеру — то же, что пользователям (`docs/BACKEND-CONFIG.md`, «Ревью App Store»).
+
+## Блоки панели на экранах (iOS, шаг B)
+
+Продолжение шага A: блоки `blocks` (схема 2, `docs/BACKEND-CONFIG.md` — поля, места, вид, действия) теперь рисуются.
+
+- `ios/TitanVPS/ServerBlocks.swift`, `struct ServerBlocks` (`slot`, `padding`, `handle`): до трёх блоков места из
+  `AppStore.blocks(for:)`, друг под другом. Пустое место — ничего, даже `padding`: экраны ставят его в `VStack(spacing: 0)`
+  рядом с соседом, отступ — в `padding` (иначе пустой блок давал бы лишний зазор стека). Наблюдает `store` и `vpn`
+  (условие `onTrip`), а `TimelineView(.everyMinute)` пересчитывает раз в минуту (`from` / `until`, проездной, кончившийся
+  при открытом экране) — без отдельного таймера и без `@Published`-часов у хранилища (иначе раз в минуту
+  перерисовывалось бы всё приложение). Появление и уход — переход карточек «Авто» (`opacity` + `scale 0.96` от верха) и
+  пружина `unfold` с `HomeView`, с `titanReduceMotion` — затухание; крестик — `withAnimation` тем же.
+- Вид (`ServerBlockView`): `card` — `glassSurface(.card)` для `neutral`, для `accent` / `warn` / `success` —
+  `tintedGlass` цвета (`Palette.primary`, `RouteTone.warn`, `RouteTone.good`) поверх `Palette.surface` (непрозрачно:
+  `route.top` лежит на карте); значок — `IconTile` (синий, `RouteTone.noticeFill`, `Palette.green`), заголовок `.primary`,
+  текст `RouteTone.ink2`; со своей кнопкой (`button` и `action`) — кнопка под текстом, без неё — вся карточка `Button`
+  со стрелкой. `button` — `ServerBlockPill`: `accent` как `PrimaryButtonStyle`, остальные как `SecondaryButtonStyle`
+  (заливка цвета `tone`, у `neutral` — `Color.primary`, т. е. серая) поверх `Palette.surface`; без `action` — та же
+  надпись без нажатия. `row` — как `SettingsRow` в `Card`: плитка, заголовок цветом `tone` (`RouteTone.*Ink`),
+  стрелка по действию (`arrow.up.right` — наружу, `doc.on.doc` — копирование, `chevron.right` — в приложении). Крестик
+  (`ServerBlockClose`, «Закрыть») — в углу карточки, в конце строки, у кнопки — на стеклянном чипе. Значок `check` —
+  `checkmark.seal.fill` (было `checkmark.circle.fill`), остальные — как в шаге A.
+- VoiceOver: заголовок и текст — один элемент («заголовок. текст»), кнопкой — если нажимается весь блок; отдельная
+  кнопка карточки — отдельный элемент; подсказка «Открыть» / «Скопировать».
+- Места: `route.top` — `HomeView.mapHeader` после `notices` (отступ 8, если над ним есть предупреждения, иначе 12),
+  над заголовком; `route.bottom` — на листе под `choices` и «Поехали» (в пути — под `choices`), над списком; в широком
+  окне — в колонке карты под стеклянной карточкой с `choices`; `pass.top` — `SubscriptionView` под заголовком
+  «Проездной»; `profile.top` — `ProfileView` над `accountCard`; `tariffs.top` — `PaywallView` под `header`, над `note`
+  и карточками.
+- Действия (`ServerBlocks.run`, сначала `Haptics.selection()` и ещё раз `store.canDo`): `url` — `openURL`, с `inApp` —
+  `InAppBrowser.open` (`SFSafariViewController` над верхним показанным контроллером, тот же файл; не вышло — `openURL`);
+  `bot` — `Config.telegram`, как «Открыть бота»; `support` — `store.supportURL`; `copy` — `UIPasteboard` и тост
+  «Скопировано» (без второй вибрации). Остальное — через `AppStore.blockRequest` в `RootView.runBlock`: `screen` —
+  вкладка (`Тарифы` закрываются), `deeplink` — `openLink`, как `onOpenURL` (до «Конфиденциальности» — `pendingLink`),
+  `tariffs` — `store.paywall = .renew / .expired` (как «Продлить проездной»), `packs` — `.traffic` (как «Добавить ГБ»),
+  `cabinet` — `openBlockCabinet`: «Тарифы» вниз, ожидание, как в `openTrafficPaywall`, вкладка «Проездной» и
+  `AppStore.cabinetRequest`, который `SubscriptionView` (`onAppear` и `onChange`) открывает, как свою кнопку «Личный
+  кабинет» (без ссылки кабинета — бот). В самих «Тарифах» (`handle` у `ServerBlocks`, `PaywallView.inPlace`): `tariffs`
+  — прокрутка к подпискам, `packs` — карточка пакетов (`packsAsked`) и прокрутка к ней. Лист «Тарифов» теперь получает и
+  `.environmentObject(vpn)` (блокам нужен).
+- `AppStore` (`Store.swift`): `blocks(for:)` = блоки места без `hiddenReason` (закрыт крестиком, `When.refusal`,
+  `actionRefusal`), первые три. `canDo` = `actionRefusal == nil`; сверх шага A `cabinet` и `screen` требуют код
+  проездного (до него вкладок нет, а «Тарифы» с экрана ввода кода открыть кабинет не могут). Закрытые: `closeBlock` (до
+  200), а при каждом новом документе с `blocks` — только `id`, которые он ещё присылает (`keepClosedBlocks`).
+- Технический режим → «Удалённые настройки» → «Блоки»: прислано / принято, по местам «принято, видно», затем каждый
+  присланный блок по порядку: «место · id — виден (вид)», «скрыт: причина» (`hiddenReason`: крестик, условие `when`,
+  действие; или «на месте уже 3») или «не принят: причина» (`RemoteBlock.rejection`: какое поле, после первых 20, повтор
+  `id`) — `AppStore.blockReport`; и какие `id` закрыты крестиком.
+- Без компилятора здесь: проверено разбором tree-sitter (все файлы, с `TITAN_PAYMENTS` и без), на устройстве не
+  смотрелось — в первую очередь стоит проверить вид над картой в светлой и тёмной теме, `inApp` поверх «Тарифов» и
+  `cabinet` из «Тарифов» (закрытие листа, затем кабинет).
 
 ## Тема «Маршрут» на iOS
 

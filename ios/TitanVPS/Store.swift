@@ -57,6 +57,14 @@ final class AppStore: ObservableObject {
     private(set) var remoteCheck: RemoteCheck?
     /// The panel's blocks closed by their × (RemoteBlock.dismissible), by id: not shown again here.
     @Published private(set) var closedBlocks: Set<String> = Set(UserDefaults.standard.stringArray(forKey: RemoteConfigCache.closedBlocksKey) ?? [])
+    /// A block's action that RootView does (ServerBlocks): a tab, a titanvps:// link, Тарифы, the
+    /// packs, Личный кабинет. Set back to nil as it is taken.
+    @Published var blockRequest: RemoteBlock.Action?
+    #if TITAN_PAYMENTS
+    /// Личный кабинет asked for by a block: Проездной opens it as its own button does, once on
+    /// screen (SubscriptionView), and sets this back.
+    @Published var cabinetRequest = false
+    #endif
 
     struct RemoteCheck: Equatable {
         enum Result: Equatable {
@@ -447,6 +455,8 @@ final class AppStore: ObservableObject {
         RemoteConfigCache.save(config, source: source)
         guard config != old else { return false }
         remote = config
+        // Closed blocks the panel no longer sends are forgotten: one sent again later shows again.
+        if let sent = config.blocks { keepClosedBlocks(Set(sent.compactMap(\.id))) }
         let stopped = vpn.map { routeStopped($0) } ?? false
         fitChoice(stopped: stopped)
         // «Авто» to the row it means now, while stopped (on the way the route keeps its direction).
@@ -472,68 +482,122 @@ final class AppStore: ObservableObject {
 
     // MARK: The panel's blocks (RemoteBlock)
 
-    /// What a place on screen shows of the panel's blocks now: those for [slot] whose conditions
-    /// hold (the pass's status, on the way or standing, this build, the time), whose action this
-    /// build can do now (canDo), not closed by hand; three at most, in the panel's order. It reads
-    /// the route's state too (vpn): a screen that shows them observes the VPN itself, and the
-    /// time's bounds take effect at its next redraw.
+    /// What a place on screen shows of the panel's blocks now (ServerBlocks): those for [slot]
+    /// not hidden (hiddenReason: closed by hand, their conditions, an action this build can't do
+    /// now); three at most, in the panel's order. It reads the route's state too (vpn): a screen
+    /// that shows them observes the VPN itself, and asks again each minute for the time's bounds.
     func blocks(for slot: RemoteBlock.Slot, now: Date = Date()) -> [RemoteBlock] {
+        let shown = remote.blocks(for: slot).filter { hiddenReason($0, now: now) == nil }
+        return Array(shown.prefix(RemoteConfig.blocksPerPlace))
+    }
+
+    /// Why [b] is not shown now (Технический режим's words), nil when it may be: closed by its ×,
+    /// a condition of when (the pass's status as Маршрут's «Проездной закончился» has it, on the
+    /// way or standing, this build, the time), or its action (actionRefusal).
+    func hiddenReason(_ b: RemoteBlock, now: Date = Date()) -> String? {
+        if b.dismissible && closedBlocks.contains(b.id) { return "закрыт крестиком" }
         let pass: RemoteBlock.PassStatus? = subscription.map { (s: Subscription) -> RemoteBlock.PassStatus in
             s.info.expire > 0 && s.info.expire <= Int64(now.timeIntervalSince1970) ? .expired : .active
         }
         let onTrip = (vpn?.isOn ?? false) || vpnPaused
-        let build = RemoteConfig.build
-        let shown = remote.blocks(for: slot).filter { b in
-            !(b.dismissible && closedBlocks.contains(b.id))
-                && b.when.allows(pass: pass, onTrip: onTrip, build: build, now: now) && canDo(b.action)
-        }
-        return Array(shown.prefix(RemoteConfig.blocksPerPlace))
+        if let why = b.when.refusal(pass: pass, onTrip: onTrip, build: RemoteConfig.build, now: now) { return why }
+        return actionRefusal(b.action)
     }
 
-    /// A block's action this build can do now: Тарифы and the packs with a way to pay
-    /// (RemoteConfig.renewOn; the packs with a pass to add to), the cabinet where it is on and
-    /// has a way in (as Проездной's «Личный кабинет»), the bot where the app has its ways out
-    /// (AppStorePurchases.linksOut); none of those four without TITAN_PAYMENTS. Links, tabs,
-    /// copying and support always (a link that isn't https or titanvps:// makes no block).
-    func canDo(_ action: RemoteBlock.Action?) -> Bool {
-        guard let action else { return true }
+    /// A block's action this build can do now (actionRefusal says none against it).
+    func canDo(_ action: RemoteBlock.Action?) -> Bool { actionRefusal(action) == nil }
+
+    /// What keeps a block's action from being done now, nil when nothing: Тарифы and the packs
+    /// need a way to pay (RemoteConfig.renewOn; the packs a pass to add to), the cabinet has to be
+    /// on, with a pass and a way in (as Проездной's «Личный кабинет»), the bot the app's ways out
+    /// (AppStorePurchases.linksOut); none of those four without TITAN_PAYMENTS. A tab needs the
+    /// tabs (a pass). Links, copying and support always (a link that isn't https or titanvps://
+    /// makes no block).
+    func actionRefusal(_ action: RemoteBlock.Action?) -> String? {
+        guard let action else { return nil }
         switch action {
-        case .url, .screen, .copy, .deeplink, .support:
-            return true
+        case .url, .copy, .deeplink, .support:
+            return nil
+        case .screen:
+            return subscription == nil ? "screen: кода проездного нет, вкладок нет" : nil
         case .tariffs:
             #if TITAN_PAYMENTS
-            return remote.renewOn
+            return remote.renewOn ? nil : "tariffs: оплата выключена"
             #else
-            return false
+            return "tariffs: оплаты нет в сборке"
             #endif
         case .packs:
             #if TITAN_PAYMENTS
-            return remote.renewOn && subscription != nil
+            if !remote.renewOn { return "packs: оплата выключена" }
+            return subscription == nil ? "packs: кода проездного нет" : nil
             #else
-            return false
+            return "packs: оплаты нет в сборке"
             #endif
         case .cabinet:
             #if TITAN_PAYMENTS
-            return remote.cabinetOn && (subscription?.info.webPageUrl != nil || AppStorePurchases.shared.linksOut)
+            if !remote.cabinetOn { return "cabinet: кабинет выключен" }
+            guard let sub = subscription else { return "cabinet: кода проездного нет" }
+            return sub.info.webPageUrl != nil || AppStorePurchases.shared.linksOut ? nil : "cabinet: нет ссылки кабинета и пути в бота"
             #else
-            return false
+            return "cabinet: оплаты нет в сборке"
             #endif
         case .bot:
             #if TITAN_PAYMENTS
-            return AppStorePurchases.shared.linksOut
+            return AppStorePurchases.shared.linksOut ? nil : "bot: путь в бота выключен (otherMethods)"
             #else
-            return false
+            return "bot: оплаты нет в сборке"
             #endif
         }
     }
 
-    /// A block's ×: not shown on this device again (the last 200 closed are remembered).
+    /// A block's ×: not shown on this device again while the panel sends its id (the last 200
+    /// closed are remembered; keepClosedBlocks forgets the rest).
     func closeBlock(_ id: String) {
         guard !closedBlocks.contains(id) else { return }
         let key = RemoteConfigCache.closedBlocksKey
         let saved = Array(((UserDefaults.standard.stringArray(forKey: key) ?? []) + [id]).suffix(200))
         UserDefaults.standard.set(saved, forKey: key)
         closedBlocks = Set(saved)
+    }
+
+    /// The closed blocks among [ids] (those the panel sends now) only.
+    private func keepClosedBlocks(_ ids: Set<String>) {
+        let key = RemoteConfigCache.closedBlocksKey
+        let saved = UserDefaults.standard.stringArray(forKey: key) ?? []
+        let kept = saved.filter { ids.contains($0) }
+        guard kept.count != saved.count else { return }
+        UserDefaults.standard.set(kept, forKey: key)
+        closedBlocks = Set(kept)
+    }
+
+    /// Технический режим: each block the panel sent, in its order, as «place · id — what of it»:
+    /// shown, hidden and why, or not taken and why.
+    func blockReport(now: Date = Date()) -> [String] {
+        var lines: [String] = []
+        var seen: Set<String> = []
+        var placed: [RemoteBlock.Slot: Int] = [:]
+        for (i, raw) in (remote.blocks ?? []).enumerated() {
+            let name = (raw.slot ?? "—") + " · " + (raw.id ?? "без id")
+            let state: String
+            if i >= RemoteConfig.maxBlocks {
+                state = "не принят: после первых \(RemoteConfig.maxBlocks)"
+            } else if let block = RemoteBlock(raw) {
+                if !seen.insert(block.id).inserted {
+                    state = "не принят: id повторяется"
+                } else if let why = hiddenReason(block, now: now) {
+                    state = "скрыт: " + why
+                } else {
+                    let n = placed[block.slot, default: 0]
+                    placed[block.slot] = n + 1
+                    state = n < RemoteConfig.blocksPerPlace ? "виден (\(block.kind.rawValue))"
+                        : "скрыт: на месте уже \(RemoteConfig.blocksPerPlace)"
+                }
+            } else {
+                state = "не принят: " + (RemoteBlock.rejection(raw) ?? "?")
+            }
+            lines.append(name + " — " + state)
+        }
+        return lines
     }
 
     /// The choice as the config allows it: «Авто · объезды» turned off (routes.autoBypass) goes to

@@ -629,15 +629,19 @@ struct TechModeView: View {
         rows.append(("Дороги", "свободно < \(limits.good) мс, плотное < \(limits.calm) мс"))
         rows.append(("Функции", "liveActivity \(on(c.liveActivityOn)), techMode \(on(c.techModeOn)), animations \(on(c.animationsOn)), tabSwipe \(on(c.tabSwipeOn))"))
         rows.append(("Товары App Store", productsText(c)))
-        // Per place: accepted from the panel, and shown now (conditions, actions, closed by hand).
+        // Per place: accepted from the panel, and shown now (conditions, actions, closed by hand);
+        // then each one sent, in order: its place and id, shown, or hidden or not taken and why.
         let sent = c.blocks?.count ?? 0
         let accepted = c.allBlocks
         var blocks = "нет"
         if sent > 0 {
-            blocks = "прислано \(sent), принято \(accepted.count)\n" + RemoteBlock.Slot.allCases.map { slot in
-                "\(slot.rawValue): \(accepted.filter { $0.slot == slot }.count), сейчас видно \(store.blocks(for: slot).count)"
-            }.joined(separator: "\n")
+            let places = RemoteBlock.Slot.allCases.compactMap { slot -> String? in
+                let n = accepted.filter { $0.slot == slot }.count
+                return n == 0 ? nil : "\(slot.rawValue): принято \(n), видно \(store.blocks(for: slot).count)"
+            }
+            blocks = (["прислано \(sent), принято \(accepted.count)"] + places + store.blockReport()).joined(separator: "\n")
         }
+        if !store.closedBlocks.isEmpty { blocks += "\nзакрыты крестиком: " + store.closedBlocks.sorted().joined(separator: ", ") }
         rows.append(("Блоки", blocks))
         let texts = c.overriddenTexts
         rows.append(("Тексты", texts.isEmpty ? "свои" : texts.map { "\($0.rawValue): «\(c.text($0))»" }.joined(separator: "\n")))

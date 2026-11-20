@@ -173,16 +173,20 @@ struct HomeView: View {
     private static var parallax: MapParallax { MapParallax(content: contentSpace, scroll: listSpace) }
 
     /// The sheet over the map's lower edge: «Авто» and «Авто · объезды», «Поехали» under them
-    /// while standing, then the list tucked away. Glass where it lies over the map, solid under
-    /// it (GlassSheet).
+    /// while standing, the panel's blocks for route.bottom (ServerBlocks), then the list tucked
+    /// away. Glass where it lies over the map, solid under it (GlassSheet).
     private func sheet(_ proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 18) {
-            VStack(spacing: 14) {
-                choices(proxy, wide: false)
-                if !tripMode {
-                    pill
-                        .transition(.opacity)
+            VStack(spacing: 0) {
+                VStack(spacing: 14) {
+                    choices(proxy, wide: false)
+                    if !tripMode {
+                        pill
+                            .transition(.opacity)
+                    }
                 }
+                // The panel's blocks under them (route.bottom): nothing, not even the gap, without.
+                ServerBlocks(slot: .routeBottom, padding: EdgeInsets(top: 14, leading: 0, bottom: 0, trailing: 0))
             }
             manualList(proxy, wide: false)
         }
@@ -364,13 +368,16 @@ struct HomeView: View {
 
     // MARK: - The map
 
-    /// The top bar, the account's notices, the state as the title, the route band with the round
-    /// buttons; on the way the trip card under it (and in a wide window «Авто» / «Авто · объезды»
-    /// on a glass card, with «Поехали» standing: the sheet is the other column, the list).
+    /// The top bar, the account's notices and the panel's blocks for route.top (ServerBlocks), the
+    /// state as the title, the route band with the round buttons; on the way the trip card under
+    /// it (and in a wide window «Авто» / «Авто · объезды» on a glass card, with «Поехали»
+    /// standing, then the blocks for route.bottom: the sheet is the other column, the list).
     private func mapHeader(_ proxy: ScrollViewProxy, wide: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             topBar
             notices
+            ServerBlocks(slot: .routeTop,
+                         padding: EdgeInsets(top: noticesShown ? 8 : 12, leading: 16, bottom: 0, trailing: 16))
             titleBlock
             band(wide: wide)
             if tripMode {
@@ -391,6 +398,9 @@ struct HomeView: View {
                     .glassSurface(.card, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
                     .padding(.horizontal, 16)
                     .transition(.opacity)
+            }
+            if wide {
+                ServerBlocks(slot: .routeBottom, padding: EdgeInsets(top: 16, leading: 16, bottom: 0, trailing: 16))
             }
         }
         // Room for the cards' shadow, and for the sheet coming up over the map.
@@ -414,7 +424,7 @@ struct HomeView: View {
     /// panel's config says: a newer build is out, its announcement (each closed for good by its ×).
     @ViewBuilder private var notices: some View {
         let account = accountNotice
-        let expired = store.subscription.map { $0.info.expire > 0 && $0.info.expire <= Int64(Date().timeIntervalSince1970) } ?? false
+        let expired = passExpired
         let newer = shownNewerBuild
         let notice = shownNotice
         if account != nil || expired || newer != nil || notice != nil {
@@ -442,6 +452,16 @@ struct HomeView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
         }
+    }
+
+    /// The pass has run out (as RemoteBlock's «expired» has it too: AppStore.hiddenReason).
+    private var passExpired: Bool {
+        store.subscription.map { $0.info.expire > 0 && $0.info.expire <= Int64(Date().timeIntervalSince1970) } ?? false
+    }
+
+    /// Any of notices is up: the panel's blocks under them come a little closer.
+    private var noticesShown: Bool {
+        accountNotice != nil || passExpired || shownNewerBuild != nil || shownNotice != nil
     }
 
     /// Blocked (the account's status), else under maintenance: the panel's config's own words for

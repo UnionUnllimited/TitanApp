@@ -670,7 +670,7 @@ struct RemoteBlock: Equatable, Identifiable {
             case .clock: return "clock.fill"
             case .map: return "map.fill"
             case .phone: return "iphone"
-            case .check: return "checkmark.circle.fill"
+            case .check: return "checkmark.seal.fill"
             case .percent: return "percent"
             case .megaphone: return "megaphone.fill"
             }
@@ -706,17 +706,24 @@ struct RemoteBlock: Equatable, Identifiable {
 
         /// [pass]: nil without one, where only a block for both statuses is shown.
         func allows(pass: PassStatus?, onTrip trip: Bool, build: Int64, now: Date) -> Bool {
+            refusal(pass: pass, onTrip: trip, build: build, now: now) == nil
+        }
+
+        /// Which condition keeps it off screen now (Технический режим's words), nil when none does.
+        func refusal(pass: PassStatus?, onTrip trip: Bool, build: Int64, now: Date) -> String? {
             if let pass {
-                guard status.contains(pass) else { return false }
+                if !status.contains(pass) {
+                    return "status: проездной \(pass.rawValue), нужен " + status.map(\.rawValue).sorted().joined(separator: ", ")
+                }
             } else if status.count < PassStatus.allCases.count {
-                return false
+                return "status: кода проездного нет"
             }
-            if let onTrip, onTrip != trip { return false }
-            if minBuild > 0 && build < minBuild { return false }
-            if maxBuild > 0 && build > maxBuild { return false }
-            if let from, now < from { return false }
-            if let until, now > until { return false }
-            return true
+            if let onTrip, onTrip != trip { return onTrip ? "onTrip: только в пути" : "onTrip: только пока стоим" }
+            if minBuild > 0 && build < minBuild { return "minBuild \(minBuild), сборка \(build)" }
+            if maxBuild > 0 && build > maxBuild { return "maxBuild \(maxBuild), сборка \(build)" }
+            if let from, now < from { return "from ещё не наступило" }
+            if let until, now > until { return "until уже прошло" }
+            return nil
         }
     }
 
@@ -761,6 +768,26 @@ extension RemoteBlock {
                   tone: b.tone.flatMap { Tone(rawValue: $0.lowercased()) } ?? .neutral,
                   button: kind == .card ? RemoteConfig.shortText(b.button, max: 24) : nil,
                   action: action, dismissible: b.dismissible == true, when: When(b.when))
+    }
+}
+
+extension RemoteBlock {
+    /// Технический режим: why the panel's block [b] makes none in this build (init gives nil), nil
+    /// when it makes one.
+    static func rejection(_ b: RemoteConfig.Block) -> String? {
+        if RemoteConfig.validId(b.id, max: 64) == nil { return "id: нет или не 1–64 символа A–Z a–z 0–9 . _ -" }
+        if b.slot.flatMap({ Slot(rawValue: $0.lowercased()) }) == nil { return "slot: неизвестное место" }
+        if RemoteConfig.shortText(b.title, max: 60) == nil { return "title: нет или длиннее 60" }
+        if let a = b.action, Action(a) == nil {
+            switch a.type?.lowercased() {
+            case "url"?: return "action: url не https"
+            case "screen"?: return "action: screen не route, pass или profile"
+            case "copy"?: return "action: copy пустой или длиннее 200"
+            case "deeplink"?: return "action: deeplink не titanvps://"
+            default: return "action: type «\(a.type ?? "")» неизвестен"
+            }
+        }
+        return nil
     }
 }
 

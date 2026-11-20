@@ -174,9 +174,16 @@ struct RootView: View {
         #if TITAN_PAYMENTS
         // Тарифы: from Главная, Подписка, the «Добавить ГБ» buttons and the key entry.
         .sheet(item: $store.paywall) { reason in
-            PaywallView(reason: reason).environmentObject(store)
+            // The VPN too: the panel's blocks there follow the route (ServerBlocks).
+            PaywallView(reason: reason).environmentObject(store).environmentObject(vpn)
         }
         #endif
+        // A tap on one of the panel's blocks that is RootView's to do (AppStore.blockRequest).
+        .onChange(of: store.blockRequest) { request in
+            guard let request else { return }
+            store.blockRequest = nil
+            runBlock(request)
+        }
         // Reduce Motion for the app's own views (and the sheets above): the system's, or the
         // panel's config with the motion off (features.animations).
         .environment(\.titanReduceMotion, systemReduceMotion || !store.remote.animationsOn)
@@ -210,6 +217,72 @@ struct RootView: View {
     /// A sheet or an alert is over the app, or still going down.
     private static var presenting: Bool {
         AppStorePurchases.activeScene?.keyWindow?.rootViewController?.presentedViewController != nil
+    }
+    #endif
+
+    /// A block's action (ServerBlocks) by the app's own ways: a tab as a tap on it in the bar;
+    /// a titanvps:// link as one opened from outside (onOpenURL); with TITAN_PAYMENTS Тарифы as
+    /// «Продлить проездной» opens it, the packs as «Добавить ГБ», Личный кабинет as Проездной's
+    /// button (openBlockCabinet). Тарифы up (a block of tariffs.top) goes down for a tab, a link
+    /// or the cabinet.
+    private func runBlock(_ action: RemoteBlock.Action) {
+        switch action {
+        case .screen(let screen):
+            #if TITAN_PAYMENTS
+            store.paywall = nil
+            #endif
+            switch screen {
+            case .route: tab = .home
+            case .pass: tab = .subscription
+            case .profile: tab = .profile
+            }
+        case .deeplink(let url):
+            #if TITAN_PAYMENTS
+            store.paywall = nil
+            #endif
+            if privacyAccepted { openLink(url) } else { pendingLink = url }
+        case .tariffs:
+            #if TITAN_PAYMENTS
+            let expire = store.subscription?.info.expire ?? 0
+            let reason: PaywallReason = expire <= 0 || expire > Int64(Date().timeIntervalSince1970) ? .renew : .expired
+            store.paywall = reason
+            #else
+            break
+            #endif
+        case .packs:
+            #if TITAN_PAYMENTS
+            store.paywall = .traffic
+            #else
+            break
+            #endif
+        case .cabinet:
+            #if TITAN_PAYMENTS
+            openBlockCabinet()
+            #else
+            break
+            #endif
+        case .url, .bot, .support, .copy:
+            // ServerBlocks' own.
+            break
+        }
+    }
+
+    #if TITAN_PAYMENTS
+    /// Личный кабинет from a block: Проездной brought up and its cabinet opened there
+    /// (AppStore.cabinetRequest). UIKit shows one sheet at a time: Тарифы, if up, goes down first
+    /// (as openTrafficPaywall waits); something still up after 2 s, not opened.
+    private func openBlockCabinet() {
+        store.paywall = nil
+        Task {
+            var waited = 0
+            while Self.presenting && waited < 20 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            tab = .subscription
+            guard !Self.presenting, store.subscription != nil else { return }
+            store.cabinetRequest = true
+        }
     }
     #endif
 
