@@ -221,10 +221,10 @@ struct RootView: View {
     #endif
 
     /// A block's action (ServerBlocks) by the app's own ways: a tab as a tap on it in the bar;
-    /// a titanvps:// link as one opened from outside (onOpenURL); with TITAN_PAYMENTS Тарифы as
-    /// «Продлить проездной» opens it, the packs as «Добавить ГБ», Личный кабинет as Проездной's
-    /// button (openBlockCabinet). Тарифы up (a block of tariffs.top) goes down for a tab, a link
-    /// or the cabinet.
+    /// with TITAN_PAYMENTS Тарифы as «Продлить проездной» opens it, the packs as «Добавить ГБ»,
+    /// Личный кабинет as Проездной's button (openBlockCabinet). A block's titanvps:// link is one of
+    /// these already (RemoteBlock.Action.appLink): never openLink, which adds a pass. Тарифы up (a
+    /// block of tariffs.top) goes down for a tab or the cabinet.
     private func runBlock(_ action: RemoteBlock.Action) {
         switch action {
         case .screen(let screen):
@@ -236,11 +236,6 @@ struct RootView: View {
             case .pass: tab = .subscription
             case .profile: tab = .profile
             }
-        case .deeplink(let url):
-            #if TITAN_PAYMENTS
-            store.paywall = nil
-            #endif
-            if privacyAccepted { openLink(url) } else { pendingLink = url }
         case .tariffs:
             #if TITAN_PAYMENTS
             let expire = store.subscription?.info.expire ?? 0

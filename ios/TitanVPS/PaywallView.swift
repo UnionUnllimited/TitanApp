@@ -41,6 +41,7 @@ struct PaywallView: View {
     @State private var packsAsked = false
     private static let subscriptionsId = "paywall.subscriptions"
     private static let packsId = "paywall.packs"
+    private static let otherId = "paywall.other"
 
     private struct Note: Equatable {
         let text: String
@@ -56,15 +57,14 @@ struct PaywallView: View {
                             header
                             // The panel's blocks for tariffs.top: nothing, not even the gap, without.
                             ServerBlocks(slot: .tariffsTop, padding: EdgeInsets(top: 14, leading: 0, bottom: 0, trailing: 0),
-                                         handle: { inPlace($0, proxy) })
+                                         canHere: canHere, handle: { inPlace($0, proxy) })
                         }
                         if let note {
                             banner(note).transition(.opacity.combined(with: .move(edge: .top)))
                         }
                         // Гигабайты go to a key; none in the App Store (not made yet): no card for
                         // them, not a «скоро» at the top.
-                        if appStore && (reason == .traffic || packsAsked) && store.subscription != nil
-                            && !(purchases.loaded && purchases.packs.isEmpty) {
+                        if (reason == .traffic || packsAsked) && packsPossible {
                             packsCard
                                 .id(Self.packsId)
                         }
@@ -72,7 +72,7 @@ struct PaywallView: View {
                             subscriptionsCard
                                 .id(Self.subscriptionsId)
                         }
-                        if showsOther { other }
+                        if showsOther { other.id(Self.otherId) }
                         if !appStore && !showsOther { nothingToPay }
                         // The privacy policy a tap away without the App Store's card too.
                         if !appStore {
@@ -129,14 +129,35 @@ struct PaywallView: View {
     /// The App Store's part: on unless the panel's config turned it off (payments.appStore).
     private var appStore: Bool { store.remote.appStoreOn }
 
+    /// The packs' card can be here: the App Store's part on, a pass to add them to, and the App
+    /// Store hasn't answered without packs (while it loads, the card's shapes are there).
+    private var packsPossible: Bool {
+        appStore && store.subscription != nil && !(purchases.loaded && purchases.packs.isEmpty)
+    }
+
+    /// A block's action with somewhere to go to here (ServerBlocks' canHere; a block without it
+    /// isn't shown in Тарифы): «tariffs» while the App Store's subscriptions or Другие методы are
+    /// on screen, «packs» while their card can be (packsPossible). The rest as anywhere.
+    private func canHere(_ action: RemoteBlock.Action) -> Bool {
+        switch action {
+        case .tariffs: return appStore || showsOther
+        case .packs: return packsPossible
+        default: return true
+        }
+    }
+
     /// A block's action that is on this screen already (ServerBlocks' handle): «tariffs» scrolls
-    /// to the App Store's subscriptions, «packs» brings the packs' card (if the App Store has
-    /// packs) and scrolls to it. The rest as anywhere: true when done here.
+    /// to the App Store's subscriptions (with that part off, to Другие методы), «packs» brings the
+    /// packs' card and scrolls to it. The rest as anywhere: true when done here (nothing to go to:
+    /// done, the block isn't shown then anyway).
     private func inPlace(_ action: RemoteBlock.Action, _ proxy: ScrollViewProxy) -> Bool {
         let target: String
         switch action {
-        case .tariffs: target = Self.subscriptionsId
+        case .tariffs:
+            guard canHere(action) else { return true }
+            target = appStore ? Self.subscriptionsId : Self.otherId
         case .packs:
+            guard packsPossible else { return true }
             packsAsked = true
             target = Self.packsId
         default: return false

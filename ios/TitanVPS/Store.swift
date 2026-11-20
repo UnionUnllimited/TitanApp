@@ -45,11 +45,16 @@ final class AppStore: ObservableObject {
 
     /// The panel's switches in force (RemoteConfig, docs/BACKEND-CONFIG.md): the saved ones from
     /// launch, newer ones with each load of the pass (updateRemote) and from its URL again while
-    /// the app is open (refreshRemote). Code off the main thread reads RemoteConfig.current, set at
-    /// the same moment.
+    /// the app is open (refreshRemote; a config that rides on the pass: the pass's headers again,
+    /// recheckPassConfig). Code off the main thread reads RemoteConfig.current, set at the same
+    /// moment.
     @Published private(set) var remote = RemoteConfig.current
     /// The config's URL being asked: one request at a time.
     private var remoteFetch: Task<Void, Never>?
+    /// The pass asked again for its titan-config (recheckPassConfig): one at a time.
+    private var passConfigFetch: Task<Void, Never>?
+    /// When the pass was last asked for it, this run (its loads count too: Subscription.fetchedAt).
+    private var passConfigAt: Date?
     /// While the app is on screen: the config's URL again every minute (remoteOnScreen).
     private var remotePoll: Task<Void, Never>?
     /// The last ask of the config's URL, this run (Технический режим; no second ask of the same URL
@@ -57,8 +62,8 @@ final class AppStore: ObservableObject {
     private(set) var remoteCheck: RemoteCheck?
     /// The panel's blocks closed by their × (RemoteBlock.dismissible), by id: not shown again here.
     @Published private(set) var closedBlocks: Set<String> = Set(UserDefaults.standard.stringArray(forKey: RemoteConfigCache.closedBlocksKey) ?? [])
-    /// A block's action that RootView does (ServerBlocks): a tab, a titanvps:// link, Тарифы, the
-    /// packs, Личный кабинет. Set back to nil as it is taken.
+    /// A block's action that RootView does (ServerBlocks): a tab, Тарифы, the packs, Личный
+    /// кабинет. Set back to nil as it is taken.
     @Published var blockRequest: RemoteBlock.Action?
     #if TITAN_PAYMENTS
     /// Личный кабинет asked for by a block: Проездной opens it as its own button does, once on
@@ -375,17 +380,30 @@ final class AppStore: ObservableObject {
     /// app opens and each time it comes back, every minute while it is on screen (remoteOnScreen),
     /// right before Тарифы and Личный кабинет and from Технический режим ([force]: even if it
     /// answered a few seconds ago). Not before Конфиденциальность is accepted, nor without a
-    /// pass, nor where the config rides on the pass itself (titan-config: each load brings it).
+    /// pass. Where the config rides on the pass itself (titan-config, no URL): the pass's headers
+    /// again instead (recheckPassConfig), heavier, so less often: as the app opens and comes back
+    /// a minute or more after the pass's last load, every 5 minutes on screen, and with [force]
+    /// unless it was asked under 10 s ago.
     func refreshRemote(force: Bool = false) {
-        guard UserDefaults.standard.bool(forKey: PrivacyNoticeView.key), subscription != nil,
-              let url = remoteURL else { return }
-        fetchRemote(url, force: force)
+        checkRemote(force: force, passAge: 60)
+    }
+
+    /// refreshRemote with [passAge]: how old the pass's last load or ask may be before the pass
+    /// is asked again for its titan-config (the minute's poll: 5 minutes).
+    private func checkRemote(force: Bool, passAge: TimeInterval) {
+        guard UserDefaults.standard.bool(forKey: PrivacyNoticeView.key), let sub = subscription else { return }
+        if let url = remoteURL {
+            fetchRemote(url, force: force)
+        } else if sub.info.remoteConfig != nil {
+            recheckPassConfig(maxAge: force ? 10 : passAge)
+        }
     }
 
     /// Технический режим's «Проверить сейчас»: the ask, and its answer awaited.
     func recheckRemote() async {
         refreshRemote(force: true)
         await remoteFetch?.value
+        await passConfigFetch?.value
     }
 
     /// The app on screen or not (RootView, by its scene's phase): on screen, the config's URL now
@@ -400,9 +418,55 @@ final class AppStore: ObservableObject {
             while true {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard !Task.isCancelled, let self else { return }
-                self.refreshRemote()
+                self.checkRemote(force: false, passAge: 300)
             }
         }
+    }
+
+    /// The config rides on the pass itself (its titan-config, no titan-config-url): the pass asked
+    /// again for it when its last load or ask is [maxAge] old or more. Only the config is taken
+    /// from the answer (updateRemote's way): the directions stay as loaded, so no spinner and
+    /// nothing of the route or the VPN's profile is touched; a pass that brings a titan-config-url
+    /// now is loaded as a whole (that URL is asked from then on). A moment's wait first: a load of
+    /// the pass that starts now (the launch's, back after 30 minutes) brings the config itself,
+    /// and then this asks nothing. One at a time, not while the pass is loading, quiet on failure
+    /// (Технический режим shows it).
+    private func recheckPassConfig(maxAge: TimeInterval) {
+        guard passConfigFetch == nil, !busy, passConfigAge.map({ $0 >= maxAge }) == true else { return }
+        let started = generation
+        passConfigFetch = Task {
+            defer { passConfigFetch = nil }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard started == generation, !busy, passConfigAge.map({ $0 >= maxAge }) == true,
+                  let url = subscription?.url else { return }
+            let asked = Date()
+            passConfigAt = asked
+            remoteCheck = RemoteCheck(at: asked, url: "titan-config", result: .asking)
+            let fresh = try? await SubscriptionAPI.fetch(url)
+            var result: RemoteCheck.Result = fresh == nil ? .failed : .same
+            // Taken for the same key only, and only if the pass didn't load meanwhile (its config
+            // is in force then).
+            if let fresh, started == generation, let sub = subscription, sub.url == url, sub.fetchedAt < asked {
+                if RemoteConfig.https(fresh.info.remoteConfigUrl) != nil {
+                    // Its config's URL now: the pass as a whole, so that URL is the one asked.
+                    remoteCheck = nil
+                    await refresh(quiet: true)
+                    return
+                }
+                // Without a config now (or one that doesn't read): the one in force stays.
+                if let header = fresh.info.remoteConfig, let config = RemoteConfig.parse(header: header) {
+                    let changed = applyRemote(config, source: RemoteConfig.Source(kind: "header", at: Date()))
+                    if changed { result = .changed }
+                }
+            }
+            if remoteCheck?.url == "titan-config" { remoteCheck?.result = result }
+        }
+    }
+
+    /// Since the pass's last load or ask for its config, nil without a pass.
+    private var passConfigAge: TimeInterval? {
+        guard let sub = subscription else { return nil }
+        return Date().timeIntervalSince(max(sub.fetchedAt, passConfigAt ?? .distantPast))
     }
 
     /// Where the config comes from: the pass's titan-config-url; with no URL and no config of its
@@ -455,8 +519,9 @@ final class AppStore: ObservableObject {
         RemoteConfigCache.save(config, source: source)
         guard config != old else { return false }
         remote = config
-        // Closed blocks the panel no longer sends are forgotten: one sent again later shows again.
-        if let sent = config.blocks { keepClosedBlocks(Set(sent.compactMap(\.id))) }
+        // Closed blocks the panel no longer sends are forgotten (all of them with no blocks in the
+        // document, or blocks not a list: none are in force then): one sent again later shows again.
+        keepClosedBlocks(Set((config.blocks ?? []).compactMap(\.id)))
         let stopped = vpn.map { routeStopped($0) } ?? false
         fitChoice(stopped: stopped)
         // «Авто» to the row it means now, while stopped (on the way the route keeps its direction).
@@ -484,10 +549,16 @@ final class AppStore: ObservableObject {
 
     /// What a place on screen shows of the panel's blocks now (ServerBlocks): those for [slot]
     /// not hidden (hiddenReason: closed by hand, their conditions, an action this build can't do
-    /// now); three at most, in the panel's order. It reads the route's state too (vpn): a screen
-    /// that shows them observes the VPN itself, and asks again each minute for the time's bounds.
-    func blocks(for slot: RemoteBlock.Slot, now: Date = Date()) -> [RemoteBlock] {
-        let shown = remote.blocks(for: slot).filter { hiddenReason($0, now: now) == nil }
+    /// now; [here]: the place's own word on an action, ServerBlocks.canHere); three at most, in
+    /// the panel's order. It reads the route's state too (vpn): a screen that shows them observes
+    /// the VPN itself, and asks again each minute for the time's bounds.
+    func blocks(for slot: RemoteBlock.Slot, now: Date = Date(),
+                here: ((RemoteBlock.Action) -> Bool)? = nil) -> [RemoteBlock] {
+        let shown = remote.blocks(for: slot).filter { b in
+            guard hiddenReason(b, now: now) == nil else { return false }
+            guard let action = b.action, let here else { return true }
+            return here(action)
+        }
         return Array(shown.prefix(RemoteConfig.blocksPerPlace))
     }
 
@@ -511,12 +582,12 @@ final class AppStore: ObservableObject {
     /// need a way to pay (RemoteConfig.renewOn; the packs a pass to add to), the cabinet has to be
     /// on, with a pass and a way in (as Проездной's «Личный кабинет»), the bot the app's ways out
     /// (AppStorePurchases.linksOut); none of those four without TITAN_PAYMENTS. A tab needs the
-    /// tabs (a pass). Links, copying and support always (a link that isn't https or titanvps://
-    /// makes no block).
+    /// tabs (a pass). Links, copying and support always (a link that isn't https makes no block;
+    /// a titanvps:// one is one of these actions: RemoteBlock.Action.appLink).
     func actionRefusal(_ action: RemoteBlock.Action?) -> String? {
         guard let action else { return nil }
         switch action {
-        case .url, .copy, .deeplink, .support:
+        case .url, .copy, .support:
             return nil
         case .screen:
             return subscription == nil ? "screen: кода проездного нет, вкладок нет" : nil

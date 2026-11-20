@@ -680,6 +680,7 @@ struct RemoteBlock: Equatable, Identifiable {
     /// A tab, for «screen»: Маршрут, Проездной, Профиль.
     enum Screen: String { case route, pass, profile }
 
+    /// A «deeplink» is read as the action its link names (Action.appLink): none of its own.
     enum Action: Equatable {
         /// https only; inApp: in the app's own browser, else Safari.
         case url(URL, inApp: Bool)
@@ -687,8 +688,6 @@ struct RemoteBlock: Equatable, Identifiable {
         case screen(Screen)
         /// The words to copy, 200 characters at most.
         case copy(String)
-        /// The app's own titanvps:// link.
-        case deeplink(URL)
     }
 
     enum PassStatus: String, CaseIterable { case active, expired }
@@ -747,10 +746,10 @@ struct RemoteBlock: Equatable, Identifiable {
 
 extension RemoteBlock {
     /// The panel's block as sent; nil when it can't be one: no id (64), place or title (60) within
-    /// limits, or an action this build can never do (an unknown type, a link that isn't https or
-    /// titanvps://, an unknown screen, nothing to copy). Text over 200 and a button over 24
-    /// characters are dropped, the block stays; an unknown kind is a card, an unknown tone
-    /// neutral, an unknown icon none. An action of the wrong type (not an object) is as if not
+    /// limits, or an action this build can never do (an unknown type, a link that isn't https, a
+    /// titanvps:// link not among Action.appLink's, an unknown screen, nothing to copy). Text
+    /// over 200 and a button over 24 characters are dropped, the block stays; an unknown kind is a
+    /// card, an unknown tone neutral, an unknown icon none. An action of the wrong type (not an object) is as if not
     /// sent: information only.
     init?(_ b: RemoteConfig.Block) {
         guard let id = RemoteConfig.validId(b.id, max: 64),
@@ -783,7 +782,7 @@ extension RemoteBlock {
             case "url"?: return "action: url не https"
             case "screen"?: return "action: screen не route, pass или profile"
             case "copy"?: return "action: copy пустой или длиннее 200"
-            case "deeplink"?: return "action: deeplink не titanvps://"
+            case "deeplink"?: return "action: deeplink не из " + RemoteBlock.Action.appLinks.map { "titanvps://" + $0 }.joined(separator: ", ")
             default: return "action: type «\(a.type ?? "")» неизвестен"
             }
         }
@@ -810,10 +809,35 @@ extension RemoteBlock.Action {
             guard let text = RemoteConfig.shortText(value, max: 200) else { return nil }
             self = .copy(text)
         case "deeplink"?:
-            guard let value, value.lowercased().hasPrefix("titanvps://"), let url = URL(string: value) else { return nil }
-            self = .deeplink(url)
+            guard let action = value.flatMap(Self.appLink) else { return nil }
+            self = action
         default:
             return nil
+        }
+    }
+
+    /// The titanvps:// links a block may name (docs/BACKEND-CONFIG.md, «deeplink»): the app's own
+    /// places, each the action of the same name.
+    static let appLinks = ["route", "pass", "profile", "tariffs", "packs", "cabinet", "support", "bot"]
+
+    /// titanvps://<one of appLinks> (any case, a «/» at the end at most) as its action: route, pass
+    /// and profile the tabs (screen), the rest the action of that name. Nothing else: a block's
+    /// link is the same for everyone, so a link that adds a pass (titanvps://import/…, add?url=…,
+    /// which onOpenURL takes) would put the panel's pass in place of each user's own.
+    static func appLink(_ value: String) -> RemoteBlock.Action? {
+        guard let c = URLComponents(string: value), c.scheme?.lowercased() == "titanvps",
+              let place = c.host?.lowercased(), c.path.isEmpty || c.path == "/",
+              c.query == nil, c.fragment == nil, c.user == nil, c.password == nil, c.port == nil else { return nil }
+        switch place {
+        case "route": return .screen(.route)
+        case "pass": return .screen(.pass)
+        case "profile": return .screen(.profile)
+        case "tariffs": return .tariffs
+        case "packs": return .packs
+        case "cabinet": return .cabinet
+        case "support": return .support
+        case "bot": return .bot
+        default: return nil
         }
     }
 }

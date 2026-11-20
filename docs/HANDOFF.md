@@ -219,7 +219,7 @@ CI теперь собирает его всегда.
   (заливка цвета `tone`, у `neutral` — `Color.primary`, т. е. серая) поверх `Palette.surface`; без `action` — та же
   надпись без нажатия. `row` — как `SettingsRow` в `Card`: плитка, заголовок цветом `tone` (`RouteTone.*Ink`),
   стрелка по действию (`arrow.up.right` — наружу, `doc.on.doc` — копирование, `chevron.right` — в приложении). Крестик
-  (`ServerBlockClose`, «Закрыть») — в углу карточки, в конце строки, у кнопки — на стеклянном чипе. Значок `check` —
+  (`ServerBlockClose`, «Закрыть: заголовок» — после ревью, см. ниже) — в углу карточки, в конце строки, у кнопки — на стеклянном чипе. Значок `check` —
   `checkmark.seal.fill` (было `checkmark.circle.fill`), остальные — как в шаге A.
 - VoiceOver: заголовок и текст — один элемент («заголовок. текст»), кнопкой — если нажимается весь блок; отдельная
   кнопка карточки — отдельный элемент; подсказка «Открыть» / «Скопировать».
@@ -230,10 +230,10 @@ CI теперь собирает его всегда.
   и карточками.
 - Действия (`ServerBlocks.run`, сначала `Haptics.selection()` и ещё раз `store.canDo`): `url` — `openURL`, с `inApp` —
   `InAppBrowser.open` (`SFSafariViewController` над верхним показанным контроллером, тот же файл; не вышло — `openURL`);
-  `bot` — `Config.telegram`, как «Открыть бота»; `support` — `store.supportURL`; `copy` — `UIPasteboard` и тост
-  «Скопировано» (без второй вибрации). Остальное — через `AppStore.blockRequest` в `RootView.runBlock`: `screen` —
-  вкладка (`Тарифы` закрываются), `deeplink` — `openLink`, как `onOpenURL` (до «Конфиденциальности» — `pendingLink`),
-  `tariffs` — `store.paywall = .renew / .expired` (как «Продлить проездной»), `packs` — `.traffic` (как «Добавить ГБ»),
+  `bot` — `Config.telegram`, как «Открыть бота»; `support` — `store.supportURL`; `copy` — `UIPasteboard` и
+  «Скопировано» на самом блоке (после ревью, см. ниже; тоста больше нет). Остальное — через `AppStore.blockRequest` в
+  `RootView.runBlock`: `screen` — вкладка (`Тарифы` закрываются), `deeplink` — после ревью читается как действие того же
+  имени (см. ниже), `openLink` больше не вызывается, `tariffs` — `store.paywall = .renew / .expired` (как «Продлить проездной»), `packs` — `.traffic` (как «Добавить ГБ»),
   `cabinet` — `openBlockCabinet`: «Тарифы» вниз, ожидание, как в `openTrafficPaywall`, вкладка «Проездной» и
   `AppStore.cabinetRequest`, который `SubscriptionView` (`onAppear` и `onChange`) открывает, как свою кнопку «Личный
   кабинет» (без ссылки кабинета — бот). В самих «Тарифах» (`handle` у `ServerBlocks`, `PaywallView.inPlace`): `tariffs`
@@ -250,6 +250,47 @@ CI теперь собирает его всегда.
 - Без компилятора здесь: проверено разбором tree-sitter (все файлы, с `TITAN_PAYMENTS` и без), на устройстве не
   смотрелось — в первую очередь стоит проверить вид над картой в светлой и тёмной теме, `inApp` поверх «Тарифов» и
   `cabinet` из «Тарифов» (закрытие листа, затем кабинет).
+
+## Настройки и блоки: исправления после ревью (iOS, шаг C)
+
+Ревью шагов A и B (`docs/BACKEND-CONFIG.md` обновлён под каждое):
+
+- Только `titan-config` (без `titan-config-url`): раньше `refreshRemote` для него ничего не делал — настройки
+  менялись лишь с подпиской (запуск, «потянуть», возвращение через 30 минут). Теперь `AppStore.checkRemote` при таком
+  проездном зовёт `recheckPassConfig(maxAge:)`: подписка запрашивается снова (`SubscriptionAPI.fetch`), но из ответа
+  берутся только настройки (`applyRemote`, как `updateRemote`) — `subscription` не меняется, `busy` не включается, профиль
+  VPN, напоминания и выбор не трогаются. Возраст считается от `max(fetchedAt, passConfigAt)`: при открытии и возвращении
+  — от 60 с (`refreshRemote()`), в минутном опросе — от 300 с (`checkRemote(force: false, passAge: 300)`), с `force`
+  («Тарифы», кабинет, «Проверить сейчас») — от 10 с. Перед запросом ждёт 1,5 с и не идёт, если подписка уже грузится
+  (`busy`) или только что загрузилась: так запуск и возвращение через 30 минут не дают двух запросов подписки. Ответ
+  не применяется, если за время запроса сменился ключ или подписка загрузилась целиком. Если в ответе появился
+  `titan-config-url` — `refresh(quiet: true)` (подписка целиком, дальше спрашивается ссылка). Один за раз
+  (`passConfigFetch`, его ждёт и `recheckRemote`); в Техническом режиме «Последняя проверка» показывает и его
+  (`RemoteCheck.url` = `"titan-config"`), подпись карточки объясняет, что этот путь медленнее и тяжелее — панели нужна ссылка.
+- `deeplink`: раньше уходил в `RootView.openLink` → `store.activate`, то есть понимал только ссылки добавления
+  проездного — `titanvps://pass` давал «Это не код проездного Titan», а ссылка импорта выдала бы всем проездной панели.
+  Теперь `case .deeplink` у `RemoteBlock.Action` нет: `Action.appLink` читает только `titanvps://route|pass|profile`
+  (вкладки, как `screen`) и `titanvps://tariffs|packs|cabinet|support|bot` (те же действия; регистр любой, `/` в конце
+  можно, без пути, `?`, `#`, логина и порта), остальное — блок не принят («deeplink не из …» в Техническом режиме).
+- `copy`: тост `RootView` лежит под листом «Тарифов», поэтому «Скопировано» теперь на самом блоке на 1,8 с
+  (`ServerBlocks.copied` по `id`, `flashCopied`; как ID в `CabinetView`): заголовок (у карточки со своей кнопкой —
+  надпись кнопки) — «Скопировано» цветом `RouteTone.good`, значок — галочка на `Palette.green`, знак действия — галочка;
+  VoiceOver — `VoiceOver.announce`.
+- «Тарифы»: блоки `tariffs` / `packs` без цели больше не видны. `ServerBlocks(canHere:)` → `AppStore.blocks(for:now:here:)`
+  (фильтр до «трёх на место»; `run` проверяет его ещё раз); `PaywallView.canHere`: `tariffs` — если есть подписки App
+  Store или «Другие методы», `packs` — `packsPossible` (App Store включён, есть код, App Store не ответил пустым списком
+  пакетов; тем же условием рисуется сама карточка). `tariffs` при `payments.appStore: false` прокручивает к «Другим
+  методам» (`id` `paywall.other`). Технический режим «видно» для `tariffs.top` этот фильтр экрана не учитывает.
+- Крестик блока для VoiceOver — «Закрыть: заголовок» (`ServerBlockClose(title:)`): не путается с «Закрыть» листа
+  «Тарифов» и с соседними блоками.
+- Закрытые крестиком забываются при любом новом документе: без `blocks` (или `blocks` не массивом) — все
+  (`keepClosedBlocks(Set((config.blocks ?? []).compactMap(\.id)))`); раньше только при присланном `blocks`, и
+  удалённый в панели последний блок (ключ пропадал) оставлял их навсегда.
+- Строки `bot` и `cabinet` в таблице действий `docs/BACKEND-CONFIG.md` теперь называют и `payments.enabled` (так было в
+  коде: `linksOut` = `otherMethodsOn`, `cabinetOn` — оба с `paymentsOn`).
+- Проверено разбором tree-sitter (с `TITAN_PAYMENTS` и без), баланс `#if` / `#endif`, слова на экране — по правилу
+  владельца. На устройстве не смотрелось: стоит проверить «Скопировано» на карточке, строке и кнопке, `tariffs.top` с
+  `payments.appStore: false` и проездной только с `titan-config` (Технический режим → «Последняя проверка»).
 
 ## Тема «Маршрут» на iOS
 

@@ -17,6 +17,9 @@ struct ServerBlocks: View {
     let slot: RemoteBlock.Slot
     /// Around them, while there are some.
     var padding = EdgeInsets()
+    /// The place's own word on an action: false where it has nothing to go to here (Тарифы: the
+    /// packs without their card), and the block isn't shown in it.
+    var canHere: ((RemoteBlock.Action) -> Bool)? = nil
     /// The place's own way with an action, before the usual one (Тарифы: its tariffs and packs are
     /// on the same screen): true when it did it.
     var handle: ((RemoteBlock.Action) -> Bool)? = nil
@@ -25,14 +28,17 @@ struct ServerBlocks: View {
     @EnvironmentObject var vpn: VPNController
     @Environment(\.openURL) private var openURL
     @Environment(\.titanReduceMotion) private var reduceMotion
+    /// The block whose words were just copied: «Скопировано» on it for a moment (flashCopied).
+    @State private var copied: String?
 
     var body: some View {
         // Each minute as well: from and until pass, the pass runs out while the screen is open.
         TimelineView(.everyMinute) { _ in
-            let shown = store.blocks(for: slot, now: Date())
+            let shown = store.blocks(for: slot, now: Date(), here: canHere)
             VStack(spacing: 10) {
                 ForEach(shown) { block in
-                    ServerBlockView(block: block, run: { run(block) }, close: { close(block) })
+                    ServerBlockView(block: block, copied: copied == block.id,
+                                    run: { run(block) }, close: { close(block) })
                         .transition(change)
                 }
             }
@@ -54,11 +60,11 @@ struct ServerBlocks: View {
 
     /// The block's action, by the app's own ways to each: links in Safari (inApp: Safari's sheet
     /// in the app), the bot and support as Проездной's and Профиль's buttons, the words copied with
-    /// «Скопировано»; Тарифы, the packs, Личный кабинет, a tab and a titanvps:// link by RootView
-    /// (AppStore.blockRequest). Not if it can't be done any more (the config or the pass changed
-    /// since it was drawn).
+    /// «Скопировано» on the block (flashCopied); Тарифы, the packs, Личный кабинет and a tab by
+    /// RootView (AppStore.blockRequest). Not if it can't be done any more (the config or the pass
+    /// changed since it was drawn).
     private func run(_ block: RemoteBlock) {
-        guard let action = block.action, store.canDo(action) else { return }
+        guard let action = block.action, store.canDo(action), canHere?(action) ?? true else { return }
         Haptics.selection()
         if let handle, handle(action) { return }
         switch action {
@@ -70,9 +76,21 @@ struct ServerBlocks: View {
             openURL(store.supportURL)
         case .copy(let text):
             UIPasteboard.general.string = text
-            store.showToast("Скопировано", .success, haptic: false)
-        case .tariffs, .packs, .cabinet, .screen, .deeplink:
+            flashCopied(block.id)
+        case .tariffs, .packs, .cabinet, .screen:
             store.blockRequest = action
+        }
+    }
+
+    /// «Скопировано» on the block itself for a moment, as Личный кабинет's ID has it (its title,
+    /// a tick for its mark and icon), not RootView's toast: that one is under a sheet such as
+    /// Тарифы. VoiceOver hears it.
+    private func flashCopied(_ id: String) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { copied = id }
+        VoiceOver.announce("Скопировано")
+        Task {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            if copied == id { withAnimation { copied = nil } }
         }
     }
 
@@ -84,6 +102,9 @@ struct ServerBlocks: View {
 /// One block, as its kind draws it.
 private struct ServerBlockView: View {
     let block: RemoteBlock
+    /// Its words were just copied: «Скопировано» for its title (a card with a button of its own:
+    /// for that button's words), a tick for its mark and icon, in green.
+    let copied: Bool
     let run: () -> Void
     let close: () -> Void
 
@@ -95,9 +116,13 @@ private struct ServerBlockView: View {
         }
     }
 
+    private var title: String { copied ? "Скопировано" : block.title }
+
     /// What VoiceOver reads for it: the title, then the line.
-    private var spoken: String {
-        [block.title, block.text].compactMap { $0 }.joined(separator: ". ")
+    private var spoken: String { phrase(title) }
+
+    private func phrase(_ title: String) -> String {
+        [title, block.text].compactMap { $0 }.joined(separator: ". ")
     }
 
     private var hint: String {
@@ -122,7 +147,7 @@ private struct ServerBlockView: View {
                 cardContent(whole: false)
             }
             if block.dismissible {
-                ServerBlockClose(action: close)
+                ServerBlockClose(title: block.title, action: close)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -138,10 +163,10 @@ private struct ServerBlockView: View {
             } else {
                 cardHead(mark: false)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(spoken)
-                if let title = block.button, block.action != nil {
+                    .accessibilityLabel(phrase(block.title))
+                if let label = block.button, block.action != nil {
                     Button(action: run) {
-                        Text(title).lineLimit(1).minimumScaleFactor(0.8)
+                        Text(copied ? title : label).lineLimit(1).minimumScaleFactor(0.8)
                     }
                     .buttonStyle(ServerBlockButtonStyle(tone: block.tone, height: 44))
                     .accessibilityHint(hint)
@@ -154,17 +179,18 @@ private struct ServerBlockView: View {
         .padding(.trailing, block.dismissible ? 0 : 14)
     }
 
-    /// [mark]: the whole card is the button (its arrow on the right).
+    /// [mark]: the whole card is the button (its arrow on the right; «Скопировано» for its title).
     private func cardHead(mark: Bool) -> some View {
+        let swapped = copied && mark
         // A title alone in the middle of its tile; with a line, both from the top.
-        HStack(alignment: block.text == nil ? .center : .top, spacing: 12) {
+        return HStack(alignment: block.text == nil ? .center : .top, spacing: 12) {
             if let icon = block.icon {
-                IconTile(icon: icon.symbol, color: block.tone.tile, size: 34)
+                IconTile(icon: copied ? "checkmark" : icon.symbol, color: copied ? Palette.green : block.tone.tile, size: 34)
             }
             VStack(alignment: .leading, spacing: 3) {
-                Text(block.title)
+                Text(swapped ? title : block.title)
                     .font(.scaled(16, weight: .semibold))
-                    .foregroundStyle(Color.primary)
+                    .foregroundStyle(swapped ? RouteTone.good : Color.primary)
                 if let text = block.text {
                     Text(text)
                         .font(.scaled(14))
@@ -175,9 +201,9 @@ private struct ServerBlockView: View {
             .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if mark, let action = block.action {
-                Image(systemName: action.mark)
+                Image(systemName: copied ? "checkmark" : action.mark)
                     .font(.scaled(13, weight: .bold))
-                    .foregroundStyle(RouteTone.ink3)
+                    .foregroundStyle(copied ? RouteTone.good : RouteTone.ink3)
                     .padding(.top, block.text == nil ? 0 : 3)
                     .accessibilityHidden(true)
             }
@@ -193,7 +219,7 @@ private struct ServerBlockView: View {
             if block.action != nil {
                 Button(action: run) { buttonLabel }
                     .buttonStyle(ServerBlockButtonStyle(tone: block.tone))
-                    .accessibilityLabel(block.title)
+                    .accessibilityLabel(title)
                     .accessibilityHint(hint)
             } else {
                 ServerBlockPill(tone: block.tone, height: 50) { buttonLabel }
@@ -201,17 +227,19 @@ private struct ServerBlockView: View {
                     .accessibilityLabel(block.title)
             }
             if block.dismissible {
-                ServerBlockClose(action: close, chip: true)
+                ServerBlockClose(title: block.title, action: close, chip: true)
             }
         }
     }
 
     private var buttonLabel: some View {
         HStack(spacing: 8) {
-            if let icon = block.icon {
+            if copied {
+                Image(systemName: "checkmark").accessibilityHidden(true)
+            } else if let icon = block.icon {
                 Image(systemName: icon.symbol).accessibilityHidden(true)
             }
-            Text(block.title)
+            Text(title)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .minimumScaleFactor(0.8)
@@ -236,7 +264,7 @@ private struct ServerBlockView: View {
                         .accessibilityLabel(spoken)
                 }
                 if block.dismissible {
-                    ServerBlockClose(action: close)
+                    ServerBlockClose(title: block.title, action: close)
                         .padding(.trailing, 4)
                 }
             }
@@ -246,12 +274,12 @@ private struct ServerBlockView: View {
     private var rowContent: some View {
         HStack(spacing: 14) {
             if let icon = block.icon {
-                IconTile(icon: icon.symbol, color: block.tone.tile)
+                IconTile(icon: copied ? "checkmark" : icon.symbol, color: copied ? Palette.green : block.tone.tile)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(block.title)
+                Text(title)
                     .font(.scaled(16, weight: .medium))
-                    .foregroundStyle(block.tone.ink)
+                    .foregroundStyle(copied ? RouteTone.good : block.tone.ink)
                 if let text = block.text {
                     Text(text)
                         .font(.scaled(12))
@@ -261,7 +289,12 @@ private struct ServerBlockView: View {
             }
             .multilineTextAlignment(.leading)
             Spacer(minLength: 8)
-            if let action = block.action {
+            if copied {
+                Image(systemName: "checkmark")
+                    .font(.scaled(13, weight: .semibold))
+                    .foregroundStyle(RouteTone.good)
+                    .accessibilityHidden(true)
+            } else if let action = block.action {
                 Image(systemName: action.mark)
                     .font(.scaled(13, weight: .semibold))
                     .foregroundStyle(.tertiary)
@@ -341,8 +374,11 @@ private struct ServerBlockPill<Content: View>: View {
     }
 }
 
-/// A block's ×, «Закрыть» to VoiceOver. [chip]: beside a button, on a glass chip of its own.
+/// A block's ×, «Закрыть: <its title>» to VoiceOver: told apart from Тарифы' own «Закрыть» and
+/// from another block's (a close here is for good on this device). [chip]: beside a button, on
+/// a glass chip of its own.
 private struct ServerBlockClose: View {
+    let title: String
     let action: () -> Void
     var chip = false
 
@@ -351,7 +387,7 @@ private struct ServerBlockClose: View {
             mark.contentShape(Rectangle())
         }
         .buttonStyle(PressableStyle(scale: 0.9))
-        .accessibilityLabel("Закрыть")
+        .accessibilityLabel("Закрыть: " + title)
     }
 
     @ViewBuilder private var mark: some View {
@@ -407,7 +443,7 @@ private extension RemoteBlock.Action {
         case .url(_, inApp: let inApp): return inApp ? "chevron.right" : "arrow.up.right"
         case .bot, .support: return "arrow.up.right"
         case .copy: return "doc.on.doc"
-        case .tariffs, .packs, .cabinet, .screen, .deeplink: return "chevron.right"
+        case .tariffs, .packs, .cabinet, .screen: return "chevron.right"
         }
     }
 }
