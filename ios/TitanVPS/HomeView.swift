@@ -1,23 +1,26 @@
 import SwiftUI
 
 /// Маршрут (design C «Чистый маршрут», docs/HANDOFF.md): the map with the state as its title and
-/// the route drawn to the picked direction; under it the sheet with that direction, «Поехали»
-/// and the list. On the way the trip card is over the map instead, the list still under it. One
-/// ScrollView (one per column in a wide window), so pull to refresh, Наверх and the status
-/// bar's tap to the top work as before; the map is a picture behind it, nothing on it is dragged.
+/// the route drawn to the picked direction; under it the sheet with «Авто» and «Авто · объезды»
+/// (RouteChoice), «Поехали», and the list tucked away under «Выбрать направление вручную». On
+/// the way the trip card is over the map instead, the rest still under it. One ScrollView (one
+/// per column in a wide window), so pull to refresh, Наверх and the status bar's tap to the top
+/// work as before; the map is a picture behind it, nothing on it is dragged.
 struct HomeView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var vpn: VPNController
     /// Why a ping or a check failed is shown in Технический режим only.
     @AppStorage(TechMode.key) private var techMode = false
+    /// «Выбрать направление вручную» open: the list under it (closed to start with).
+    @AppStorage(RouteChoice.listOpenKey) private var listOpen = false
     /// Технический режим's techniques per server (TechniqueStore): their rows say «приёмы».
     @AppStorage(TechniqueStore.key) private var techniquesData = Data()
     @State private var page: ServerGroup = .servers
     @State private var wifiInfo = false
     /// A server row is being dragged sideways: the page stays still.
     @State private var holdingDrag = false
-    /// Speed while connected (read only while Маршрут is on screen). Held without observing it:
-    /// only the trip card's tiles redraw each second, not all of Маршрут.
+    /// Speed while connected (read only while it can be seen, syncTraffic). Held without
+    /// observing it: only the trip card's tiles (TripStats, given this one) redraw each second.
     @State private var traffic = TrafficMonitor()
     /// Наверх: shown once the list is about a screen down.
     @State private var showTop = false
@@ -37,6 +40,7 @@ struct HomeView: View {
     /// own top (under the picked route), and the list's ScrollView, which its depth is read against.
     private static let top = "home.top"
     private static let controlsTop = "home.controlsTop"
+    private static let choicesTop = "home.choicesTop"
     private static let listTop = "home.listTop"
     private static let listSpace = "home.list"
     /// How far the sheet comes up over the map's lower edge.
@@ -56,7 +60,7 @@ struct HomeView: View {
         .onAppear {
             onScreen = true
             noteTrip(vpn.state)
-            if vpn.isConnected { traffic.start() }
+            syncTraffic()
         }
         .onDisappear {
             onScreen = false
@@ -64,16 +68,16 @@ struct HomeView: View {
             // Changes while away aren't followed: back on screen, the trip starts from the state then.
             tripSince = nil
         }
-        .onChange(of: vpn.isConnected) { connected in
-            if connected { traffic.start() } else { traffic.stop() }
-        }
+        .onChange(of: vpn.isConnected) { _ in syncTraffic() }
+        .onChange(of: scenePhase) { _ in syncTraffic() }
         .onChange(of: vpn.state) { noteTrip($0) }
         .alert("Недоступно на Wi-Fi", isPresented: $wifiInfo) {
             Button("Понятно", role: .cancel) {}
         } message: {
             Text("Объезды работают только через мобильный интернет и нужны при его ограничениях. На Wi-Fi по ним не проехать — выберите направление во вкладке «Направления».")
         }
-        // Wi-Fi came while on a bypass server: move to a regular one (same as Android).
+        // Wi-Fi came while on a bypass server picked in the list: move to a regular one (same as
+        // Android). «Авто · объезды» goes to «Авто» (AppStore.leaveBypassOnWifi).
         .onChange(of: store.onWifi) { wifi in
             guard wifi, vpn.isOn, store.blockedOnWifi(store.selected), let to = store.firstRegular else { return }
             store.select(to.id)
@@ -128,7 +132,7 @@ struct HomeView: View {
             .scrollDisabled(holdingDrag)
             .frame(width: mapWidth)
             ScrollView {
-                list(proxy, wide: true)
+                manualList(proxy, wide: true)
                     .padding(16)
                     .padding(.bottom, ScrollTopButton.room)
                     .frame(maxWidth: 680)
@@ -153,15 +157,19 @@ struct HomeView: View {
         }
     }
 
-    /// The sheet over the map's lower edge: the picked route and «Поехали» while standing, then
-    /// the list. Glass where it lies over the map, solid under it (GlassSheet).
+    /// The sheet over the map's lower edge: «Авто» and «Авто · объезды», «Поехали» under them
+    /// while standing, then the list tucked away. Glass where it lies over the map, solid under
+    /// it (GlassSheet).
     private func sheet(_ proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 18) {
-            if !tripMode {
-                parkedControls(proxy)
-                    .transition(.opacity)
+            VStack(spacing: 14) {
+                choices(proxy)
+                if !tripMode {
+                    pill
+                        .transition(.opacity)
+                }
             }
-            list(proxy, wide: false)
+            manualList(proxy, wide: false)
         }
         .padding(.horizontal, 16)
         .padding(.top, 22)
@@ -205,14 +213,25 @@ struct HomeView: View {
         }
     }
 
-    /// To the list's tabs (the picked route's card, «Сменить направление»).
+    /// To the list's tabs (the pick by hand's row).
     private func scrollToList(_ proxy: ScrollViewProxy) {
         withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(Self.listTop, anchor: .top) }
     }
 
+    /// To «Авто» and «Авто · объезды» («Сменить направление» on the trip card).
+    private func scrollToChoices(_ proxy: ScrollViewProxy) {
+        withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(Self.choicesTop, anchor: .top) }
+    }
+
+    /// The speed is read only while it can be seen: Маршрут on screen, the app not in the
+    /// background, the route up. Stopped, it says 0 until started again.
+    private func syncTraffic() {
+        if onScreen && scenePhase != .background && vpn.isConnected { traffic.start() } else { traffic.stop() }
+    }
+
     // MARK: - State
 
-    /// Off for a ping: the VPN comes back by itself after it.
+    /// Off for a check of the roads (a ping): the VPN comes back by itself after it.
     private var paused: Bool { store.vpnPaused && !vpn.isOn }
 
     /// On the way: the trip card over the map instead of «Поехали» on the sheet; through a
@@ -240,7 +259,7 @@ struct HomeView: View {
     }
 
     private var statusTitle: String {
-        if paused { return "Пауза на время пинга" }
+        if paused { return "Пауза: проверяем дороги" }
         switch vpn.state {
         case .off, .error: return "Стоим"
         case .connecting: return tripSince != nil ? "Меняем направление…" : "Строим маршрут…"
@@ -284,11 +303,11 @@ struct HomeView: View {
         if on {
             guard !vpn.isOn else { return true }
             guard let server = store.selected else {
-                store.showToast("Выберите направление в списке ниже", .warning, haptic: false)
+                store.showToast("Выберите «Авто» или направление ниже", .warning, haptic: false)
                 return false
             }
             if store.blockedOnWifi(server) {
-                store.showToast("Объезды недоступны на Wi-Fi — выберите направление во вкладке «Направления»", .warning, haptic: false)
+                store.showToast("Объезды недоступны на Wi-Fi — выберите «Авто» или направление во вкладке «Направления»", .warning, haptic: false)
                 return false
             }
             Task { await vpn.connect(server, byUser: true) }
@@ -301,8 +320,8 @@ struct HomeView: View {
     // MARK: - The map
 
     /// The top bar, the account's notices, the state as the title, the route band with the round
-    /// buttons; on the way the trip card under it (and in a wide window, standing, the picked
-    /// route with «Поехали» on a glass card, the sheet being the other column).
+    /// buttons; on the way the trip card under it (and in a wide window «Авто» / «Авто · объезды»
+    /// on a glass card, with «Поехали» standing: the sheet is the other column, the list).
     private func mapHeader(_ proxy: ScrollViewProxy, wide: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             topBar
@@ -313,6 +332,14 @@ struct HomeView: View {
                 tripCard(proxy)
                     .padding(.horizontal, 16)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
+                if wide {
+                    choices(proxy)
+                        .padding(16)
+                        .glassSurface(.card, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                        .transition(.opacity)
+                }
             } else if wide {
                 parkedControls(proxy)
                     .padding(16)
@@ -427,7 +454,7 @@ struct HomeView: View {
                 .animation(.easeInOut(duration: 0.25), value: statusTitle)
                 .accessibilityAddTraits(.isHeader)
             if paused {
-                Text("Поедем дальше сами, когда пинг закончится")
+                Text("Поедем дальше сами, когда проверим дороги")
                     .font(.scaled(15, weight: .medium)).foregroundStyle(RouteTone.ink2)
             }
             if case .error(let message) = vpn.state {
@@ -483,70 +510,219 @@ struct HomeView: View {
 
     // MARK: - Standing
 
-    /// The picked route and «Поехали» under it.
+    /// «Авто», «Авто · объезды» and «Поехали» under them (a wide window's map column).
     private func parkedControls(_ proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 14) {
-            routeCard(proxy)
+            choices(proxy)
             pill
         }
     }
 
     private var pill: some View {
-        RoutePill(phase: pillPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Пинг…",
+        RoutePill(phase: pillPhase, locked: store.pingBusy, lockedText: paused ? "Пауза" : "Проверка…",
                   failures: vpn.failures, onToggle: toggleVPN,
-                  onLockedTap: { store.showToast("Идёт пинг направлений — кнопка вернётся через пару секунд", .info) })
+                  onLockedTap: { store.showToast("Идёт проверка дорог — кнопка вернётся через пару секунд", .info) })
     }
 
-    /// The picked direction (design C's «Лучший маршрут» card): its tile, name, what it is or how
-    /// its road is, its Пинг. A tap: down to the list, to pick another.
-    private func routeCard(_ proxy: ScrollViewProxy) -> some View {
-        let s = store.selected
-        let name = s.map { RouteTile.title($0.name) } ?? "Выберите направление"
-        let note = s.flatMap { routeNote($0) }
-        let ping = s.flatMap { store.pings[$0.id] }
-        let pingSpoken = ping.map { $0 >= 0 ? ", пинг \($0) миллисекунд" : ", пинг: таймаут" } ?? ""
-        let spoken = "Куда едем: " + name + (note.map { ", " + $0 } ?? "") + pingSpoken
-        return Button { scrollToList(proxy) } label: {
+    /// Choice cards and the list opening and closing: Маршрут's spring, a fade with Reduce Motion.
+    private var unfold: Animation {
+        reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.45, dampingFraction: 0.85)
+    }
+
+    /// «Авто» and «Авто · объезды» (design C's route card, picked as with a radio: the picked one
+    /// tinted), and the direction picked by hand when it is neither, so the pick is always in
+    /// sight (the owner's ask: «Авто» to start with, the list tucked away). A card with nothing to
+    /// go to (no bypass in the pass) isn't shown.
+    private func choices(_ proxy: ScrollViewProxy) -> some View {
+        let choice = store.choice
+        let auto = store.autoServer
+        let bypass = store.bypassServer
+        return VStack(spacing: 10) {
+            if let auto {
+                choiceCard(.auto, server: auto, picked: choice == .auto)
+            }
+            if let bypass {
+                choiceCard(.bypass, server: bypass, picked: choice.isBypass, detected: choice == .bypassDetected)
+            }
+            if choice == .manual, let s = store.selected {
+                manualRow(s, proxy)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+            }
+        }
+        .animation(unfold, value: choice)
+        .id(Self.choicesTop)
+    }
+
+    /// One of the two: its sign, name, what it does («Сейчас 🇫🇮 Финляндия» once known), how its
+    /// direction's road is (the list's check, when there is one) and its radio. «Авто · объезды»
+    /// on Wi-Fi: dimmed, «Только через мобильный интернет»; picked by the mobile internet check:
+    /// a note why.
+    private func choiceCard(_ kind: RouteChoice, server: Server, picked: Bool, detected: Bool = false) -> some View {
+        let bypass = kind.isBypass
+        let locked = bypass && store.bypassLockedOnWifi
+        let title = bypass ? "Авто · объезды" : "Авто"
+        let subtitle = locked ? "Только через мобильный интернет"
+            : bypass ? "Когда мобильный интернет ограничен" : "Сам выбирает быстрое направление"
+        let now = locked ? nil : choiceNow(server, bypass: bypass, picked: picked)
+        let note: String? = detected && !locked ? "Похоже, мобильный интернет ограничен — поедем объездом" : nil
+        let ping = store.pings[server.id]
+        let pending = store.measuring.contains(server.id)
+        let measured = ping != nil || pending
+        var spoken = [title, subtitle, now, note].compactMap { $0 }.joined(separator: ". ")
+        if measured { spoken += ", задержка" + PingChip.spokenTail(ping, pending: pending) }
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+        return Button { choose(kind) } label: {
             HStack(spacing: 12) {
-                if let s {
-                    RouteTile(server: s.name, size: 48)
-                } else {
-                    Image(systemName: "signpost.right.fill")
-                        .font(.scaled(19, weight: .semibold))
-                        .foregroundStyle(RouteTone.accentInk)
-                        .frame(width: 48, height: 48)
-                        .background(Glass.well, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
+                choiceTile(bypass: bypass)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
+                    Text(title)
                         .font(.scaled(17, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1).minimumScaleFactor(0.75)
+                    Text(subtitle)
+                        .font(.scaled(13, weight: .medium))
+                        .foregroundStyle(locked ? RouteTone.warn : RouteTone.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let now {
+                        Text(now)
+                            .font(.scaled(13, weight: .semibold))
+                            .foregroundStyle(picked ? RouteTone.accentInkOnTint : RouteTone.ink3)
+                            .lineLimit(1).minimumScaleFactor(0.75)
+                    }
                     if let note {
                         Text(note)
-                            .font(.scaled(13, weight: .medium))
-                            .foregroundStyle(RouteTone.ink2)
-                            .lineLimit(2)
+                            .font(.scaled(13, weight: .semibold))
+                            .foregroundStyle(RouteTone.warn)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .transition(.opacity)
+                    }
+                }
+                .multilineTextAlignment(.leading)
+                Spacer(minLength: 6)
+                if measured {
+                    PingChip(ping: ping, pending: pending)
+                }
+                RadioMark(on: picked)
+            }
+            .padding(12)
+            .frame(minHeight: 72)
+            .background(picked ? RouteTone.picked : RouteTone.well, in: shape)
+            .overlay(shape.strokeBorder(picked ? Palette.primary.opacity(0.5) : Color.clear, lineWidth: 1.5))
+            .opacity(locked ? 0.5 : 1)
+            .contentShape(shape)
+        }
+        .buttonStyle(PressableStyle(scale: 0.98))
+        .accessibilityLabel(spoken)
+        .accessibilityAddTraits(picked ? .isSelected : [])
+        .accessibilityHint(locked ? "Недоступно на Wi‑Fi" : "")
+    }
+
+    /// «Авто»'s sparkles on the brand's gradient (as «Лучший маршрут»'s tile), «Авто · объезды»'s
+    /// detour sign on its orange.
+    private func choiceTile(bypass: Bool) -> some View {
+        Image(systemName: bypass ? "arrow.triangle.turn.up.right.diamond.fill" : "sparkles")
+            .font(.system(size: 21, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 48, height: 48)
+            .background(bypass ? AnyShapeStyle(RouteTone.detour) : AnyShapeStyle(Palette.accentGradient),
+                        in: RoundedRectangle(cornerRadius: 14.4, style: .continuous))
+            .accessibilityHidden(true)
+    }
+
+    /// Where a card goes now, once known (nothing made up: АВТО's balancer doesn't say which node
+    /// it takes): picked and on the way, the country the check came out in; «Авто · объезды»,
+    /// the bypass it goes to by name; a direction with a flag, its country.
+    private func choiceNow(_ s: Server, bypass: Bool, picked: Bool) -> String? {
+        if picked, vpn.isConnected, case .ok(let r) = store.check, let code = r.country, let country = Fmt.country(code) {
+            return "Сейчас " + (Fmt.flag(code).map { $0 + " " } ?? "") + country
+        }
+        let parts = s.name.splitFlag
+        if bypass { return "Сейчас: " + (parts.0.map { $0 + " " } ?? "") + RouteTile.title(s.name) }
+        if let flag = parts.0, let code = Flags.code(flag), let country = Flags.country(code) {
+            return "Сейчас " + flag + " " + country
+        }
+        return nil
+    }
+
+    /// The direction picked by hand, neither card's: «Вручную · 🇩🇪 Германия», its road and its
+    /// chip. A tap: the list, opened at its tab.
+    private func manualRow(_ s: Server, _ proxy: ScrollViewProxy) -> some View {
+        let shown = (s.name.splitFlag.0.map { $0 + " " } ?? "") + RouteTile.title(s.name)
+        let note = routeNote(s)
+        let ping = store.pings[s.id]
+        let pending = store.measuring.contains(s.id)
+        let measured = ping != nil || pending
+        var spoken = "Вручную: " + RouteTile.title(s.name) + (note.map { ", " + $0 } ?? "")
+        if measured { spoken += ", задержка" + PingChip.spokenTail(ping, pending: pending) }
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        return Button { openList(proxy, at: s) } label: {
+            HStack(spacing: 10) {
+                RadioMark(on: true)
+                VStack(alignment: .leading, spacing: 1) {
+                    (Text("Вручную · ").foregroundColor(RouteTone.ink2) + Text(shown).foregroundColor(.primary))
+                        .font(.scaled(15, weight: .semibold))
+                        .lineLimit(1).minimumScaleFactor(0.75)
+                    if let note {
+                        Text(note)
+                            .font(.scaled(12, weight: .medium))
+                            .foregroundStyle(RouteTone.ink3)
+                            .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 6)
-                if let s {
-                    PingChip(ping: ping, pending: store.measuring.contains(s.id))
+                if measured {
+                    PingChip(ping: ping, pending: pending)
                 }
                 Image(systemName: "chevron.right")
                     .font(.scaled(13, weight: .bold))
                     .foregroundStyle(RouteTone.ink3)
             }
-            .padding(12)
-            .background(RouteTone.well, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(minHeight: 52)
+            .background(RouteTone.picked, in: shape)
+            .overlay(shape.strokeBorder(Palette.primary.opacity(0.5), lineWidth: 1.5))
+            .contentShape(shape)
         }
         .buttonStyle(PressableStyle(scale: 0.98))
         .accessibilityLabel(spoken)
+        .accessibilityAddTraits(.isSelected)
         .accessibilityHint("Список направлений")
     }
 
-    /// Under the picked direction's name: what it is, else how its road is (its Пинг in words).
+    /// A card tapped: the pick goes to its direction, the route over to it on the way.
+    /// «Авто · объезды» on Wi-Fi can't be (it says why); tapped again after the mobile internet
+    /// check picked it, it stays the check's (back to «Авто» by itself once it opens).
+    private func choose(_ kind: RouteChoice) {
+        if kind.isBypass && store.bypassLockedOnWifi {
+            store.showToast("Объезды работают только через мобильный интернет", .warning)
+            return
+        }
+        let was = store.choice
+        let target: RouteChoice = (kind == .bypass && was == .bypassDetected) ? .bypassDetected : kind
+        let from = store.selected?.id
+        let changed = kind.isBypass ? !was.isBypass : (was != kind)
+        if changed { Haptics.selection() }
+        let to = withAnimation(unfold) { store.choose(target, byUser: true) }
+        // Coming back after a check: that reconnect goes over to the pick itself. The switch's
+        // outcome is felt (byUser).
+        if let to, to.id != from, !store.resumingAfterPing { Task { await vpn.switchTo(to, byUser: true) } }
+    }
+
+    /// The list opened (if tucked away) at [s]'s tab, and down to it.
+    private func openList(_ proxy: ScrollViewProxy, at s: Server) {
+        let tab: ServerGroup = ServerGroup.isBypass(s) ? .bypass : .servers
+        if tab != page { withAnimation(Glass.spring(reduceMotion)) { page = tab } }
+        if !listOpen {
+            Haptics.selection()
+            withAnimation(unfold) { listOpen = true }
+        }
+        // Once the list is laid out.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { scrollToList(proxy) }
+    }
+
+    /// Under the name of the direction picked by hand: what it is, else how its road is (the
+    /// list's check in words).
     private func routeNote(_ s: Server) -> String? {
         if ServerGroup.isUnlimited(s) { return "без ограничений" }
         if RouteName.isBest(s.name.splitFlag.1) { return "Сам выбирает быстрое направление" }
@@ -559,7 +735,7 @@ struct HomeView: View {
     // MARK: - On the way
 
     /// The trip card over the map (design C): time on the way and the direction, the clock, speed
-    /// both ways and the road, Проверить маршрут, «Остановиться», and the way to the list.
+    /// both ways and the road, Проверить маршрут, «Остановиться», and the way to «Авто» / «Авто · объезды».
     private func tripCard(_ proxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             ViewThatFits(in: .horizontal) {
@@ -586,7 +762,7 @@ struct HomeView: View {
             TripStats(monitor: traffic, check: store.check)
             if vpn.isConnected { routeCheck }
             pill
-            Button { scrollToList(proxy) } label: {
+            Button { scrollToChoices(proxy) } label: {
                 Label("Сменить направление", systemImage: "signpost.right.fill")
                     .font(.scaled(15, weight: .semibold))
                     .foregroundStyle(RouteTone.accentInk)
@@ -687,11 +863,32 @@ struct HomeView: View {
                     .font(.scaled(12, weight: .medium)).foregroundStyle(RouteTone.danger)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 6)
+                if offerBypass { bypassOffer }
             default:
                 EmptyView()
             }
         }
         .animation(.easeInOut(duration: 0.2), value: store.check)
+    }
+
+    /// On «Авто» over mobile internet «Проверить маршрут» failed twice in a row: mobile internet
+    /// may be restricted, «Поехать объездом» is one tap away.
+    private var offerBypass: Bool {
+        store.checkFailures >= 2 && store.choice == .auto && !store.onWifi && store.bypassServer != nil
+    }
+
+    private var bypassOffer: some View {
+        Button { choose(.bypass) } label: {
+            Label("Поехать объездом", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
+                .font(.scaled(14, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 40)
+                .background(RouteTone.detour, in: Capsule())
+        }
+        .buttonStyle(PressableStyle())
+        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .leading)))
+        .accessibilityHint("Через «Авто · объезды», когда мобильный интернет ограничен")
     }
 
     private var checkAccessibility: String {
@@ -706,6 +903,59 @@ struct HomeView: View {
     }
 
     // MARK: - The list
+
+    /// «Выбрать направление вручную» and, opened, the list under it (remembered; tucked away to
+    /// start with: «Авто» is the way in).
+    @ViewBuilder private func manualList(_ proxy: ScrollViewProxy, wide: Bool) -> some View {
+        if let sub = store.subscription {
+            VStack(spacing: 12) {
+                listToggle(count: sub.servers.count)
+                if listOpen {
+                    list(proxy, wide: wide)
+                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -10)), removal: .opacity))
+                }
+            }
+        }
+    }
+
+    /// The row that opens and closes the list: how many directions there are, a chevron that
+    /// turns down when open.
+    private func listToggle(count: Int) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        return Button {
+            Haptics.selection()
+            withAnimation(unfold) { listOpen.toggle() }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "list.bullet")
+                    .font(.scaled(15, weight: .semibold))
+                    .foregroundStyle(RouteTone.accentInk)
+                    .frame(width: 22)
+                Text("Выбрать направление вручную")
+                    .font(.scaled(15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                Text("\(count)")
+                    .font(.scaled(12, weight: .semibold))
+                    .foregroundStyle(RouteTone.ink2)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Glass.well, in: Capsule())
+                Image(systemName: "chevron.right")
+                    .font(.scaled(13, weight: .bold))
+                    .foregroundStyle(RouteTone.ink3)
+                    .rotationEffect(.degrees(listOpen ? 90 : 0))
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 50)
+            .background(RouteTone.well, in: shape)
+            .contentShape(shape)
+        }
+        .buttonStyle(PressableStyle(scale: 0.98))
+        .accessibilityLabel("Выбрать направление вручную, " + ServerGroup.spokenCount(count))
+        .accessibilityValue(listOpen ? "список открыт" : "список скрыт")
+    }
 
     /// Направления | Объезды (a group with no servers has no tab), the line about the tab with
     /// Проверить дороги, the Wi-Fi note, then the rows. wide: the tabs' lines on one line when
@@ -828,7 +1078,7 @@ struct HomeView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// Проверить дороги: a Пинг of every direction (the tab on screen first); Стоп with a progress
+    /// Проверить дороги: a cold check (ping) of every direction (the tab on screen first); Стоп with a progress
     /// ring while it runs, in the same room (the row doesn't switch layouts as it starts or ends).
     private func roadsButton(_ groups: [ServerGroup: [Server]], _ current: ServerGroup) -> some View {
         let busy = store.pinging
@@ -855,7 +1105,7 @@ struct HomeView: View {
         }
         .buttonStyle(PressableStyle())
         .fixedSize()
-        .accessibilityLabel(busy ? "Остановить проверку дорог" : "Проверить дороги: пинг всех направлений")
+        .accessibilityLabel(busy ? "Остановить проверку дорог" : "Проверить дороги всех направлений")
     }
 
     /// The tab's rows: favourites first, in the pass's order otherwise.
@@ -880,10 +1130,11 @@ struct HomeView: View {
         }
     }
 
+    /// A row picked: by hand from now on (RouteChoice.manual; «Авто» for АВТО's own row).
     private func pick(_ s: Server) {
         let changed = s.id != store.selected?.id
         if changed { Haptics.selection() }
-        store.select(s.id)
+        withAnimation(unfold) { store.select(s.id) }
         // Coming back after a ping: that reconnect goes over to the pick itself. The switch's
         // outcome is felt (byUser); the tick above is its start.
         if changed, !store.resumingAfterPing { Task { await vpn.switchTo(s, byUser: true) } }
@@ -932,13 +1183,13 @@ struct ServerListRow: View, Equatable {
     }
 
     var body: some View {
-        // Swipe right: favourite (or not any more); swipe left: ping this one.
+        // Swipe right: favourite (or not any more); swipe left: check this one's road.
         SwipeActions(
             right: SwipeAction(icon: favorite ? "star.slash.fill" : "star.fill",
                                title: favorite ? "Убрать" : "В избранное", color: .orange) {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { onFavorite() }
             },
-            left: SwipeAction(icon: "speedometer", title: "Пинг", color: Palette.primary, perform: onPing),
+            left: SwipeAction(icon: "speedometer", title: "Проверить дорогу", color: Palette.primary, perform: onPing),
             onHold: onHold
         ) {
             ServerRow(server: server, ping: ping, pending: pending, unsupported: unsupported,
@@ -951,7 +1202,7 @@ struct ServerListRow: View, Equatable {
         .contextMenu {
             Button(action: onPick) { Label("Выбрать", systemImage: "checkmark.circle") }
                 .disabled(locked)
-            Button(action: onPing) { Label("Пинг", systemImage: "speedometer") }
+            Button(action: onPing) { Label("Проверить дорогу", systemImage: "speedometer") }
             Button(action: onFavorite) {
                 favorite ? Label("Убрать из избранного", systemImage: "star.slash") : Label("В избранное", systemImage: "star")
             }
@@ -1071,6 +1322,23 @@ struct ServerRow: View {
             return "без ограничений" + (road.map { " · " + $0 } ?? "")
         }
         return road
+    }
+}
+
+/// A choice card's radio, as a row's in the list: a ring, a dot inside it when picked.
+private struct RadioMark: View {
+    let on: Bool
+
+    var body: some View {
+        ZStack {
+            Circle().strokeBorder(on ? Palette.primary : Palette.outline, lineWidth: on ? 2 : 1.5)
+            if on {
+                Circle().fill(Palette.primary).frame(width: 12, height: 12)
+                    .transition(.scale(scale: 0.3).combined(with: .opacity))
+            }
+        }
+        .frame(width: 24, height: 24)
+        .accessibilityHidden(true)
     }
 }
 

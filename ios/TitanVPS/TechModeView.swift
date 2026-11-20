@@ -453,12 +453,21 @@ struct TechModeView: View {
     }
 
     private var networkRows: [(String, String)] {
+        // What the trip card's speed is read from (TrafficMonitor): standing still while traffic
+        // goes, and the speed can't be shown.
+        let counters: String
+        if let c = TrafficMonitor.counters() {
+            counters = "\(c.name): принято \(c.down) Б, отправлено \(c.up) Б"
+        } else {
+            counters = "интерфейс туннеля не найден"
+        }
         let system: String
         if net.tunnel { system = vpn.isOn ? "есть (наш)" : "есть (сторонний)" } else { system = vpn.isOn ? "наш поднимается" : "нет" }
         return [
             ("Подключение", net.kind),
             ("Интерфейсы", net.interfaces.isEmpty ? "—" : net.interfaces),
             ("VPN в системе", system),
+            ("Счётчики туннеля", counters),
             ("Запросы приложения", appRoute
                 + (vpn.isOn ? " (на iOS туннель забирает весь трафик, приложение из него не исключено)" : "")),
             ("Внешний IP", ip ?? "не проверялся"),
@@ -475,6 +484,29 @@ struct TechModeView: View {
             rows.append(("Выбран обход", !ServerGroup.isBypass(s) ? "нет" : store.blockedOnWifi(s) ? "да — заблокирован на Wi‑Fi" : "да"))
         }
         rows.append(("Автопереключение", "с обхода при появлении Wi‑Fi — на «\(store.firstRegular?.name ?? "—")»"))
+        let choice: String
+        switch store.choice {
+        case .auto: choice = "Авто"
+        case .bypass: choice = "Авто · объезды (выбрано)"
+        case .bypassDetected: choice = "Авто · объезды (мобильный интернет ограничен)"
+        case .manual: choice = "вручную"
+        }
+        rows.append(("Выбор", choice))
+        rows.append(("«Авто» →", store.autoServer?.name ?? "—"))
+        rows.append(("«Авто · объезды» →", store.bypassServer?.name ?? "—"))
+        let net: String
+        if let m = store.mobileNet {
+            let verdict: String
+            switch m.verdict {
+            case .open: verdict = "открыт"
+            case .restricted: verdict = "ограничен (открываются только сайты из белого списка)"
+            case .unclear: verdict = "не ясно (ya.ru и gosuslugi.ru не ответили)"
+            }
+            net = verdict + ", " + stamp(m.at)
+        } else {
+            net = "не проверялся (проверка — только на мобильном интернете при остановленном VPN)"
+        }
+        rows.append(("Мобильный интернет", net))
         return rows
     }
 

@@ -407,6 +407,15 @@ enum Fmt {
         return text.replacingOccurrences(of: ".", with: ",")
     }
 
+    /// The trip card's speed as number and unit: Мбит/с (megabits) from 0.1 Мбит/с, кбит/с under
+    /// it, so a trickle (a chat, a video between its bursts) isn't «0,0»; «0» when nothing moved.
+    static func bitrate(_ bytesPerSecond: Double) -> (number: String, unit: String, spoken: String) {
+        let bits = max(bytesPerSecond, 0) * 8
+        if bits >= 100_000 { return (megabits(bytesPerSecond), "Мбит/с", "мегабит в секунду") }
+        if bits >= 1_000 { return (String(format: "%.0f", bits / 1_000), "кбит/с", "килобит в секунду") }
+        return ("0", "Мбит/с", "мегабит в секунду")
+    }
+
     // Made once: the screens call these on every redraw (on the main thread).
     private static let dayFormat: DateFormatter = {
         let f = DateFormatter()
@@ -638,7 +647,9 @@ struct SwipeActions<Content: View>: View {
                 VStack(spacing: 3) {
                     Image(systemName: action.icon).font(.scaled(18, weight: .bold))
                         .scaleEffect(armed ? 1.15 : 0.9)
-                    Text(action.title).font(.scaled(10, weight: .semibold)).lineLimit(1)
+                    // «Проверить дорогу» on two lines.
+                    Text(action.title).font(.scaled(10, weight: .semibold))
+                        .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
                 }
                 .foregroundStyle(.white)
                 .frame(width: 76)

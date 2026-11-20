@@ -45,8 +45,8 @@ enum ConnectionCheck {
     /// Google's generate_204, as a server's Пинг asks, over plain HTTP: a request on an open
     /// connection is then a few hundred bytes, with no TLS of its own (Network.framework, not
     /// URLSession, so ATS doesn't apply). Not a Russian site: the panel's routing sends those
-    /// direct, past the VPN.
-    private static let host = "www.gstatic.com"
+    /// direct, past the VPN. MobileNetCheck asks it too.
+    static let host = "www.gstatic.com"
     private static let request = Data("HEAD /generate_204 HTTP/1.1\r\nHost: www.gstatic.com\r\nConnection: keep-alive\r\n\r\n".utf8)
     /// Requests timed on the warm connection: their median is the latency.
     private static let samples = 3
@@ -120,6 +120,68 @@ enum ConnectionCheck {
             if kv.count == 2 { fields[String(kv[0])] = String(kv[1]) }
         }
         return (fields["ip"], fields["loc"])
+    }
+}
+
+/// Whether mobile internet looks restricted (the owner's «если нету инета»: only an operator's
+/// whitelist of Russian sites opens, the rest of the world doesn't), asked directly, never over
+/// the route: AppStore.checkMobileNet runs it only while the route is stopped, on mobile
+/// internet, as the app comes to the front or the network changes, once a minute at most. Public
+/// check pages only (Google's, as ConnectionCheck asks, and Apple's captive one; Yandex and
+/// Госуслуги, which such whitelists keep), HEAD with nothing of the user's in it.
+enum MobileNetCheck {
+    enum Verdict: Equatable {
+        /// The world and the whitelisted sites both answer.
+        case open
+        /// The world doesn't, a whitelisted site does.
+        case restricted
+        /// The whitelisted sites didn't answer (no internet at all, or they are down): nothing
+        /// to go by.
+        case unclear
+    }
+
+    private static let world = ["https://\(ConnectionCheck.host)/generate_204", "https://www.apple.com/library/test/success.html"]
+    private static let whitelisted = ["https://ya.ru", "https://www.gosuslugi.ru"]
+    /// Short: a site an operator holds back usually doesn't answer at all.
+    private static let timeout: TimeInterval = 4
+
+    static func run() async -> Verdict {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout + 1
+        config.waitsForConnectivity = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        async let worldAnswers = anyAnswers(world, session)
+        async let homeAnswers = anyAnswers(whitelisted, session)
+        let (abroad, home) = await (worldAnswers, homeAnswers)
+        if abroad && home { return .open }
+        if !abroad && home { return .restricted }
+        return .unclear
+    }
+
+    /// One of [urls] answered (any HTTP status: it was let through).
+    private static func anyAnswers(_ urls: [String], _ session: URLSession) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            for string in urls {
+                guard let url = URL(string: string) else { continue }
+                group.addTask {
+                    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: Self.timeout)
+                    request.httpMethod = "HEAD"
+                    guard let answer = try? await session.data(for: request) else { return false }
+                    return answer.1 is HTTPURLResponse
+                }
+            }
+            for await answered in group {
+                if answered {
+                    group.cancelAll()
+                    return true
+                }
+            }
+            return false
+        }
     }
 }
 

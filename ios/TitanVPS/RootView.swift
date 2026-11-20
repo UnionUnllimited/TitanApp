@@ -111,6 +111,8 @@ struct RootView: View {
             // Back in the app: the VPN may have changed while it was away (the tunnel fell, iOS
             // Settings); the Live Activity and Пункт управления's toggle follow it again.
             LiveActivityController.sync(vpn.state, server: store.selected?.name, paused: store.vpnPaused)
+            // Stopped on mobile internet: is it restricted now («Авто» → «Авто · объезды»)?
+            store.checkMobileNet()
             // «Подключать по запросу» switched off in iOS Settings meanwhile: Не отключать VPN too.
             Task { await vpn.reconcileOnDemand() }
             // Opened again (not just Пункт управления pulled down over it): Автоподключение too.

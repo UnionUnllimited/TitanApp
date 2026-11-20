@@ -50,6 +50,10 @@ enum RouteTone {
     static let boltFill = dynamic(0xFFF4DB, 0x3A2E12)
     /// The road the route runs on (the map's main road): the route's casing.
     static let casing = dynamic(0xFFFFFF, 0x2A3346)
+    /// «Авто · объезды»'s tile and «Поехать объездом»: a detour sign's orange, deep enough for
+    /// white text on it (AA), as on the brand's gradient.
+    static let detour = LinearGradient(colors: [Color(UIColor(hex: 0xC2410C)), Color(UIColor(hex: 0x9A3412))],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)
 
     private static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
         Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) })
@@ -114,7 +118,15 @@ struct PingChip: View {
         .frame(minHeight: 26)
         .background(Self.fill(level), in: Capsule())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(pending ? "Пинг: измеряем" : ping.map { $0 >= 0 ? "Пинг \($0) миллисекунд" : "Пинг: таймаут" } ?? "Пинг не измерен")
+        .accessibilityLabel("Задержка" + Self.spokenTail(ping, pending: pending))
+    }
+
+    /// What VoiceOver says after «задержка» (no «пинг» on screen or aloud, the owner's rule):
+    /// « 85 миллисекунд», «: таймаут», « не измерена», «: измеряем».
+    static func spokenTail(_ ping: Int?, pending: Bool) -> String {
+        if pending { return ": измеряем" }
+        guard let ping else { return " не измерена" }
+        return ping >= 0 ? " \(ping) миллисекунд" : ": таймаут"
     }
 
     private static func ink(_ level: RouteTraffic.Level?) -> Color {
@@ -199,7 +211,7 @@ struct RoutePill: View {
 
     let phase: Phase
     var locked = false
-    var lockedText = "Пинг…"
+    var lockedText = "Проверка…"
     /// Failed connect attempts so far: a new one after a tap shakes it.
     var failures = 0
     /// Tapped by the user: true to go. False back means it can't be done now.
@@ -248,7 +260,7 @@ struct RoutePill: View {
         }
         // As the slider said it: what it does, and where we are.
         .accessibilityLabel(locked ? "Маршрут" : title)
-        .accessibilityValue(locked ? "недоступно, идёт пинг" : isOn ? "в пути" : "стоим")
+        .accessibilityValue(locked ? "недоступно, идёт проверка дорог" : isOn ? "в пути" : "стоим")
         .accessibilityHint(!locked && shown == .connecting ? "Ещё раз — остановиться" : "")
     }
 
@@ -344,24 +356,25 @@ struct TripTimer: View {
 }
 
 /// The trip card's three tiles, as a navigator says them (the owner's words): «Скорость» to
-/// you and «Обратно» from you now, in Мбит/с (Fmt.megabits; the Live Activity keeps its МБ/с),
-/// and «Дорога»: how free the way is by the latency the last check measured (Latency: a warm
-/// connection's, not a server's Пинг): «свободна» under 120 ms, «плотная» under 300, «пробки»
-/// from 300, «—» while it isn't known; the number under it only under 300 ms, as everywhere.
-/// TrafficMonitor is observed here only: a second's tick redraws these, not Маршрут.
+/// you and «Обратно» from you now, in Мбит/с (кбит/с for a trickle, Fmt.bitrate; the Live
+/// Activity keeps its МБ/с), and «Дорога»: how free the way is by the latency the last check
+/// measured (Latency: a warm connection's, not a server's cold check): «свободна» under 120 ms,
+/// «плотная» under 300, «пробки» from 300, «—» while it isn't known; the number under it only
+/// under 300 ms, as everywhere. TrafficMonitor is observed here only: a second's tick redraws
+/// these, not Маршрут.
 struct TripStats: View {
     @ObservedObject var monitor: TrafficMonitor
     let check: ConnectionCheck.Status
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        // Side by side; one under the other where three don't fit (320 pt, large text).
+        // Side by side in equal columns where each tile fits whole (EqualColumns: as wide as
+        // the widest wants); one under the other otherwise (a narrow phone, large or bold text).
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 10) {
+            EqualColumns(spacing: 17) {
                 down(row: false)
-                divider
-                up(row: false)
-                divider
-                road(row: false)
+                up(row: false).overlay(alignment: .leading) { divider }
+                road(row: false).overlay(alignment: .leading) { divider }
             }
             VStack(spacing: 10) {
                 down(row: true)
@@ -371,28 +384,31 @@ struct TripStats: View {
         }
     }
 
+    /// Between two columns, in the middle of the gap before a tile.
     private var divider: some View {
-        Rectangle().fill(RouteTone.hair).frame(width: 1, height: 52)
+        Rectangle().fill(RouteTone.hair).frame(width: 1, height: 52).offset(x: -9)
+            .accessibilityHidden(true)
     }
 
     private func down(row: Bool) -> some View {
-        let value = Fmt.megabits(monitor.down)
+        let value = Fmt.bitrate(monitor.down)
         return tile(row: row, icon: "arrow.down", tint: RouteTone.accentInk, caption: "Скорость",
-                    value: Text(value), unit: "Мбит/с", note: "к вам")
-            .accessibilityLabel("Скорость к вам: \(value) мегабит в секунду")
+                    value: Text(value.number), key: value.number + value.unit, unit: value.unit, note: "к вам")
+            .accessibilityLabel("Скорость к вам: \(value.number) \(value.spoken)")
     }
 
     private func up(row: Bool) -> some View {
-        let value = Fmt.megabits(monitor.up)
+        let value = Fmt.bitrate(monitor.up)
         return tile(row: row, icon: "arrow.up", tint: RouteTone.chipInk, caption: "Обратно",
-                    value: Text(value), unit: "Мбит/с", note: "от вас")
-            .accessibilityLabel("Обратно, от вас: \(value) мегабит в секунду")
+                    value: Text(value.number), key: value.number + value.unit, unit: value.unit, note: "от вас")
+            .accessibilityLabel("Обратно, от вас: \(value.number) \(value.spoken)")
     }
 
     private func road(row: Bool) -> some View {
         let r = Self.road(check)
         return tile(row: row, icon: "car.fill", tint: r.color, caption: "Дорога",
-                    value: Text(r.word).foregroundColor(r.color), unit: nil, note: r.note, busy: check == .checking)
+                    value: Text(r.word).foregroundColor(r.color), key: r.word + r.note, unit: nil, note: r.note,
+                    busy: check == .checking)
             .accessibilityLabel(check == .checking ? "Дорога: проверяем" : "Дорога: \(r.spoken)")
     }
 
@@ -414,21 +430,34 @@ struct TripStats: View {
     }
 
     /// Caption, value and the small note under it; row: caption and note on the left, the value
-    /// on the right (one under the other).
+    /// on the right (one under the other). key: what the value says, its digits roll as it changes.
     @ViewBuilder private func tile(row: Bool, icon: String, tint: Color, caption: String, value: Text,
-                                   unit: String?, note: String, busy: Bool = false) -> some View {
+                                   key: String, unit: String?, note: String, busy: Bool = false) -> some View {
         let head = HStack(spacing: 5) {
             Image(systemName: icon).font(.scaled(11, weight: .bold)).foregroundStyle(tint)
             Text(caption).font(.scaled(12, weight: .semibold)).foregroundStyle(RouteTone.ink2)
         }
+        let valueFont = Font.scaled(19, weight: .bold).monospacedDigit()
+        let unitFont = Font.scaled(12, weight: .semibold)
         let number = HStack(alignment: .firstTextBaseline, spacing: 3) {
             if busy {
                 ProgressView().scaleEffect(0.8).frame(height: 22)
             } else {
-                value.font(.scaled(19, weight: .bold).monospacedDigit())
-                if let unit { Text(unit).font(.scaled(12, weight: .semibold)).foregroundStyle(RouteTone.ink2) }
+                // A speed takes the room of its widest («88,8 Мбит/с»): the tiles don't go from
+                // columns to rows and back as it changes each second.
+                ZStack(alignment: .leading) {
+                    if unit != nil { Text("88,8").font(valueFont).hidden() }
+                    value.font(valueFont).contentTransition(.numericText())
+                }
+                if let unit {
+                    ZStack(alignment: .leading) {
+                        Text("Мбит/с").font(unitFont).hidden()
+                        Text(unit).font(unitFont).foregroundStyle(RouteTone.ink2)
+                    }
+                }
             }
         }
+        .animation(reduceMotion ? nil : Animation.easeOut(duration: 0.3), value: key)
         let small = Text(note).font(.scaled(12, weight: .medium)).foregroundStyle(RouteTone.ink3)
         Group {
             if row {
@@ -443,6 +472,36 @@ struct TripStats: View {
             }
         }
         .lineLimit(1)
+        // Never «свобо…»: smaller rather than cut, wherever a column is tight.
+        .minimumScaleFactor(0.7)
         .accessibilityElement(children: .ignore)
+    }
+}
+
+/// Columns of equal width side by side, each as wide as the widest of them wants: its own ideal
+/// width is all of them at that, so ViewThatFits takes it only where every one fits whole (an
+/// HStack of flexible tiles fits by the sum, then gives each a third: a wider word was cut).
+private struct EqualColumns: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let count = CGFloat(subviews.count)
+        let gaps = spacing * (count - 1)
+        let widest = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? widest * count + gaps
+        let column = max((width - gaps) / count, 0)
+        let height = subviews.map { $0.sizeThatFits(ProposedViewSize(width: column, height: nil)).height }.max() ?? 0
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let count = CGFloat(subviews.count)
+        let column = max((bounds.width - spacing * (count - 1)) / count, 0)
+        for (i, view) in subviews.enumerated() {
+            view.place(at: CGPoint(x: bounds.minX + CGFloat(i) * (column + spacing), y: bounds.minY),
+                       anchor: .topLeading, proposal: ProposedViewSize(width: column, height: nil))
+        }
     }
 }

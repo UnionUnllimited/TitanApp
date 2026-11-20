@@ -3,27 +3,28 @@ import SwiftUI
 
 /// Speed of the VPN: the byte counters of our tunnel's interface (the utun with
 /// the tunnel's address, see PacketTunnelProvider), read once a second while Маршрут is on
-/// screen (the trip card's tiles, TripStats). In = what the tunnel hands to the phone
-/// (загрузка), out = what goes into it.
+/// screen with the route up (the trip card's tiles, TripStats; HomeView starts and stops it).
+/// In = what the tunnel hands to the phone (загрузка), out = what goes into it.
 @MainActor
 final class TrafficMonitor: ObservableObject {
-    struct Sample: Identifiable {
-        let id: Int
+    private struct Sample {
         let down: Double
         let up: Double
     }
 
-    /// Bytes per second now.
+    /// Bytes per second now: the mean of the last [smoothing] seconds. A video comes in bursts
+    /// (a few seconds of it in one, then nothing while it plays from its buffer): second by
+    /// second the tiles would mostly say 0 while it plays.
     @Published private(set) var down: Double = 0
     @Published private(set) var up: Double = 0
-    /// The last [window] seconds, for the chart.
-    @Published private(set) var history: [Sample] = []
 
     nonisolated static let tunnelAddress = "172.19.0.1"
-    static let window = 60
+    private static let smoothing = 3
+
+    /// The last [smoothing] seconds, each one's own speed.
+    private var recent: [Sample] = []
 
     private var last: (name: String, down: UInt32, up: UInt32, at: Date)?
-    private var tick = 0
     private var task: Task<Void, Never>?
 
     func start() {
@@ -39,39 +40,39 @@ final class TrafficMonitor: ObservableObject {
     func stop() {
         task?.cancel()
         task = nil
-        last = nil
-        down = 0
-        up = 0
-        // Back on Главная later: the curve starts fresh, not with a minute from before.
-        history = []
+        reset()
     }
 
-    /// A new connection: the chart starts over.
-    func reset() {
+    /// Nothing measured yet: the tiles say 0 until the next two looks.
+    private func reset() {
         last = nil
-        history = []
-        down = 0
-        up = 0
+        recent = []
+        if down != 0 { down = 0 }
+        if up != 0 { up = 0 }
     }
 
     private func sample() {
-        guard let now = Self.counters() else { return }
+        // The tunnel's interface is gone (the route is being built again): nothing goes now.
+        guard let now = Self.counters() else {
+            if last != nil { reset() }
+            return
+        }
         let date = Date()
         defer { last = (now.name, now.down, now.up, date) }
         // A new tunnel interface, or a long gap (the app was in the background): start over.
         guard let prev = last, prev.name == now.name, date.timeIntervalSince(prev.at) < 3 else {
-            if last != nil { history = [] }
+            recent = []
             return
         }
         // The counters are 32-bit: they wrap after 4 GB (a wrapping difference handles it).
         let d = UInt64(now.down &- prev.down)
         let u = UInt64(now.up &- prev.up)
         let seconds = max(date.timeIntervalSince(prev.at), 0.2)
-        down = Double(d) / seconds
-        up = Double(u) / seconds
-        tick += 1
-        history.append(Sample(id: tick, down: down, up: up))
-        if history.count > Self.window { history.removeFirst(history.count - Self.window) }
+        recent.append(Sample(down: Double(d) / seconds, up: Double(u) / seconds))
+        if recent.count > Self.smoothing { recent.removeFirst(recent.count - Self.smoothing) }
+        let count = Double(recent.count)
+        down = recent.reduce(0.0) { $0 + $1.down } / count
+        up = recent.reduce(0.0) { $0 + $1.up } / count
     }
 
     /// The tunnel interface's name and byte counters; nil while there's no tunnel. The Live

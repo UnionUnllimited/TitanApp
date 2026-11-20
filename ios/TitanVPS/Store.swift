@@ -47,6 +47,23 @@ final class AppStore: ObservableObject {
     @Published private(set) var favorites: Set<String> = []
     /// On Wi-Fi: bypass servers (Обходы) work only over mobile internet.
     @Published private(set) var onWifi = false
+    /// How the direction is picked (RouteChoice): «Авто», «Авто · объезды» or by hand. Saved; the
+    /// picked server itself is still selectedId (the Live Activity, Siri and Пункт управления go
+    /// by it). Read it through `choice`.
+    @Published private(set) var routeChoice: RouteChoice = .auto
+    /// «Проверить маршрут» failed this many times in a row on this trip (HomeView offers «Поехать
+    /// объездом» after two on «Авто»).
+    @Published private(set) var checkFailures = 0
+    /// On mobile internet with nothing in between (no VPN, ours or another's): where
+    /// MobileNetCheck can ask directly.
+    private var cellularDirect = false
+    private var netCheck: Task<Void, Never>?
+    private var netCheckedAt: Date?
+    /// The last MobileNetCheck and when (Технический режим).
+    private(set) var mobileNet: (verdict: MobileNetCheck.Verdict, at: Date)?
+    /// «Авто» picked over the «Авто · объезды» the check switched to: not switched again until
+    /// mobile internet opens or Wi-Fi comes.
+    private var detectionDeclined = false
     /// Servers the iPhone app can't run yet, by id: worked out once per subscription (it parses
     /// each server's whole config), not on every redraw of Главная. Changes only with
     /// `subscription`, which publishes it.
@@ -90,11 +107,21 @@ final class AppStore: ObservableObject {
         // A class's own init doesn't run didSet.
         indexServers()
         selectedId = UserDefaults.standard.string(forKey: selKey)
+        routeChoice = UserDefaults.standard.string(forKey: RouteChoice.key).flatMap(RouteChoice.init(rawValue:)) ?? .auto
+        // The pick written without the app's store (the Live Activity's ‹ › with the app not
+        // running), or by a build before the choice: by hand, unless it is «Авто»'s own.
+        if let id = selectedId, UserDefaults.standard.string(forKey: RouteChoice.pickKey) != id {
+            routeChoice = id == autoServer?.id ? .auto : .manual
+            UserDefaults.standard.set(routeChoice.rawValue, forKey: RouteChoice.key)
+            UserDefaults.standard.set(id, forKey: RouteChoice.pickKey)
+        }
         favorites = Set(UserDefaults.standard.stringArray(forKey: favKey) ?? [])
         pathMonitor.pathUpdateHandler = { [weak self] path in
             // With the VPN on the path is the tunnel; the Wi-Fi interface is still listed.
             let wifi = path.status == .satisfied && path.availableInterfaces.contains { $0.type == .wifi }
-            Task { @MainActor in if self?.onWifi != wifi { self?.onWifi = wifi } }
+            // Mobile internet itself, not a tunnel over it.
+            let cellular = path.status == .satisfied && !wifi && path.usesInterfaceType(.cellular)
+            Task { @MainActor in self?.pathChanged(wifi: wifi, cellular: cellular) }
         }
         pathMonitor.start(queue: DispatchQueue(label: "titan.path"))
         UNUserNotificationCenter.current().delegate = NotificationPresenter.shared
@@ -161,6 +188,117 @@ final class AppStore: ObservableObject {
         return regular.first(where: isFavorite) ?? regular.first
     }
 
+    // MARK: «Авто» and «Авто · объезды»
+
+    /// What «Авто» goes to now (RouteChoice.autoServer).
+    var autoServer: Server? { RouteChoice.autoServer(subscription?.servers ?? [], skip: unsupported) }
+
+    /// What «Авто · объезды» goes to now (RouteChoice.bypassServer, by the list's last check).
+    var bypassServer: Server? {
+        RouteChoice.bypassServer(subscription?.servers ?? [], pings: pings, skip: unsupported)
+    }
+
+    /// The choice as it stands. Its direction may lag behind what it would pick now (the pass
+    /// refreshed on the way): «Авто» stays picked, the pick follows once stopped (load).
+    var choice: RouteChoice { routeChoice }
+
+    /// «Авто» or «Авто · объезды» (.manual: the pick as it is): saved, and the pick moved to the
+    /// direction it stands for now. Returns that direction; reconnecting on the way is the
+    /// caller's (HomeView, as a pick in the list). byUser: tapped («Авто» over the check's
+    /// объезды holds it off until mobile internet opens).
+    @discardableResult
+    func choose(_ c: RouteChoice, byUser: Bool = false) -> Server? {
+        if byUser, c == .auto, routeChoice == .bypassDetected { detectionDeclined = true }
+        setChoice(c)
+        let to: Server?
+        switch c {
+        case .auto: to = autoServer
+        case .bypass, .bypassDetected: to = bypassServer
+        case .manual: to = selected
+        }
+        if let to, to.id != selectedId { setPick(to.id) }
+        return to
+    }
+
+    private func setChoice(_ c: RouteChoice) {
+        guard routeChoice != c else { return }
+        routeChoice = c
+        UserDefaults.standard.set(c.rawValue, forKey: RouteChoice.key)
+    }
+
+    /// The pick itself, the choice left as it is. Also noted as the choice's own (pickKey): a
+    /// pick written elsewhere is told apart at the next launch.
+    private func setPick(_ id: String?) {
+        selectedId = id
+        UserDefaults.standard.set(id, forKey: selKey)
+        UserDefaults.standard.set(id, forKey: RouteChoice.pickKey)
+    }
+
+    /// The network changed: Wi-Fi or not, and mobile internet worth a look (MobileNetCheck).
+    private func pathChanged(wifi: Bool, cellular: Bool) {
+        if onWifi != wifi { onWifi = wifi }
+        cellularDirect = cellular
+        if wifi {
+            detectionDeclined = false
+            leaveBypassOnWifi()
+        } else if cellular {
+            checkMobileNet()
+        }
+    }
+
+    /// Wi-Fi came with «Авто · объезды» picked: «Авто» instead (объезды run on mobile internet
+    /// only), and over to it on the way. A bypass picked in the list moves as before (HomeView).
+    private func leaveBypassOnWifi() {
+        guard choice.isBypass, bypassLockedOnWifi else { return }
+        let from = selectedId
+        guard let to = choose(.auto), to.id != from, let vpn, vpn.isOn else { return }
+        // Coming back after a ping: that reconnect goes over to the pick itself.
+        if !resumingAfterPing { Task { await vpn.switchTo(to) } }
+        message = "Объезды работают только через мобильный интернет. Перестроили маршрут на «\(RouteName.shown(to.name.splitFlag.1))»."
+    }
+
+    /// The route is stopped, and nothing is about to bring it up (a ping's pause, a connect).
+    private func routeStopped(_ vpn: VPNController) -> Bool {
+        !vpn.isOn && vpn.state != .disconnecting && !vpn.connectsUnderWay && !pingBusy && !vpnPaused
+    }
+
+    /// Mobile internet restricted («если нету инета»)? Asked directly (MobileNetCheck) as the app
+    /// comes to the front and when the network changes, once a minute at most, only on mobile
+    /// internet with the route stopped (its requests would go over the route otherwise) and only
+    /// where the choice is the app's to change: «Авто» goes over to «Авто · объезды» (with a note
+    /// on its card) when only the whitelisted sites open; the check's own «Авто · объезды» back
+    /// to «Авто» when all of them open again. A pick by hand or «Авто · объезды» tapped stay.
+    func checkMobileNet() {
+        let c = choice
+        guard netCheck == nil, let vpn, cellularDirect, !onWifi, subscription != nil,
+              c == .bypassDetected || (c == .auto && !detectionDeclined && bypassServer != nil),
+              UserDefaults.standard.bool(forKey: PrivacyNoticeView.key),
+              UIApplication.shared.applicationState != .background,
+              netCheckedAt.map({ Date().timeIntervalSince($0) >= 60 }) ?? true else { return }
+        netCheck = Task {
+            defer { netCheck = nil }
+            // At launch the VPN's state is the profile's only once read; iOS may have it up.
+            await vpn.loaded()
+            guard routeStopped(vpn), !(await TunnelSwitch.isOn()), routeStopped(vpn), cellularDirect else { return }
+            netCheckedAt = Date()
+            let verdict = await MobileNetCheck.run()
+            mobileNet = (verdict, Date())
+            if verdict == .open { detectionDeclined = false }
+            // Still stopped on mobile internet: the answers came straight from it.
+            guard routeStopped(vpn), cellularDirect, !onWifi, subscription != nil else { return }
+            switch (verdict, choice) {
+            case (.restricted, .auto) where !detectionDeclined:
+                guard let to = bypassServer, !blockedOnWifi(to) else { return }
+                setChoice(.bypassDetected)
+                if to.id != selectedId { setPick(to.id) }
+            case (.open, .bypassDetected):
+                choose(.auto)
+            default:
+                break
+            }
+        }
+    }
+
     /// Theme, favourites, Автоподключение, Не отключать VPN and the picked server back to the
     /// start; the key stays.
     func resetSettings() {
@@ -169,7 +307,10 @@ final class AppStore: ObservableObject {
         UserDefaults.standard.set("system", forKey: "theme")
         UserDefaults.standard.set(false, forKey: "autoconnect")
         UserDefaults.standard.set(true, forKey: VPNController.keepAliveKey)
-        select(subscription?.servers.first?.id)
+        // «Авто» again, the list tucked away.
+        detectionDeclined = false
+        choose(.auto)
+        UserDefaults.standard.removeObject(forKey: RouteChoice.listOpenKey)
         message = "Настройки сброшены"
     }
 
@@ -269,7 +410,16 @@ final class AppStore: ObservableObject {
             subscription = sub
             Task { await Reminders.update(for: sub.info) }
             if let data = try? JSONEncoder().encode(sub) { UserDefaults.standard.set(data, forKey: subKey) }
-            if !sub.servers.contains(where: { $0.id == selectedId }) { select(sub.servers.first?.id) }
+            if selectedId == nil || !sub.servers.contains(where: { $0.id == selectedId }) {
+                // The pick gone from the pass (or none yet): the choice's own direction again,
+                // «Авто» for one picked by hand; the first row where it has none.
+                if choose(routeChoice == .manual ? .auto : routeChoice) == nil { setPick(sub.servers.first?.id) }
+                leaveBypassOnWifi()
+            } else if let vpn, !vpn.isOn, !vpn.connectsUnderWay, !pingBusy, !vpnPaused, choice != .manual {
+                // Stopped: «Авто» and «Авто · объезды» follow the pass as it is now (a new АВТО
+                // row, a bypass gone). On the way the route keeps its direction.
+                choose(choice)
+            }
             // While off: what iOS Settings and Не отключать VPN start follows it too (a ping's
             // pause reconnects with a fresh config anyway). While on with Не отключать VPN: the
             // profile, for the next start by iOS (on demand after a kill); the tunnel up keeps its
@@ -289,18 +439,22 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// A direction picked (the list, the Live Activity's ‹ ›, Siri): by hand from now on, or
+    /// «Авто» when it is «Авто»'s own direction (RouteChoice).
     func select(_ id: String?) {
-        selectedId = id
-        UserDefaults.standard.set(id, forKey: selKey)
+        setPick(id)
+        guard let id else { return }
+        setChoice(id == autoServer?.id ? .auto : .manual)
     }
 
     /// Connected: the VPN may have come up without the app (iOS Settings, Не отключать VPN) on
-    /// the profile's last server, not the one picked here. The pick follows what really runs.
+    /// the profile's last server, not the one picked here. The pick follows what really runs
+    /// («Авто · объезды» stays, on a bypass server).
     func followTunnel() async {
         let picked = selectedId
         guard let name = await TunnelSwitch.serverName(), picked == selectedId, vpn?.isConnected == true,
               name != selected?.name, let s = subscription?.servers.first(where: { $0.name == name }) else { return }
-        select(s.id)
+        if choice.isBypass && ServerGroup.isBypass(s) { setPick(s.id) } else { select(s.id) }
     }
 
     /// Выйти and Удалить аккаунт: what the key left on this device goes (the key, its account,
@@ -322,7 +476,12 @@ final class AppStore: ObservableObject {
         pingErrors = [:]
         favorites = []
         select(nil)
-        for key in [subKey, favKey, clientIdKey] { UserDefaults.standard.removeObject(forKey: key) }
+        // The next key starts on «Авто».
+        routeChoice = .auto
+        detectionDeclined = false
+        netCheckedAt = nil
+        mobileNet = nil
+        for key in [subKey, favKey, clientIdKey, RouteChoice.key, RouteChoice.pickKey] { UserDefaults.standard.removeObject(forKey: key) }
     }
 
     /// Servers being measured right now (spinners).
@@ -368,7 +527,16 @@ final class AppStore: ObservableObject {
                 self.pingErrors[id] = error
                 if done { self.measuring.remove(id) }
             }
-            if !Task.isCancelled { measuring = oneMeasuring; pinging = false; allPending = [] }
+            if !Task.isCancelled {
+                measuring = oneMeasuring
+                pinging = false
+                allPending = []
+                // «Авто · объезды» goes by these: its best bypass now. Paused for the check, the
+                // route comes back on it (endPing's resume takes the pick).
+                if choice.isBypass, self.vpn?.isOn != true, let best = bypassServer, best.id != selectedId {
+                    setPick(best.id)
+                }
+            }
         }
     }
 
@@ -533,6 +701,7 @@ final class AppStore: ObservableObject {
             }
             guard !Task.isCancelled else { return }
             check = result
+            if case .ok = result { checkFailures = 0 } else { checkFailures += 1 }
             if !auto {
                 if case .ok = result { Haptics.success() } else { Haptics.warning() }
             }
@@ -544,6 +713,7 @@ final class AppStore: ObservableObject {
         checkTask?.cancel()
         checkTask = nil
         check = .idle
+        checkFailures = 0
     }
 
     nonisolated static func tcpPing(host: String?, port: Int?) async -> Int {
