@@ -1,5 +1,6 @@
-// Payments, renewal and Личный кабинет are cut from the iOS app for now (docs/HANDOFF.md):
-// this file is compiled only with TITAN_PAYMENTS.
+// Payments, renewal and Личный кабинет (docs/HANDOFF.md): this file is compiled only with
+// TITAN_PAYMENTS (set for the app in ios/project.yml); the panel's config can hide them
+// (RemoteConfig.payments).
 #if TITAN_PAYMENTS
 import Combine
 import SwiftUI

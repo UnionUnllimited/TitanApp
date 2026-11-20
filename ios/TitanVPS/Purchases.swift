@@ -1,5 +1,6 @@
-// Payments, renewal and Личный кабинет are cut from the iOS app for now (docs/HANDOFF.md):
-// this file is compiled only with TITAN_PAYMENTS.
+// Payments, renewal and Личный кабинет (docs/HANDOFF.md): this file is compiled only with
+// TITAN_PAYMENTS (set for the app in ios/project.yml); the panel's config can hide them
+// (RemoteConfig.payments).
 #if TITAN_PAYMENTS
 import Foundation
 import StoreKit
@@ -41,6 +42,9 @@ final class AppStorePurchases: ObservableObject {
     @Published private(set) var storefront: String?
     private var updates: Task<Void, Never>?
     private var storefronts: Task<Void, Never>?
+    /// An offer code redeemed on the code screen (redeemCode(keyless:)): what comes for it until
+    /// then signs in, as a purchase made there.
+    private var keylessRedeemUntil: Date?
 
     var subscriptions: [Product] { products.filter { ProductIDs.subscriptions.contains($0.id) } }
     var packs: [Product] { products.filter { ProductIDs.packs.contains($0.id) } }
@@ -49,9 +53,11 @@ final class AppStorePurchases: ObservableObject {
     /// and the other ways to the bot and the site (the key entry's «Где взять ключ», Подписка's
     /// «Открыть сайт», О приложении's bot): in every storefront, as the owner chose. App Review
     /// allows them only in the United States storefront (3.1.1(a), 3.1.3): false keeps them all
-    /// there (docs/HANDOFF.md).
+    /// there (docs/HANDOFF.md). The panel's config turns them off everywhere (payments.otherMethods).
     static let otherMethodsEverywhere = true
-    var otherMethods: Bool { Self.otherMethodsEverywhere || storefront == "USA" }
+    var otherMethods: Bool {
+        RemoteConfig.current.otherMethodsOn && (Self.otherMethodsEverywhere || storefront == "USA")
+    }
     /// The ways to the bot and the site outside Тарифы: the same switch.
     var linksOut: Bool { otherMethods }
 
@@ -200,20 +206,36 @@ final class AppStorePurchases: ObservableObject {
         _ = await UIApplication.shared.open(Config.manageSubscriptions)
     }
 
-    /// Ввести код: an App Store offer code (made in App Store Connect; the site's codes aren't
-    /// for the App Store). What it gives comes in Transaction.updates, without a token.
-    func redeemCode() async {
+    /// Ввести код предложения: an App Store offer code (made in App Store Connect; the site's
+    /// codes aren't for the App Store). What it gives comes in Transaction.updates, without a
+    /// token: with a key it goes to that key; on the code screen ([keyless]) the bot makes the pass
+    /// for it and sends its code back, as for a purchase there (handle, for the next 10 minutes).
+    func redeemCode(keyless: Bool = false) async {
         guard let scene = Self.activeScene else { return }
+        if keyless { keylessRedeemUntil = Date().addingTimeInterval(600) }
         try? await StoreKit.AppStore.presentOfferCodeRedeemSheet(in: scene)
+        // One that came in while the sheet was up.
+        if keyless { await deliverUnfinished() }
+    }
+
+    /// The transactions not finished yet (no endpoint until the panel's config sent one, no
+    /// answer): to the bot again now, as StoreKit hands them over at launch.
+    func deliverUnfinished() async {
+        for await result in StoreKit.Transaction.unfinished {
+            await handle(result)
+        }
     }
 
     /// A transaction StoreKit handed over by itself: to the bot, and the new end date read back.
     /// Signed out, only this device's own purchase made before a key (not a renewal: after
-    /// Выйти the app doesn't sign in again by itself).
+    /// Выйти the app doesn't sign in again by itself), or an offer code just redeemed on the code
+    /// screen.
     private func handle(_ result: VerificationResult<StoreKit.Transaction>) async {
         guard case .verified(let transaction) = result else { return }
         let signedIn = AppStore.current?.subscription != nil
-        guard await deliver(transaction, jws: result.jwsRepresentation) else { return }
+        let redeemed = !signedIn && transaction.appAccountToken == nil
+            && keylessRedeemUntil.map { Date() < $0 } == true
+        guard await deliver(transaction, jws: result.jwsRepresentation, signIn: redeemed) else { return }
         if signedIn {
             await AppStore.current?.refresh(quiet: true)
         } else {

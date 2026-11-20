@@ -71,9 +71,12 @@ import UIKit
 /// fresh connection, the proxy's handshake included, often over a second while the VPN is fine.
 @MainActor
 enum LiveActivityController {
-    /// Настройки → Dynamic Island (on unless turned off there).
+    /// Настройки → Dynamic Island (on unless turned off there), and the panel's config not
+    /// turning it off for everyone (RemoteConfig.features.liveActivity).
     nonisolated static let key = "liveActivity"
-    nonisolated static var enabled: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+    nonisolated static var enabled: Bool {
+        (UserDefaults.standard.object(forKey: key) as? Bool ?? true) && RemoteConfig.current.liveActivityOn
+    }
 
     /// Bumped on each change: work still waiting from an older one gives way.
     private static var generation = 0
@@ -769,7 +772,9 @@ extension LiveActivityController {
     static var diagnostics: [(String, String)] {
         guard #available(iOS 18.0, *) else { return [("Сейчас", "Live Activity — с iOS 18")] }
         let now: String
-        if !enabled {
+        if !RemoteConfig.current.liveActivityOn {
+            now = "выключена удалённой настройкой (features.liveActivity)"
+        } else if !enabled {
             now = "выключена в настройках приложения"
         } else if !allowedInSettings {
             now = "Live Activity запрещены для Titan в Настройках iOS"

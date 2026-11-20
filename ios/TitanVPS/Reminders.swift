@@ -11,7 +11,8 @@ enum Reminders {
     private static let warnedKey = "titan.trafficWarned"
     private static let askedKey = "titan.remindersAsked"
     /// A tap on a reminder opens Подписка (RootView listens); the traffic one Тарифы over it
-    /// (with TITAN_PAYMENTS). The notification's object is the reminder's id.
+    /// (with TITAN_PAYMENTS and a way to pay in the panel's config). The notification's object is
+    /// the reminder's id.
     static let openSubscription = Notification.Name("titan.openSubscription")
     static let trafficId = "titan.traffic"
 
@@ -56,11 +57,13 @@ enum Reminders {
                 guard let fire = Calendar.current.date(from: when), fire > Date(), fire < end else { continue }
                 let content = UNMutableNotificationContent()
                 content.title = "Проездной Titan"
-                #if TITAN_PAYMENTS
-                content.body = "Проездной закончится \(endText(end)). Если ещё не продлили — продлите его на вкладке «Проездной», чтобы не остановиться в пути."
-                #else
-                // No payments in this build (docs/HANDOFF.md): the date only, no call to renew.
+                // No way to pay (no payments in the build, or none in the panel's config): the
+                // date only, no call to renew.
                 content.body = "Проездной закончится \(endText(end))."
+                #if TITAN_PAYMENTS
+                if RemoteConfig.current.renewOn {
+                    content.body = "Проездной закончится \(endText(end)). Если ещё не продлили — продлите его на вкладке «Проездной», чтобы не остановиться в пути."
+                }
                 #endif
                 content.sound = .default
                 let request = UNNotificationRequest(identifier: id, content: content,
@@ -75,11 +78,12 @@ enum Reminders {
             defaults.set(NSNumber(value: info.total), forKey: warnedKey)
             let content = UNMutableNotificationContent()
             content.title = "Объезды заканчиваются"
-            #if TITAN_PAYMENTS
-            content.body = "Объезды: осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total)). Добавить ГБ можно на вкладке «Проездной»."
-            #else
-            // No payments in this build: what is left only.
+            // No way to pay: what is left only.
             content.body = "Объезды: осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total))."
+            #if TITAN_PAYMENTS
+            if RemoteConfig.current.renewOn {
+                content.body = "Объезды: осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total)). Добавить ГБ можно на вкладке «Проездной»."
+            }
             #endif
             content.sound = .default
             try? await center.add(UNNotificationRequest(identifier: trafficId, content: content,

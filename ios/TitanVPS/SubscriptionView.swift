@@ -2,7 +2,8 @@ import SwiftUI
 
 /// Проездной (the subscription tab): expiry, bypass traffic, «Продлить проездной» (Тарифы) and
 /// a "Личный кабинет" button with what it has. Without TITAN_PAYMENTS (no payments, renewal or
-/// cabinet in this build, docs/HANDOFF.md): expiry, bypass traffic, devices and support.
+/// cabinet in the build, docs/HANDOFF.md), or with them turned off in the panel's config
+/// (RemoteConfig.payments): expiry, bypass traffic, devices and support.
 struct SubscriptionView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.openURL) private var openURL
@@ -75,13 +76,13 @@ struct SubscriptionView: View {
                             Text(bypassNote(info))
                                 .font(.scaled(12)).foregroundStyle(.secondary).padding(.top, 4)
                             #if TITAN_PAYMENTS
-                            if info.total > 0 {
+                            if info.total > 0 && store.remote.renewOn {
                                 // Тарифы (the App Store first); orange once less than 10 % is left.
                                 let low = info.remaining * 10 < info.total
                                 Button { store.paywall = .traffic } label: {
                                     Label("Добавить ГБ", systemImage: "plus.circle.fill").lineLimit(1)
                                 }
-                                .buttonStyle(SecondaryButtonStyle(height: 44, tint: low ? Color.orange : Palette.primary))
+                                .buttonStyle(SecondaryButtonStyle(height: 44, tint: low ? RouteTone.warn : Palette.primary))
                                 .padding(.top, 4)
                             }
                             #endif
@@ -89,10 +90,13 @@ struct SubscriptionView: View {
                         .padding(16)
                     }
                     #if TITAN_PAYMENTS
-                    Button { store.paywall = renewReason } label: {
-                        Label("Продлить проездной", systemImage: "ticket.fill")
+                    // Тарифы, while the panel's config leaves a way to pay.
+                    if store.remote.renewOn {
+                        Button { store.paywall = renewReason } label: {
+                            Label("Продлить проездной", systemImage: "ticket.fill")
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
                     }
-                    .buttonStyle(PrimaryButtonStyle())
                     // Without the site's link, the bot instead: the United States storefront only,
                     // as it sells subscriptions too (App Review 3.1.1(a)).
                     if hasCabinet(info) {
@@ -132,34 +136,30 @@ struct SubscriptionView: View {
                     }
                     // What the in-app cabinet can't do: the bot, or (United States storefront
                     // only, App Review 3.1.1(a)) the full cabinet on the site, where it is sold too.
-                    Card {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Расширенные функции").fontWeight(.semibold)
-                            Text("Отвязка устройств, рефералы и другие настройки аккаунта — в боте" + (purchases.linksOut ? " или в полном кабинете на сайте (вход по почте или через Telegram)." : "."))
-                                .font(.scaled(13)).foregroundStyle(.secondary)
-                            let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
-                                guard purchases.linksOut, let scheme = u.scheme, let host = u.host else { return nil }
-                                return URL(string: "\(scheme)://\(host)/auth")
-                            })
-                            // Side by side where both fit, one under the other on a narrow phone.
-                            ViewThatFits(in: .horizontal) {
-                                HStack(spacing: 10) { linkButtons(site) }
-                                VStack(spacing: 10) { linkButtons(site) }
+                    // With the payments turned off in the panel's config, support as without them.
+                    if store.remote.paymentsOn {
+                        Card {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Расширенные функции").fontWeight(.semibold)
+                                Text("Отвязка устройств, рефералы и другие настройки аккаунта — в боте" + (purchases.linksOut ? " или в полном кабинете на сайте (вход по почте или через Telegram)." : "."))
+                                    .font(.scaled(13)).foregroundStyle(.secondary)
+                                let site = info.webPageUrl.flatMap(URL.init(string:)).flatMap({ u -> URL? in
+                                    guard purchases.linksOut, let scheme = u.scheme, let host = u.host else { return nil }
+                                    return URL(string: "\(scheme)://\(host)/auth")
+                                })
+                                // Side by side where both fit, one under the other on a narrow phone.
+                                ViewThatFits(in: .horizontal) {
+                                    HStack(spacing: 10) { linkButtons(site) }
+                                    VStack(spacing: 10) { linkButtons(site) }
+                                }
                             }
+                            .padding(16)
                         }
-                        .padding(16)
+                    } else {
+                        supportCard
                     }
                     #else
-                    // Without TITAN_PAYMENTS neither the bot nor the site, where it is sold, as such:
-                    // support only, for what the app can't do for the account (unlinking a device).
-                    Card {
-                        Button { openURL(store.supportURL) } label: {
-                            SettingsRow(icon: "headphones", color: Palette.primary, title: "Поддержка", subtitle: "Отвязка устройств и вопросы по аккаунту") {
-                                Image(systemName: "arrow.up.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
-                            }
-                        }
-                        .buttonStyle(RowButtonStyle())
-                    }
+                    supportCard
                     #endif
                 }
                 .padding(16)
@@ -180,11 +180,7 @@ struct SubscriptionView: View {
         #endif
         .sheet(isPresented: $showDevices) {
             if let acc = store.account {
-                #if TITAN_PAYMENTS
-                DevicesView(account: acc)
-                #else
-                DevicesView(account: acc, support: store.supportURL)
-                #endif
+                DevicesView(account: acc, support: store.supportURL, bot: botForDevices)
             }
         }
         #if TITAN_PAYMENTS
@@ -205,11 +201,36 @@ struct SubscriptionView: View {
         #endif
     }
 
-    /// Объезды explained; with TITAN_PAYMENTS, where more ГБ come from.
+    /// Support for what the app can't do for the account (unlinking a device): without
+    /// TITAN_PAYMENTS, or with them turned off in the panel's config, neither the bot nor the
+    /// site, where it is sold, as such.
+    private var supportCard: some View {
+        Card {
+            Button { openURL(store.supportURL) } label: {
+                SettingsRow(icon: "headphones", color: Palette.primary, title: "Поддержка", subtitle: "Отвязка устройств и вопросы по аккаунту") {
+                    Image(systemName: "arrow.up.right").font(.scaled(13, weight: .semibold)).foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(RowButtonStyle())
+        }
+    }
+
+    /// Устройства' way to unlink one: the bot with the payments (where it is managed), support
+    /// otherwise.
+    private var botForDevices: Bool {
+        #if TITAN_PAYMENTS
+        return store.remote.paymentsOn
+        #else
+        return false
+        #endif
+    }
+
+    /// Объезды explained; with a way to pay (TITAN_PAYMENTS and the panel's config), where more ГБ
+    /// come from.
     private func bypassNote(_ info: SubscriptionInfo) -> String {
         let note = "Объезды — направления для мобильного интернета, когда оператор пропускает только разрешённые сайты (белые списки) и обычные направления не работают. Гигабайты списываются, только пока вы едете по объезду. На Wi-Fi объезды не нужны и недоступны."
         #if TITAN_PAYMENTS
-        return note + (info.total > 0 ? " Закончились ГБ — нажмите «Добавить ГБ»." : "")
+        return note + (info.total > 0 && store.remote.renewOn ? " Закончились ГБ — нажмите «Добавить ГБ»." : "")
         #else
         return note
         #endif
@@ -217,8 +238,9 @@ struct SubscriptionView: View {
 
     #if TITAN_PAYMENTS
     /// Личный кабинет: in the app with the site's link; without it the bot, as linksOut allows.
+    /// Neither with the cabinet turned off in the panel's config (payments.cabinet).
     private func hasCabinet(_ info: SubscriptionInfo) -> Bool {
-        info.webPageUrl != nil || purchases.linksOut
+        store.remote.cabinetOn && (info.webPageUrl != nil || purchases.linksOut)
     }
 
     /// Продлить подписку: Тарифы, saying whether it is still running.
@@ -257,10 +279,10 @@ struct SubscriptionView: View {
 /// The devices that used the key, and the limit (from the bot's /api/sub/…/info).
 struct DevicesView: View {
     let account: AccountAPI.Info
-    #if !TITAN_PAYMENTS
-    /// Отвязать устройство: support, not the bot where it is sold (docs/HANDOFF.md).
+    /// Отвязать устройство: support, not the bot where it is sold (docs/HANDOFF.md)…
     let support: URL
-    #endif
+    /// …unless the payments are on (TITAN_PAYMENTS and the panel's config): the bot then.
+    var bot = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -296,18 +318,14 @@ struct DevicesView: View {
                         .padding(.vertical, 2)
                     }
                 } footer: {
-                    #if TITAN_PAYMENTS
-                    Text("Отвязать лишнее устройство можно в боте.")
-                    #else
-                    Text("Отвязать лишнее устройство поможет поддержка.")
-                    #endif
+                    Text(bot ? "Отвязать лишнее устройство можно в боте." : "Отвязать лишнее устройство поможет поддержка.")
                 }
                 Section {
-                    #if TITAN_PAYMENTS
-                    Button { openURL(Config.telegram) } label: { Label("Открыть бота", systemImage: "paperplane") }
-                    #else
-                    Button { openURL(support) } label: { Label("Поддержка", systemImage: "headphones") }
-                    #endif
+                    if bot {
+                        Button { openURL(Config.telegram) } label: { Label("Открыть бота", systemImage: "paperplane") }
+                    } else {
+                        Button { openURL(support) } label: { Label("Поддержка", systemImage: "headphones") }
+                    }
                 }
             }
             .navigationTitle("Устройства")
@@ -485,10 +503,13 @@ struct ProfileView: View {
                                     if let info = store.subscription?.info { await Reminders.update(for: info) }
                                 }
                             }
-                            // The Live Activity is drawn by TitanWidgets, which needs iOS 18.
+                            // The Live Activity is drawn by TitanWidgets, which needs iOS 18; none
+                            // with it turned off in the panel's config (features.liveActivity).
                             if #available(iOS 18.0, *) {
-                                RowDivider()
-                                liveActivityRow
+                                if store.remote.liveActivityOn {
+                                    RowDivider()
+                                    liveActivityRow
+                                }
                             }
                         }
 
@@ -529,7 +550,7 @@ struct ProfileView: View {
                                     .foregroundStyle(wrongCode ? Color.red : Color.secondary)
                             }
                             .onTapGesture { versionTapped() }
-                            if techMode {
+                            if techMode && store.remote.techModeOn {
                                 RowDivider()
                                 Button { showTech = true } label: {
                                     SettingsRow(icon: "wrench.and.screwdriver.fill", color: .orange, title: "Технический режим", chevron: true)
@@ -655,8 +676,8 @@ struct ProfileView: View {
             : "Мы скопируем запрос на удаление и откроем чат поддержки — отправьте его там. Аккаунт и проездной в боте удалим в течение 7 дней, поддержка ответит, когда всё будет удалено. Код проездного и все данные с этого устройства удалятся сразу."
         #if TITAN_PAYMENTS
         let apple = appleSubscribed
-            ? "У вас проездной с автопродлением в App Store: Apple продолжит списывать оплату, пока вы его не отмените. Сначала отключите автопродление."
-            : "Автопродление в App Store, если оно есть, удаление не отменяет: его отключают в настройках Apple ID."
+            ? "У вас проездной с автопродлением в App Store: Apple продолжит списывать оплату, пока вы его не отмените. Сначала отмените автопродление."
+            : "Автопродление в App Store, если оно есть, удаление не отменяет: его отменяют в настройках Apple ID."
         return how + "\n\n" + apple
         #else
         return how
@@ -783,6 +804,8 @@ struct ProfileView: View {
     }
 
     @MainActor private func versionTapped() {
+        // Turned off in the panel's config (features.techMode): no way in.
+        guard store.remote.techModeOn else { return }
         let now = Date()
         taps = now.timeIntervalSince(lastTap) < 3 ? taps + 1 : 1
         lastTap = now

@@ -11,8 +11,11 @@ struct HomeView: View {
     @EnvironmentObject var vpn: VPNController
     /// Why a ping or a check failed is shown in Технический режим only.
     @AppStorage(TechMode.key) private var techMode = false
-    /// «Выбрать направление вручную» open: the list under it (closed to start with).
-    @AppStorage(RouteChoice.listOpenKey) private var listOpen = false
+    /// «Выбрать направление вручную» opened or closed by hand (listOpen): nil until then.
+    @AppStorage(RouteChoice.listOpenKey) private var listOpenSaved: Bool?
+    /// The panel's announcement closed by its × (its id), and the newer build's card (its number).
+    @AppStorage("titan.announceClosed") private var closedNotice = ""
+    @AppStorage("titan.updateClosed") private var closedBuild = 0
     /// Технический режим's techniques per server (TechniqueStore): their rows say «приёмы».
     @AppStorage(TechniqueStore.key) private var techniquesData = Data()
     @State private var page: ServerGroup = .servers
@@ -32,7 +35,7 @@ struct HomeView: View {
     /// Маршрут is on screen (not another tab): the map's pulse runs only then.
     @State private var onScreen = false
     @Environment(\.openURL) private var openURL
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     var openSettings: () -> Void
     /// Bumped by a tap on Маршрут in the tab bar while it is on screen: back to the top.
@@ -52,7 +55,8 @@ struct HomeView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let wide = geo.size.width >= 720
+            // Without the list (the panel's config) a wide window has no column for it.
+            let wide = geo.size.width >= 720 && !listHidden
             ScrollViewReader { proxy in
                 Group {
                     if wide { wideLayout(geo, proxy) } else { narrowLayout(geo, proxy) }
@@ -242,6 +246,22 @@ struct HomeView: View {
 
     // MARK: - State
 
+    /// «Выбрать направление вручную» open: as last opened or closed by hand; until then closed,
+    /// or open where the panel's config says so (RemoteConfig.routes.manualList «expanded»).
+    private var listOpen: Bool {
+        get { listOpenSaved ?? (store.remote.manualList == .expanded) }
+        nonmutating set { listOpenSaved = newValue }
+    }
+
+    /// No list at all, «Авто» and «Авто · объезды» only (the panel's config, manualList «hidden»).
+    private var listHidden: Bool { store.remote.manualList == .hidden }
+
+    /// The directions the list has: without the bypass servers when the panel's config takes its
+    /// Объезды tab away (routes.bypassTab); «Авто · объезды» still goes to them.
+    private func listed(_ sub: Subscription) -> [Server] {
+        store.remote.bypassTabOn ? sub.servers : sub.servers.filter { !ServerGroup.isBypass($0) }
+    }
+
     /// Off for a check of the roads (a ping): the VPN comes back by itself after it.
     private var paused: Bool { store.vpnPaused && !vpn.isOn }
 
@@ -389,11 +409,14 @@ struct HomeView: View {
         .accessibilityAddTraits(.isHeader)
     }
 
-    /// The account blocked or under maintenance (a tap: support), the pass run out.
+    /// The account blocked or under maintenance (a tap: support), the pass run out, and what the
+    /// panel's config says: a newer build is out, its announcement (each closed for good by its ×).
     @ViewBuilder private var notices: some View {
         let account = accountNotice
         let expired = store.subscription.map { $0.info.expire > 0 && $0.info.expire <= Int64(Date().timeIntervalSince1970) } ?? false
-        if account != nil || expired {
+        let newer = shownNewerBuild
+        let notice = shownNotice
+        if account != nil || expired || newer != nil || notice != nil {
             VStack(spacing: 8) {
                 if let account {
                     Button { openURL(store.supportURL) } label: {
@@ -412,23 +435,161 @@ struct HomeView: View {
                 }
                 // The pass's details are on Проездной; here only that it has run out.
                 if expired { expiredBanner }
+                if let newer { updateCard(newer) }
+                if let notice { announceCard(notice) }
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
         }
     }
 
+    /// Blocked (the account's status), else under maintenance: the panel's config's own words for
+    /// everyone (maintenance), else the account's status.
     private var accountNotice: (text: String, blocked: Bool)? {
-        switch store.account?.status {
-        case "BLOCKED"?: return ("Доступ к аккаунту закрыт. Напишите в поддержку", true)
-        case "MAINTENANCE"?: return ("Идут технические работы. Маршруты могут не работать", false)
-        default: return nil
+        if store.account?.status == "BLOCKED" { return ("Доступ к аккаунту закрыт. Напишите в поддержку", true) }
+        if let text = store.remote.maintenanceText { return (text, false) }
+        if store.account?.status == "MAINTENANCE" { return ("Идут технические работы. Маршруты могут не работать", false) }
+        return nil
+    }
+
+    /// The panel's announcement, unless its × closed this one.
+    private var shownNotice: RemoteConfig.Notice? {
+        guard let n = store.remote.notice, !(n.dismissible && n.id == closedNotice) else { return nil }
+        return n
+    }
+
+    /// A newer build than this one (update.latestBuild), unless its card was closed for it.
+    private var shownNewerBuild: Int64? {
+        guard let build = store.remote.newerBuild, build != Int64(closedBuild) else { return nil }
+        return build
+    }
+
+    /// The panel's announcement as it sent it: «info» on the brand's tint, «warning» on orange with
+    /// white text (as the maintenance line); a tap opens its link, if it has one; × closes it for good.
+    private func announceCard(_ n: RemoteConfig.Notice) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        return HStack(alignment: .top, spacing: 4) {
+            cardLink(n.url, label: n.text) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: n.warning ? "exclamationmark.triangle.fill" : "megaphone.fill")
+                        .foregroundStyle(n.warning ? Color.white : RouteTone.accentInkOnTint)
+                        .accessibilityHidden(true)
+                    Text(n.text)
+                        .foregroundStyle(n.warning ? Color.white : Color.primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    if n.url != nil {
+                        Image(systemName: "chevron.right")
+                            .font(.scaled(12, weight: .bold))
+                            .foregroundStyle(n.warning ? Color.white : RouteTone.ink3)
+                            .padding(.top, 3)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .padding(.vertical, 14)
+                .padding(.leading, 14)
+                .padding(.trailing, n.dismissible ? 0 : 14)
+            }
+            if n.dismissible {
+                closeButton(on: n.warning, label: "Закрыть объявление") {
+                    withAnimation(unfold) { closedNotice = n.id }
+                }
+            }
         }
+        .font(.scaled(14, weight: .semibold))
+        .background(n.warning ? RouteTone.noticeFill : RouteTone.picked, in: shape)
+        .overlay(shape.strokeBorder(n.warning ? Color.clear : Palette.primary.opacity(0.25), lineWidth: 1))
+        .transition(noticeChange)
+    }
+
+    /// A newer Titan is out (update.latestBuild): «Обновить» to it if the config gave the way; ×
+    /// hides it until a newer build still.
+    private func updateCard(_ build: Int64) -> some View {
+        let url = store.remote.updateURL
+        let text = store.remote.updateText
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        return HStack(alignment: .top, spacing: 4) {
+            cardLink(url, label: "Вышла новая версия Titan" + (text.map { ". " + $0 } ?? "")) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundStyle(RouteTone.accentInkOnTint)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Вышла новая версия Titan").foregroundStyle(Color.primary)
+                        if let text {
+                            Text(text)
+                                .font(.scaled(13, weight: .medium))
+                                .foregroundStyle(RouteTone.ink2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                    if url != nil {
+                        Text("Обновить").fontWeight(.bold).foregroundStyle(RouteTone.accentInkOnTint).lineLimit(1)
+                    }
+                }
+                .padding(.vertical, 14)
+                .padding(.leading, 14)
+            }
+            closeButton(on: false, label: "Закрыть") {
+                withAnimation(unfold) { closedBuild = Int(build) }
+            }
+        }
+        .font(.scaled(14, weight: .semibold))
+        .background(RouteTone.picked, in: shape)
+        .overlay(shape.strokeBorder(Palette.primary.opacity(0.25), lineWidth: 1))
+        .transition(noticeChange)
+    }
+
+    /// A config card's text: a button to [url] where it has one, read as one line otherwise.
+    @ViewBuilder private func cardLink<Content: View>(_ url: URL?, label: String,
+                                                      @ViewBuilder _ content: () -> Content) -> some View {
+        if let url {
+            Button { openURL(url) } label: { content().contentShape(Rectangle()) }
+                .buttonStyle(PressableStyle())
+                .accessibilityLabel(label)
+                .accessibilityHint("Открыть")
+        } else {
+            content()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+        }
+    }
+
+    /// A card's ×: white on the orange card, grey on the tinted one.
+    private func closeButton(on warning: Bool, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.scaled(12, weight: .bold))
+                .foregroundStyle(warning ? Color.white : RouteTone.ink3)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle(scale: 0.9))
+        .accessibilityLabel(label)
+    }
+
+    /// A card of the config's comes down into its place and goes up as it is closed (a fade with
+    /// Reduce Motion).
+    private var noticeChange: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top))
+    }
+
+    /// «Проездной закончился», with «Продлить» (Тарифы) while there is a way to pay (TITAN_PAYMENTS
+    /// and the panel's config, RemoteConfig.renewOn); else nothing to tap.
+    @ViewBuilder private var expiredBanner: some View {
+        #if TITAN_PAYMENTS
+        if store.remote.renewOn { renewBanner } else { expiredLine }
+        #else
+        expiredLine
+        #endif
     }
 
     #if TITAN_PAYMENTS
     /// One line: a tap opens Тарифы.
-    private var expiredBanner: some View {
+    private var renewBanner: some View {
         Button { store.paywall = .expired } label: {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.circle.fill")
@@ -446,10 +607,11 @@ struct HomeView: View {
         .buttonStyle(PressableStyle())
         .accessibilityLabel("Проездной закончился. Продлить")
     }
-    #else
-    /// One line, the same look: only that it has run out (no payments in this build,
-    /// docs/HANDOFF.md), nothing to tap.
-    private var expiredBanner: some View {
+    #endif
+
+    /// One line, the same look: only that it has run out (no way to pay in this build or by the
+    /// panel's config), nothing to tap.
+    private var expiredLine: some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.circle.fill")
             Text("Проездной закончился").lineLimit(1)
@@ -463,7 +625,6 @@ struct HomeView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Проездной закончился")
     }
-    #endif
 
     /// «Стоим», «В пути · Финляндия»…, the pause's line, the error in red. A new title comes up
     /// into its place as the old one goes up and out (a fade with Reduce Motion).
@@ -592,7 +753,9 @@ struct HomeView: View {
             if let bypass {
                 choiceCard(.bypass, server: bypass, picked: choice.isBypass, detected: choice == .bypassDetected)
             }
-            if choice == .manual, let s = store.selected {
+            // By hand; or «Авто · объезды» the panel's config turned off, until the next load
+            // settles it (AppStore.fitChoice): the pick still in sight.
+            if choice == .manual || (choice.isBypass && bypass == nil), let s = store.selected {
                 manualRow(s, proxy)
                     .transition(reduceMotion ? AnyTransition.opacity
                                 : AnyTransition.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
@@ -712,7 +875,8 @@ struct HomeView: View {
         var spoken = "Вручную: " + RouteTile.title(s.name) + (note.map { ", " + $0 } ?? "")
         if measured { spoken += ", задержка" + PingChip.spokenTail(ping, pending: pending) }
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
-        return Button { openList(proxy, at: s) } label: {
+        let hasList = !listHidden
+        return Button { if hasList { openList(proxy, at: s) } } label: {
             HStack(spacing: 10) {
                 RadioMark(on: true)
                 VStack(alignment: .leading, spacing: 1) {
@@ -730,9 +894,11 @@ struct HomeView: View {
                 if measured {
                     PingChip(ping: ping, pending: pending)
                 }
-                Image(systemName: "chevron.right")
-                    .font(.scaled(13, weight: .bold))
-                    .foregroundStyle(RouteTone.ink3)
+                if hasList {
+                    Image(systemName: "chevron.right")
+                        .font(.scaled(13, weight: .bold))
+                        .foregroundStyle(RouteTone.ink3)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -744,7 +910,7 @@ struct HomeView: View {
         .buttonStyle(PressableStyle(scale: 0.98))
         .accessibilityLabel(spoken)
         .accessibilityAddTraits(.isSelected)
-        .accessibilityHint("Список направлений")
+        .accessibilityHint(hasList ? "Список направлений" : "")
     }
 
     /// A card tapped: the pick goes to its direction, the route over to it on the way.
@@ -768,7 +934,7 @@ struct HomeView: View {
 
     /// The list opened (if tucked away) at [s]'s tab, and down to it.
     private func openList(_ proxy: ScrollViewProxy, at s: Server) {
-        let tab: ServerGroup = ServerGroup.isBypass(s) ? .bypass : .servers
+        let tab: ServerGroup = ServerGroup.isBypass(s) && store.remote.bypassTabOn ? .bypass : .servers
         if tab != page { withAnimation(Glass.spring(reduceMotion)) { page = tab } }
         if !listOpen {
             Haptics.selection()
@@ -966,9 +1132,9 @@ struct HomeView: View {
     /// «Выбрать направление вручную» and, opened, the list under it (remembered; tucked away to
     /// start with: «Авто» is the way in).
     @ViewBuilder private func manualList(_ proxy: ScrollViewProxy, wide: Bool) -> some View {
-        if let sub = store.subscription {
+        if let sub = store.subscription, !listHidden {
             VStack(spacing: 12) {
-                listToggle(count: sub.servers.count)
+                listToggle(count: listed(sub).count)
                 if listOpen {
                     list(proxy, wide: wide)
                         .transition(listChange)
@@ -1029,8 +1195,9 @@ struct HomeView: View {
     /// they fit.
     @ViewBuilder private func list(_ proxy: ScrollViewProxy, wide: Bool) -> some View {
         if let sub = store.subscription {
-            let groups = ServerGroup.split(sub.servers)
-            // The tab on screen; the first one there is when it has gone (a refreshed pass).
+            let groups = ServerGroup.split(listed(sub))
+            // The tab on screen; the first one there is when it has gone (a refreshed pass, the
+            // Объезды tab taken away).
             let current: ServerGroup = groups[page]?.isEmpty == false ? page
                 : ServerGroup.allCases.first(where: { groups[$0]?.isEmpty == false }) ?? .servers
             VStack(spacing: 12) {
@@ -1132,8 +1299,17 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Объезды: осталось \(formatBytes(sub.info.remaining)) из \(formatBytes(sub.info.total))")
                     #if TITAN_PAYMENTS
-                    // Тарифы (the App Store first).
-                    Button("Добавить ГБ") { store.paywall = .traffic }.font(.scaled(13, weight: .semibold))
+                    // Тарифы (the App Store first), while the panel's config leaves a way to pay.
+                    if store.remote.renewOn {
+                        Button { store.paywall = .traffic } label: {
+                            Text("Добавить ГБ")
+                                .font(.scaled(13, weight: .semibold))
+                                .foregroundStyle(RouteTone.accentInk)
+                                .frame(minHeight: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PressableStyle())
+                    }
                     #endif
                 }
             } else {
@@ -1407,7 +1583,7 @@ struct ServerRow: View {
 /// springs in (a fade with Reduce Motion).
 private struct RadioMark: View {
     let on: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {

@@ -1,5 +1,6 @@
-// Payments, renewal and Личный кабинет are cut from the iOS app for now (docs/HANDOFF.md):
-// this file is compiled only with TITAN_PAYMENTS.
+// Payments, renewal and Личный кабинет (docs/HANDOFF.md): this file is compiled only with
+// TITAN_PAYMENTS (set for the app in ios/project.yml); the panel's config can hide them
+// (RemoteConfig.payments).
 #if TITAN_PAYMENTS
 import SwiftUI
 
@@ -8,7 +9,8 @@ import SwiftUI
 /// App Store first); the site's own tariffs and codes are a tab of their own where
 /// AppStorePurchases.otherMethods allows. Only the tariff's own page is the provider's
 /// (PaymentView, inside the app; bank apps for SBP open from there). Buttons and titles on the
-/// way there are neutral (Тарифы, Продолжить).
+/// way there are neutral (Тарифы, Продолжить). Design C: the app's card corners and hairline
+/// edge, RouteTone's red and orange.
 struct CabinetView: View {
     let link: String
     /// Connected devices and the limit from the subscription's account info, if known.
@@ -44,18 +46,21 @@ struct CabinetView: View {
                 if let d = data {
                     ScrollView {
                         VStack(spacing: 14) {
-                            if let note { banner(note, icon: "info.circle.fill", color: Palette.primary) }
-                            if let error { banner(error, icon: "exclamationmark.triangle.fill", color: .red) }
+                            if let note { banner(note, icon: "info.circle.fill", color: RouteTone.accentInk) }
+                            if let error { banner(error, icon: "exclamationmark.triangle.fill", color: RouteTone.danger) }
                             if tab == 1 && purchases.otherMethods {
                                 PayPane(data: d, onPay: pay, onCode: applyCode).transition(.opacity)
                             } else {
                                 Group {
                                     subscription(d)
-                                    Button(action: renew) {
-                                        Label("Продлить проездной", systemImage: "ticket.fill")
+                                    // Тарифы, while the panel's config leaves a way to pay.
+                                    if store.remote.renewOn {
+                                        Button(action: renew) {
+                                            Label("Продлить проездной", systemImage: "ticket.fill")
+                                        }
+                                        .buttonStyle(PrimaryButtonStyle())
+                                        .padding(.top, 4)
                                     }
-                                    .buttonStyle(PrimaryButtonStyle())
-                                    .padding(.top, 4)
                                 }
                                 .transition(.opacity)
                             }
@@ -182,12 +187,13 @@ struct CabinetView: View {
 
     /// While the cabinet loads the first time: the shapes of what is coming, with a shine.
     private var skeleton: some View {
-        VStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Palette.surface).frame(height: 200)
-            RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Palette.surface).frame(height: 110)
+        let shape = RoundedRectangle(cornerRadius: Palette.cardRadius, style: .continuous)
+        return VStack(spacing: 14) {
+            shape.fill(Palette.surface).frame(height: 200)
+            shape.fill(Palette.surface).frame(height: 110)
             HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Palette.surface).frame(height: 130)
-                RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Palette.surface).frame(height: 130)
+                shape.fill(Palette.surface).frame(height: 130)
+                shape.fill(Palette.surface).frame(height: 130)
             }
         }
         .shimmer(tint: Palette.outline, duration: 1.3)
@@ -263,7 +269,7 @@ struct CabinetView: View {
                         }
                     } label: {
                         tile {
-                            IconTile(icon: copied ? "checkmark" : "person.text.rectangle.fill", color: copied ? Palette.green : .orange, size: 38)
+                            IconTile(icon: copied ? "checkmark" : "person.text.rectangle.fill", color: copied ? Palette.green : Palette.violet, size: 38)
                             Text("Ваш ID").font(.scaled(13, weight: .semibold)).foregroundStyle(.secondary)
                             Text(id).font(.scaled(20, weight: .heavy)).monospacedDigit()
                                 .lineLimit(1).minimumScaleFactor(0.6)
@@ -282,8 +288,10 @@ struct CabinetView: View {
         }
     }
 
-    /// Дни подписки on the brand gradient (red when it's over), a crown in the corner.
+    /// Дни подписки on the brand gradient (red when it's over), a ticket in the corner; the
+    /// app's card corners.
     private func hero(_ d: CabinetAPI.Snapshot) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Palette.cardRadius, style: .continuous)
         let gradient = d.active ? Palette.accentGradient
             : LinearGradient(colors: [Color(red: 0.93, green: 0.27, blue: 0.33), Color(red: 0.62, green: 0.12, blue: 0.36)],
                              startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -320,25 +328,27 @@ struct CabinetView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             ZStack(alignment: .topTrailing) {
-                RoundedRectangle(cornerRadius: 24, style: .continuous).fill(gradient)
-                Image(systemName: "crown.fill")
+                shape.fill(gradient)
+                Image(systemName: "ticket.fill")
                     .font(.scaled(130))
                     .foregroundStyle(Color.white.opacity(0.12))
                     .rotationEffect(.degrees(-14))
                     .offset(x: 26, y: -6)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .clipShape(shape)
         }
-        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.white.opacity(0.15), lineWidth: 1))
+        .overlay(shape.strokeBorder(Color.white.opacity(0.15), lineWidth: 1))
         .shadow(color: (d.active ? Palette.primary : Color.red).opacity(0.35), radius: 18, y: 8)
     }
 
-    /// A half-width card of the dashboard (devices, ID).
+    /// A half-width card of the dashboard (devices, ID), as the app's cards (Card).
     private func tile<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) { content() }
+        let shape = RoundedRectangle(cornerRadius: Palette.cardRadius, style: .continuous)
+        return VStack(alignment: .leading, spacing: 6) { content() }
             .padding(16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(Palette.surface, in: shape)
+            .overlay(shape.strokeBorder(Palette.edge, lineWidth: 0.5))
     }
 
     /// Green while there's plenty, orange then red as it runs out.
@@ -426,7 +436,7 @@ private struct PayPane: View {
                 if let t = selected {
                     let methods = (data.methods[kind] ?? []).filter { t.methods.contains($0.id) }
                     let list = methods.isEmpty ? t.methods.map { CabinetAPI.Method(id: $0, title: "") } : methods
-                    if list.isEmpty { Text("Этот тариф сейчас недоступен").font(.scaled(13)).foregroundStyle(.red) }
+                    if list.isEmpty { Text("Этот тариф сейчас недоступен").font(.scaled(13)).foregroundStyle(RouteTone.danger) }
                     ForEach(list, id: \.id) { m in
                         Button {
                             Haptics.tap(.medium)
@@ -508,13 +518,15 @@ private struct PayPane: View {
                 Spacer(minLength: 8)
                 Text(price(t.price))
                     .font(.scaled(18, weight: .heavy)).monospacedDigit()
-                    .foregroundStyle(on ? Palette.primary : Color.primary)
+                    .foregroundStyle(on ? RouteTone.accentInkOnTint : Color.primary)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             .frame(minHeight: 62)
-            .background(on ? Palette.primary.opacity(0.1) : Palette.track.opacity(0.55),
+            // As Маршрут's cards and Тарифы: the picked one on the brand's tint with its edge.
+            .background(on ? RouteTone.picked : RouteTone.well,
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(on ? Palette.primary : Color.clear, lineWidth: 1.5))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(on ? Palette.primary.opacity(0.5) : Color.clear, lineWidth: 1.5))
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableStyle(scale: 0.98))

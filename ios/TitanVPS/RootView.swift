@@ -23,12 +23,18 @@ struct RootView: View {
     /// The phone's text size: the screens are built again when it changes (Font.scaled).
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.scenePhase) private var scenePhase
+    /// The system's Reduce Motion: with the panel's config it makes the app's own (titanReduceMotion).
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
 
     var body: some View {
         ZStack {
             Palette.background.ignoresSafeArea()
             if splash {
                 SplashView()
+            } else if store.remote.mustUpdate {
+                // The panel's config holds this build back (update.minBuild): nothing else of the app.
+                UpdateRequiredView()
+                    .transition(.opacity)
             } else if !privacyAccepted {
                 PrivacyNoticeView(onAccept: acceptPrivacy)
                     .transition(.opacity)
@@ -76,11 +82,11 @@ struct RootView: View {
             LiveActivityController.vpnChanged(state, server: store.selected?.name, paused: store.vpnPaused)
         }
         // A tap on a reminder: Подписка; on the bypass traffic one, Тарифы over it (with
-        // TITAN_PAYMENTS only: no payments otherwise, docs/HANDOFF.md).
+        // TITAN_PAYMENTS, while the panel's config leaves a way to pay: RemoteConfig.renewOn).
         .onReceive(NotificationCenter.default.publisher(for: Reminders.openSubscription)) { note in
             guard store.subscription != nil else { return }
             #if TITAN_PAYMENTS
-            if (note.object as? String) == Reminders.trafficId, privacyAccepted {
+            if (note.object as? String) == Reminders.trafficId, privacyAccepted, store.remote.renewOn, !store.remote.mustUpdate {
                 openTrafficPaywall()
             } else {
                 tab = .subscription
@@ -120,6 +126,8 @@ struct RootView: View {
             let opened = wasInBackground
             wasInBackground = false
             if opened, !splash { Task { await autoconnectOnOpen() } }
+            // The panel's config from its URL, a quarter of an hour after its last answer.
+            store.refreshRemoteIfStale()
             // After a while: the subscription again (renewed in the bot meanwhile?), which also
             // moves the reminders.
             guard privacyAccepted, let sub = store.subscription, Date().timeIntervalSince(sub.fetchedAt) > 1800 else { return }
@@ -156,6 +164,9 @@ struct RootView: View {
             PaywallView(reason: reason).environmentObject(store)
         }
         #endif
+        // Reduce Motion for the app's own views (and the sheets above): the system's, or the
+        // panel's config with the motion off (features.animations).
+        .environment(\.titanReduceMotion, systemReduceMotion || !store.remote.animationsOn)
     }
 
     #if TITAN_PAYMENTS
@@ -263,7 +274,9 @@ struct RootView: View {
     /// bar, with a tick. False when there is none that way, or [from] is no longer on screen.
     private func swipeTab(from: Tab, _ step: Int) -> Bool {
         let all = Tab.allCases
-        guard tab == from, let i = all.firstIndex(of: from), all.indices.contains(i + step) else { return false }
+        // Turned off in the panel's config (features.tabSwipe): the bar only.
+        guard store.remote.tabSwipeOn, tab == from, let i = all.firstIndex(of: from),
+              all.indices.contains(i + step) else { return false }
         Haptics.selection()
         tab = all[i + step]
         return true
@@ -293,7 +306,7 @@ struct TitanTabBar: View {
     @Namespace private var thumb
     /// Taps on each tab's icon so far: each one bounces it once.
     @State private var bounces: [Tab: Int] = [:]
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
 
     private struct Item: Identifiable {
         let id: Tab
@@ -482,6 +495,59 @@ struct SplashView: View {
     }
 }
 
+/// «Обновите Titan»: the panel's config holds this build back (update.minBuild above its
+/// CFBundleVersion), so nothing else of the app is shown, before Конфиденциальность too. The way to
+/// the new build where the config gives it, and support; a route still up can be stopped here
+/// (Всегда в пути would keep it). Gone as soon as a config without it comes (the launch's refresh).
+struct UpdateRequiredView: View {
+    @EnvironmentObject var store: AppStore
+    @EnvironmentObject var vpn: VPNController
+    @Environment(\.openURL) private var openURL
+    /// Read so that a text size change redraws it (Font.scaled).
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                GlowingLogo(size: 110)
+                    .padding(.top, 48)
+                Text("Обновите Titan").font(.scaled(30, weight: .heavy))
+                    .foregroundStyle(Palette.logoGradient)
+                    .multilineTextAlignment(.center)
+                    .accessibilityAddTraits(.isHeader)
+                Text(store.remote.updateText ?? "Эта версия устарела. Установите новую, чтобы ехать дальше.")
+                    .font(.scaled(15)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(spacing: 12) {
+                    if let url = store.remote.updateURL {
+                        Button { openURL(url) } label: {
+                            Label("Обновить", systemImage: "arrow.down.circle.fill")
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                    }
+                    if vpn.isOn {
+                        Button { vpn.disconnect(byUser: true) } label: {
+                            Label("Остановиться", systemImage: "stop.fill")
+                        }
+                        .buttonStyle(SecondaryButtonStyle(height: 50, tint: RouteTone.danger))
+                    }
+                    Button { openURL(store.supportURL) } label: {
+                        Label("Поддержка", systemImage: "headphones")
+                    }
+                    .buttonStyle(SecondaryButtonStyle(height: 50))
+                }
+                .padding(.top, 8)
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 32)
+            .frame(maxWidth: 480)
+            .frame(maxWidth: .infinity)
+        }
+        .background(AuroraBackground())
+    }
+}
+
 /// Конфиденциальность: once, after the splash and before anything else (App Review 5.4: what a
 /// VPN app does with the traffic, said before the service is used). Accepted, it never shows
 /// again; until then no key is added and nothing connects (RootView).
@@ -550,7 +616,10 @@ struct PrivacyNoticeView: View {
             point("ticket.fill", "Код проездного хранится на этом устройстве и отправляется только в Titan.")
             point("iphone", "Для лимита устройств Titan получает и хранит модель устройства, версию iOS и идентификатор приложения на этом устройстве — пока вы не отвяжете устройство или не удалите аккаунт.")
             #if TITAN_PAYMENTS
-            point("creditcard.fill", "При покупке в App Store Titan получает запись Apple о покупке вместе с кодом проездного (если он уже есть), чтобы продлить проездной или выдать новый. Данные карты видит только Apple.")
+            // Where the App Store's purchases can be made (the panel's saved config may leave them out).
+            if RemoteConfig.current.appStoreOn {
+                point("creditcard.fill", "При покупке в App Store Titan получает запись Apple о покупке вместе с кодом проездного (если он уже есть), чтобы продлить проездной или выдать новый. Данные карты видит только Apple.")
+            }
             #endif
             point("checkmark.shield.fill", "Нажимая «Принимаю», вы соглашаетесь с этим и разрешаете Titan добавить на устройство свою конфигурацию. iOS спросит разрешение, когда вы впервые нажмёте «Поехали».")
         }
@@ -585,7 +654,9 @@ struct WelcomeView: View {
     @FocusState private var editing: Bool
     #if TITAN_PAYMENTS
     @State private var restoring = false
-    /// The storefront: the way to the bot for a key shows only in the United States one.
+    @State private var redeeming = false
+    /// The storefront: the way to the bot for a key shows only in the United States one; the
+    /// App Store's subscriptions (an offer code needs one to redeem).
     @ObservedObject private var purchases = AppStorePurchases.shared
     #endif
 
@@ -613,18 +684,28 @@ struct WelcomeView: View {
                     .offset(y: appeared ? 0 : 24)
 
                 #if TITAN_PAYMENTS
-                appStore
-                    .opacity(appeared ? 1 : 0)
-                    .offset(y: appeared ? 0 : 28)
+                // Not with the App Store's part turned off in the panel's config (payments.appStore).
+                if store.remote.appStoreOn {
+                    appStore
+                        .opacity(appeared ? 1 : 0)
+                        .offset(y: appeared ? 0 : 28)
+                }
                 #endif
 
                 // Where to get a key is where it is sold (the bot), as AppStorePurchases.linksOut
-                // allows (the owner's switch); otherwise just how to enter one. Without
-                // TITAN_PAYMENTS (no payments, docs/HANDOFF.md) always just how to enter one, and
-                // support for a key that doesn't connect.
+                // allows (the owner's switch, and the panel's config); otherwise just how to enter
+                // one, and support for a key that doesn't connect. Without TITAN_PAYMENTS (no
+                // payments, docs/HANDOFF.md) always the latter.
                 Group {
                     #if TITAN_PAYMENTS
-                    if purchases.linksOut { steps } else { haveKey }
+                    if purchases.linksOut {
+                        steps
+                    } else {
+                        VStack(spacing: 14) {
+                            haveKey
+                            support
+                        }
+                    }
                     #else
                     VStack(spacing: 14) {
                         haveKey
@@ -643,6 +724,10 @@ struct WelcomeView: View {
         .scrollDismissesKeyboard(.interactively)
         .background(AuroraBackground())
         .onAppear { withAnimation(.spring(response: 0.7, dampingFraction: 0.8).delay(0.05)) { appeared = true } }
+        #if TITAN_PAYMENTS
+        // Whether the App Store sells a subscription yet: «Ввести код предложения» needs one.
+        .task { if store.remote.appStoreOn { await purchases.loadProducts() } }
+        #endif
     }
 
     private var keyCard: some View {
@@ -720,8 +805,9 @@ struct WelcomeView: View {
     }
 
     #if TITAN_PAYMENTS
-    /// Нет ключа: the App Store's subscription (its key comes by itself), or the one bought on
-    /// another iPhone or iPad back by Восстановить покупки (App Review 3.1.1, 3.1.3(b)).
+    /// Нет ключа: the App Store's subscription (its key comes by itself), the one bought on
+    /// another iPhone or iPad back by Восстановить покупки (App Review 3.1.1, 3.1.3(b)), or an App
+    /// Store offer code (once the App Store sells a subscription to redeem it for).
     private var appStore: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Нет проездного?").font(.scaled(16, weight: .bold))
@@ -740,12 +826,37 @@ struct WelcomeView: View {
                 if restoring { ProgressView() } else { Text("Восстановить покупки") }
             }
             .buttonStyle(SecondaryButtonStyle(height: 46, tint: .secondary))
-            .disabled(restoring || store.busy)
+            .disabled(restoring || redeeming || store.busy)
+            if !purchases.subscriptions.isEmpty {
+                Button(action: redeem) {
+                    if redeeming {
+                        ProgressView()
+                    } else {
+                        Label("Ввести код предложения", systemImage: "ticket.fill").lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                }
+                .buttonStyle(SecondaryButtonStyle(height: 46, tint: .secondary))
+                .disabled(restoring || redeeming || store.busy)
+            }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 1))
+    }
+
+    /// Ввести код предложения without a key: Apple's own sheet; what the code gives goes to the
+    /// bot, which makes the pass and sends its code back, and the app signs in with it
+    /// (AppStorePurchases.redeemCode(keyless:)).
+    private func redeem() {
+        guard !redeeming else { return }
+        Haptics.tap()
+        editing = false
+        redeeming = true
+        Task {
+            await purchases.redeemCode(keyless: true)
+            redeeming = false
+        }
     }
 
     /// Восстановить покупки without a key: the bot sends back the key the subscription is
@@ -796,8 +907,8 @@ struct WelcomeView: View {
     }
     #endif
 
-    /// Outside the United States storefront, and without TITAN_PAYMENTS: a key got before, no
-    /// way to the bot.
+    /// Outside the United States storefront (or with the way to the bot turned off in the panel's
+    /// config), and without TITAN_PAYMENTS: a key got before, no way to the bot.
     private var haveKey: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "doc.on.clipboard.fill")
@@ -817,9 +928,9 @@ struct WelcomeView: View {
         .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 1))
     }
 
-    #if !TITAN_PAYMENTS
-    /// Without TITAN_PAYMENTS: support before sign-in, for a key that is turned down (the key's
-    /// errors send there). The bot as support only, nothing about where to get a key.
+    /// Without the way to the bot (TITAN_PAYMENTS' linksOut off, or no TITAN_PAYMENTS): support
+    /// before sign-in, for a key that is turned down (the key's errors send there). The bot as
+    /// support only, nothing about where to get a key.
     private var support: some View {
         VStack(spacing: 8) {
             Text("Не получается поехать? Напишите в поддержку")
@@ -836,7 +947,6 @@ struct WelcomeView: View {
             .buttonStyle(PressableStyle())
         }
     }
-    #endif
 
     /// Key added: connect right away (same as Android). A tap now; how the connect ends is felt
     /// too (VPNController's byUser).

@@ -66,16 +66,17 @@ enum RouteTone {
 
 /// A server's Пинг in words, as traffic on the road. It is a cold delay (a fresh connection
 /// through the server, XrayPing), so the list's own thresholds (500 and 1500 ms, its colours
-/// all along), not the warm latency's 120 and 300 (Latency, on the trip card): with those
-/// nearly every working server would read «пробки».
+/// all along; the panel's config may move them, RemoteConfig.roads), not the warm latency's 120
+/// and 300 (Latency, on the trip card): with those nearly every working server would read «пробки».
 enum RouteTraffic {
     enum Level { case free, dense, jam, timeout }
 
     static func level(_ ms: Int?) -> Level? {
         guard let ms else { return nil }
         if ms < 0 { return .timeout }
-        if ms < 500 { return .free }
-        if ms < 1500 { return .dense }
+        let limits = RemoteConfig.current.roadLimits
+        if ms < limits.good { return .free }
+        if ms < limits.calm { return .dense }
         return .jam
     }
 
@@ -97,7 +98,7 @@ enum RouteTraffic {
 struct PingChip: View {
     let ping: Int?
     let pending: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -426,7 +427,7 @@ struct RoutePill: View {
 /// digits rolling over (none with Reduce Motion).
 struct TripTimer: View {
     let since: Date
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
@@ -458,7 +459,7 @@ struct TripTimer: View {
 struct TripStats: View {
     @ObservedObject var monitor: TrafficMonitor
     let check: ConnectionCheck.Status
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
 
     var body: some View {
         // Side by side in equal columns where each tile fits whole (EqualColumns: as wide as

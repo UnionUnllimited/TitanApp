@@ -21,9 +21,10 @@ enum Config {
     #if TITAN_PAYMENTS
     /// Apple ID → Подписки, if StoreKit's own sheet doesn't open.
     static let manageSubscriptions = URL(string: "https://apps.apple.com/account/subscriptions")!
-    /// Where App Store purchases go to extend the subscription (docs/BACKEND-APPSTORE.md). Nil
-    /// until the bot has it: purchases then stay unfinished and StoreKit hands them over again.
-    static let purchaseEndpoint: URL? = nil
+    /// Where App Store purchases go to extend the subscription (docs/BACKEND-APPSTORE.md): the
+    /// panel's config sends it (RemoteConfig.payments.purchaseEndpoint, https only). Nil until it
+    /// does: purchases then stay unfinished and StoreKit hands them over again.
+    static var purchaseEndpoint: URL? { RemoteConfig.current.purchaseEndpoint }
     #endif
     /// Удалить аккаунт through the bot (docs/BACKEND-APPSTORE.md). Nil until the bot has it:
     /// the request is then copied for support.
@@ -61,6 +62,11 @@ struct SubscriptionInfo: Codable, Equatable {
     /// off (XrayRunConfig.build), nil (no header, another value, a subscription saved before it)
     /// keeps it on as always.
     var sniffing: Bool? = nil
+    /// The app's remote config as the panel's headers bring it (RemoteConfig, docs/BACKEND-CONFIG.md):
+    /// «titan-config», the JSON in base64, and «titan-config-url», where to GET it. Nil without them
+    /// (and in a subscription saved before them).
+    var remoteConfig: String? = nil
+    var remoteConfigUrl: String? = nil
 
     var used: Int64 { upload + download }
     var remaining: Int64 { max(total - used, 0) }
@@ -227,6 +233,9 @@ enum SubscriptionAPI {
         info.announce = decodeText(header("announce"))
         // No Provider ID needed, unlike Happ: our own hosts only.
         info.sniffing = flag(header("sniffing-enable"))
+        // Read by AppStore.updateRemote after the load; nothing of the servers depends on them.
+        info.remoteConfig = header("titan-config")?.trimmingCharacters(in: .whitespaces).nilIfEmpty
+        info.remoteConfigUrl = header("titan-config-url")?.trimmingCharacters(in: .whitespaces).nilIfEmpty
         return info
     }
 
@@ -470,6 +479,13 @@ enum SubscriptionAPI {
         let host = first["address"] as? String
         let port = (first["port"] as? Int) ?? Int((first["port"] as? String) ?? "")
         return (host, port)
+    }
+
+    /// What the subscription request tells about the device (download): the remote config's
+    /// request (RemoteConfigAPI) sends the same.
+    static func deviceHeaders() -> [String: String] {
+        ["x-hwid": hwid(), "x-device-os": "iOS", "x-ver-os": UIDevice.current.systemVersion,
+         "x-device-model": deviceModel()]
     }
 
     private static func hwid() -> String {

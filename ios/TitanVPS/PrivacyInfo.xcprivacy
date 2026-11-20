@@ -4,8 +4,9 @@
      UserDefaults; the Go runtime of Xray reads the boot clock and file timestamps.
      Collected (as App Privacy in App Store Connect, docs/PRIVACY.md): the subscription server gets
      the key (User ID), the app's device ID (Device ID), the device model and iOS version (Other)
-     for the device limit; linked to the key, app functionality only, no tracking. A build with
-     TITAN_PAYMENTS sends the App Store purchase record too: add Purchase History for it. -->
+     for the device limit (the remote config's request sends the same device data); with
+     TITAN_PAYMENTS (set for the app) the App Store purchase record goes to the bot with the key
+     (Purchase History). Linked to the key, app functionality only, no tracking. -->
 <plist version="1.0">
 <dict>
 	<key>NSPrivacyTracking</key>
@@ -29,6 +30,18 @@
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePurchaseHistory</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
 			<true/>
 			<key>NSPrivacyCollectedDataTypeTracking</key>

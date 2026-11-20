@@ -1,6 +1,6 @@
 import Foundation
-// The web cabinet (CabinetView) is cut from the iOS app for now with the payments
-// (docs/HANDOFF.md): compiled only with TITAN_PAYMENTS. AccountAPI below stays.
+// The web cabinet (CabinetView) goes with the payments (docs/HANDOFF.md): compiled only with
+// TITAN_PAYMENTS (set for the app in ios/project.yml). AccountAPI below is always there.
 #if TITAN_PAYMENTS
 import SwiftSoup
 

@@ -1,5 +1,6 @@
-// Payments, renewal and Личный кабинет are cut from the iOS app for now (docs/HANDOFF.md):
-// this file is compiled only with TITAN_PAYMENTS.
+// Payments, renewal and Личный кабинет (docs/HANDOFF.md): this file is compiled only with
+// TITAN_PAYMENTS (set for the app in ios/project.yml); the panel's config can hide them
+// (RemoteConfig.payments).
 #if TITAN_PAYMENTS
 import StoreKit
 import SwiftUI
@@ -16,7 +17,9 @@ enum PaywallReason: String, Identifiable {
 /// гигабайты; Оплатить через Apple, Восстановить покупки, Управление подпиской, its offer
 /// codes, the auto-renewal terms), then Другие методы: the site's cabinet in the browser,
 /// without a price beside it (showsOther). Opened from Главная's «Подписка истекла»,
-/// Подписка's «Продлить подписку», the «Добавить ГБ» buttons and the key entry.
+/// Подписка's «Продлить подписку», the «Добавить ГБ» buttons and the key entry. The panel's
+/// config may leave out either part (payments.appStore, payments.otherMethods). Design C: the
+/// app's cards (Card), the picked row on the brand's tint as Маршрут's cards, RouteTone's ink.
 struct PaywallView: View {
     let reason: PaywallReason
     @EnvironmentObject var store: AppStore
@@ -45,11 +48,21 @@ struct PaywallView: View {
                     }
                     // Гигабайты go to a key; none in the App Store (not made yet): no card for
                     // them, not a «скоро» at the top.
-                    if reason == .traffic && store.subscription != nil && !(purchases.loaded && purchases.packs.isEmpty) {
+                    if appStore && reason == .traffic && store.subscription != nil && !(purchases.loaded && purchases.packs.isEmpty) {
                         packsCard
                     }
-                    subscriptionsCard
+                    if appStore { subscriptionsCard }
                     if showsOther { other }
+                    if !appStore && !showsOther { nothingToPay }
+                    // The privacy policy a tap away without the App Store's card too.
+                    if !appStore {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 14) { legalLinks }
+                            VStack(spacing: 6) { legalLinks }
+                        }
+                        .font(.scaled(12, weight: .semibold))
+                        .tint(RouteTone.accentInk)
+                    }
                 }
                 .padding(16)
                 .frame(maxWidth: 560)
@@ -77,12 +90,15 @@ struct PaywallView: View {
         }
         // A purchase under way isn't dropped by a pull down.
         .interactiveDismissDisabled(buying != nil || restoring)
-        .task { await purchases.loadProducts() }
+        .task { if appStore { await purchases.loadProducts() } }
     }
+
+    /// The App Store's part: on unless the panel's config turned it off (payments.appStore).
+    private var appStore: Bool { store.remote.appStoreOn }
 
     private var header: some View {
         VStack(spacing: 8) {
-            Image(systemName: "crown.fill")
+            Image(systemName: "ticket.fill")
                 .font(.scaled(26, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 60, height: 60)
@@ -102,15 +118,15 @@ struct PaywallView: View {
         let info = store.subscription?.info
         switch reason {
         case .expired:
-            return ("Проездной закончился — продлите его, чтобы снова поехать", .red)
+            return ("Проездной закончился — продлите его, чтобы снова поехать", RouteTone.danger)
         case .traffic:
             guard let info, info.total > 0 else { return ("Гигабайты на объездах", .secondary) }
             return ("Объезды: осталось \(formatBytes(info.remaining)) из \(formatBytes(info.total))",
-                    info.remaining * 10 < info.total ? .orange : .secondary)
+                    info.remaining * 10 < info.total ? RouteTone.warn : .secondary)
         case .renew:
             guard let info, info.expire > 0 else { return ("Продление проездного", .secondary) }
             let active = info.expire > Int64(Date().timeIntervalSince1970)
-            return (active ? "Проездной действует до " + Fmt.date(info.expire) : "Проездной закончился", active ? .secondary : .red)
+            return (active ? "Проездной действует до " + Fmt.date(info.expire) : "Проездной закончился", active ? .secondary : RouteTone.danger)
         case .start:
             return ("Проездной через App Store — его код появится в приложении сам", .secondary)
         }
@@ -121,7 +137,7 @@ struct PaywallView: View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 cardTitle("checkmark.seal.fill", Palette.primary, "Проездной через App Store",
-                          "Продлевается сама, отменить можно в любой момент")
+                          "Продлевается сам, отменить можно в любой момент")
                 // What a plan gives (App Review 3.1.2(c)); the rest is in each one's description.
                 Text("Проездной открывает все направления Titan, по обычным — без ограничений. Лимит устройств и гигабайты на объездах — как в описании тарифа.")
                     .font(.scaled(12)).foregroundStyle(.secondary)
@@ -146,6 +162,7 @@ struct PaywallView: View {
                     VStack(alignment: .leading, spacing: 6) { legalLinks }
                 }
                 .font(.scaled(12, weight: .semibold))
+                .tint(RouteTone.accentInk)
             }
             .padding(18)
         }
@@ -206,7 +223,7 @@ struct PaywallView: View {
             // No network or no App Store: not «скоро», and another try right here.
             VStack(spacing: 10) {
                 HStack(spacing: 10) {
-                    Image(systemName: "wifi.exclamationmark").foregroundStyle(.orange)
+                    Image(systemName: "wifi.exclamationmark").foregroundStyle(RouteTone.warn)
                     Text("Не удалось загрузить тарифы App Store").foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -218,7 +235,7 @@ struct PaywallView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity)
-            .background(Palette.track.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(RouteTone.well, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         } else {
             HStack(spacing: 10) {
                 Image(systemName: "clock").foregroundStyle(.secondary)
@@ -228,7 +245,7 @@ struct PaywallView: View {
             .font(.scaled(15, weight: .medium))
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 56)
-            .background(Palette.track.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(RouteTone.well, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
@@ -246,7 +263,7 @@ struct PaywallView: View {
 
     /// What App Review asks next to an auto-renewable subscription.
     private var terms: some View {
-        Text("Проездной продлевается автоматически, пока вы не отключите автопродление. Оплата списывается с Apple ID при подтверждении покупки и затем в течение 24 часов до конца каждого периода, если автопродление не отключено хотя бы за 24 часа до его конца. Отключить автопродление можно в настройках Apple ID.")
+        Text("Проездной продлевается автоматически, пока вы не отмените автопродление. Оплата списывается с Apple ID при подтверждении покупки и затем в течение 24 часов до конца каждого периода, если автопродление не отменено хотя бы за 24 часа до его конца. Отменить автопродление можно в настройках Apple ID.")
             .font(.scaled(11)).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -282,14 +299,16 @@ struct PaywallView: View {
                 Spacer(minLength: 8)
                 Text(p.displayPrice)
                     .font(.scaled(18, weight: .heavy)).monospacedDigit()
-                    .foregroundStyle(on ? Palette.primary : Color.primary)
+                    .foregroundStyle(on ? RouteTone.accentInkOnTint : Color.primary)
                     .lineLimit(1)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             .frame(minHeight: 62)
-            .background(on ? Palette.primary.opacity(0.1) : Palette.track.opacity(0.55),
+            // As Маршрут's cards: the picked one on the brand's tint with its edge.
+            .background(on ? RouteTone.picked : RouteTone.well,
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(on ? Palette.primary : Color.clear, lineWidth: 1.5))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(on ? Palette.primary.opacity(0.5) : Color.clear, lineWidth: 1.5))
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableStyle(scale: 0.98))
@@ -298,12 +317,32 @@ struct PaywallView: View {
     }
 
     /// Другие методы with a key: in every storefront as the owner chose
-    /// (AppStorePurchases.otherMethods), and while the App Store has no subscription to sell, so
-    /// an expired key is never left with nothing to tap. Before a key it is the bot, as
-    /// «Где взять ключ» on the key entry (AppStorePurchases.linksOut).
+    /// (AppStorePurchases.otherMethods), and while the App Store has no subscription to sell (or
+    /// its part is turned off), so an expired key is never left with nothing to tap, unless the
+    /// panel's config turned them off. Before a key it is the bot, as «Где взять ключ» on the key
+    /// entry (AppStorePurchases.linksOut).
     private var showsOther: Bool {
         guard store.subscription != nil else { return purchases.linksOut }
-        return purchases.otherMethods || purchases.noSubscriptions
+        return purchases.otherMethods
+            || ((purchases.noSubscriptions || !appStore) && store.remote.otherMethodsOn)
+    }
+
+    /// Neither part on (the panel's config): where to ask instead.
+    private var nothingToPay: some View {
+        VStack(spacing: 10) {
+            Text("Сейчас продлить проездной в приложении нельзя — напишите в поддержку")
+                .font(.scaled(15, weight: .medium)).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button { openURL(store.supportURL) } label: {
+                Label("Поддержка", systemImage: "headphones")
+            }
+            .buttonStyle(SecondaryButtonStyle(height: 46))
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity)
+        .background(Palette.surface, in: RoundedRectangle(cornerRadius: Palette.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Palette.cardRadius, style: .continuous).strokeBorder(Palette.edge, lineWidth: 0.5))
     }
 
     /// Другие методы: the site's cabinet (signed in by the subscription's link) in the browser,
@@ -320,7 +359,7 @@ struct PaywallView: View {
     }
 
     private func banner(_ n: Note) -> some View {
-        let color: Color = n.warning ? .orange : Palette.primary
+        let color: Color = n.warning ? RouteTone.warn : RouteTone.accentInk
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: n.warning ? "exclamationmark.triangle.fill" : "info.circle.fill").foregroundStyle(color)
             Text(n.text).font(.scaled(14, weight: .medium)).fixedSize(horizontal: false, vertical: true)

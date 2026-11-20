@@ -26,19 +26,21 @@ enum RouteChoice: String {
     var isBypass: Bool { self == .bypass || self == .bypassDetected }
 
     /// «Авто»: the panel's АВТО among the regular directions (RouteName.isBest), else the unlimited
-    /// row (UnlimitedServer), else the first regular one. [skip]: ids the app can't run.
-    static func autoServer(_ servers: [Server], skip: Set<String> = []) -> Server? {
+    /// row (UnlimitedServer), else the first regular one; the unlimited row first where the
+    /// panel's config says so (RemoteConfig.routes.auto «unlimited»). [skip]: ids the app can't run.
+    static func autoServer(_ servers: [Server], skip: Set<String> = [], prefer: RemoteConfig.AutoPick = .best) -> Server? {
         let regular = servers.filter { !ServerGroup.isBypass($0) && !ServerGroup.isHidden($0) && !skip.contains($0.id) }
-        return regular.first { RouteName.isBest($0.name.splitFlag.1) }
-            ?? regular.first(where: ServerGroup.isUnlimited)
-            ?? regular.first
+        let best = regular.first { RouteName.isBest($0.name.splitFlag.1) }
+        let unlimited = regular.first(where: ServerGroup.isUnlimited)
+        return (prefer == .unlimited ? unlimited ?? best : best ?? unlimited) ?? regular.first
     }
 
     /// «Авто · объезды»: the panel's own bypass АВТО (a bypass with «авто» in its name) if there is
     /// one. Else a bypass the app picks by the list's cold check (Проверить дороги; [pings] in ms,
     /// -1 for no answer): of those that answered, the quickest free one (not ServerGroup.isLimited)
     /// whose road isn't «пробки» (RouteTraffic), else the quickest of all; with none answered, the
-    /// first free bypass, else the first bypass. [skip]: ids the app can't run.
+    /// first free bypass, else the first bypass. [skip]: ids the app can't run. «пробки» by the
+    /// panel's thresholds (RemoteConfig.roads), as the list says it.
     static func bypassServer(_ servers: [Server], pings: [String: Int], skip: Set<String> = []) -> Server? {
         let bypass = servers.filter { ServerGroup.isBypass($0) && !ServerGroup.isHidden($0) && !skip.contains($0.id) }
         if let own = bypass.first(where: { $0.name.lowercased().contains("авто") }) { return own }

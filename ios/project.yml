@@ -6,7 +6,7 @@ options:
   deploymentTarget:
     iOS: "16.0"
 packages:
-  # HTML of the site's cabinet (like jsoup on Android).
+  # HTML of the site's cabinet (like jsoup on Android): Cabinet.swift, with TITAN_PAYMENTS.
   SwiftSoup:
     url: https://github.com/scinfu/SwiftSoup
     from: 2.7.0
@@ -68,8 +68,10 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         # `#if TITAN_APP` in Shared: what only the app runs (the toggle's and the Live Activity buttons'
-        # intents act in the app's process).
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) TITAN_APP"
+        # intents act in the app's process). TITAN_PAYMENTS: Тарифы, App Store purchases and the
+        # cabinet (docs/HANDOFF.md), the app target only; the panel's config can still hide them
+        # (RemoteConfig.payments).
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) TITAN_APP TITAN_PAYMENTS"
         # Cronet (Chromium's network stack, for Naive) is linked here, with what it needs.
         OTHER_LDFLAGS: ["-lresolv", "-lc++", "$(PROJECT_DIR)/Frameworks/LibXray.xcframework/libcronet.a",
           "-framework", "CoreTelephony", "-framework", "CryptoTokenKit", "-framework", "LocalAuthentication",

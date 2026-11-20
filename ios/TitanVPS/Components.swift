@@ -23,6 +23,22 @@ enum VoiceOver {
     }
 }
 
+// MARK: - Motion
+
+/// Reduce Motion as the app's views read it: the system's setting, or the panel's config with the
+/// motion turned off (RemoteConfig.features.animations), which takes the same path. RootView sets
+/// it over everything it shows; where it isn't set, the system's setting as it is now.
+private struct ReduceMotionKey: EnvironmentKey {
+    static var defaultValue: Bool { UIAccessibility.isReduceMotionEnabled }
+}
+
+extension EnvironmentValues {
+    var titanReduceMotion: Bool {
+        get { self[ReduceMotionKey.self] }
+        set { self[ReduceMotionKey.self] = newValue }
+    }
+}
+
 // MARK: - Buttons
 
 /// Any custom button: shrinks a little while pressed.
@@ -295,7 +311,7 @@ struct Shimmer: ViewModifier {
     var active = true
     var duration = 1.6
     var tint: Color = .white
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
     func body(content: Content) -> some View {
@@ -366,7 +382,7 @@ struct SelectionPop: ViewModifier {
     let on: Bool
     var amount: CGFloat = -0.03
     @State private var pops: CGFloat = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
@@ -513,7 +529,7 @@ enum Fmt {
 
 /// A backdrop with slowly drifting light in the logo's colours (splash, key entry).
 struct AuroraBackground: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -550,7 +566,7 @@ struct AuroraBackground: View {
 /// The logo with a soft glow behind it that slowly breathes.
 struct GlowingLogo: View {
     let size: CGFloat
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { ctx in

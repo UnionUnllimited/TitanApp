@@ -111,7 +111,7 @@ struct RouteBandKey: PreferenceKey {
 struct RouteMapArt: View {
     let band: CGRect
     var parallax: MapParallax? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { g in
@@ -176,7 +176,7 @@ struct RouteBand: View {
     @State private var hops: CGFloat = 0
     /// When the arrow's glide began, set back so that it begins at the arrow's place in the design.
     @State private var glideStart: Date
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.titanReduceMotion) private var reduceMotion
 
     init(mode: Mode, server: String?, destination: String, pulsing: Bool = false, gliding: Bool = false,
          flowing: Bool = false, parallax: MapParallax? = nil) {

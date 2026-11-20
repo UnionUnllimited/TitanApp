@@ -43,6 +43,13 @@ final class AppStore: ObservableObject {
     @Published var closeSheets = 0
     #endif
 
+    /// The panel's switches in force (RemoteConfig, docs/BACKEND-CONFIG.md): the saved ones from
+    /// launch, newer ones with each load of the pass (updateRemote). Code off the main thread reads
+    /// RemoteConfig.current, set at the same moment.
+    @Published private(set) var remote = RemoteConfig.current
+    /// The config's URL being asked: one request at a time.
+    private var remoteFetch: Task<Void, Never>?
+
     /// Favourite servers, by name (ids change with the subscription).
     @Published private(set) var favorites: Set<String> = []
     /// On Wi-Fi: bypass servers (Обходы) work only over mobile internet.
@@ -116,6 +123,9 @@ final class AppStore: ObservableObject {
             UserDefaults.standard.set(id, forKey: RouteChoice.pickKey)
         }
         favorites = Set(UserDefaults.standard.stringArray(forKey: favKey) ?? [])
+        // Технический режим turned off in the saved config: left. A choice it doesn't allow is
+        // settled at the first load (fitChoice), once it is known whether the route is up.
+        if !remote.techModeOn { UserDefaults.standard.set(false, forKey: TechMode.key) }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             // With the VPN on the path is the tunnel; the Wi-Fi interface is still listed.
             let wifi = path.status == .satisfied && path.availableInterfaces.contains { $0.type == .wifi }
@@ -128,9 +138,11 @@ final class AppStore: ObservableObject {
         Self.current = self
     }
 
-    /// Support: the subscription's support-url, else the bot.
+    /// Support: the panel's config (support.url), else the subscription's support-url, else the bot.
     var supportURL: URL {
-        subscription?.info.supportUrl.flatMap { URL(string: $0) }.flatMap { $0.scheme == nil ? nil : $0 } ?? Config.telegram
+        remote.supportURL
+            ?? subscription?.info.supportUrl.flatMap { URL(string: $0) }.flatMap { $0.scheme == nil ? nil : $0 }
+            ?? Config.telegram
     }
 
     #if TITAN_PAYMENTS
@@ -190,12 +202,16 @@ final class AppStore: ObservableObject {
 
     // MARK: «Авто» and «Авто · объезды»
 
-    /// What «Авто» goes to now (RouteChoice.autoServer).
-    var autoServer: Server? { RouteChoice.autoServer(subscription?.servers ?? [], skip: unsupported) }
+    /// What «Авто» goes to now (RouteChoice.autoServer; which row first, the panel's config).
+    var autoServer: Server? {
+        RouteChoice.autoServer(subscription?.servers ?? [], skip: unsupported, prefer: remote.autoPick)
+    }
 
-    /// What «Авто · объезды» goes to now (RouteChoice.bypassServer, by the list's last check).
+    /// What «Авто · объезды» goes to now (RouteChoice.bypassServer, by the list's last check). None
+    /// with it turned off in the panel's config (routes.autoBypass): no card, no check, no offer.
     var bypassServer: Server? {
-        RouteChoice.bypassServer(subscription?.servers ?? [], pings: pings, skip: unsupported)
+        guard remote.autoBypassOn else { return nil }
+        return RouteChoice.bypassServer(subscription?.servers ?? [], pings: pings, skip: unsupported)
     }
 
     /// The choice as it stands. Its direction may lag behind what it would pick now (the pass
@@ -270,7 +286,7 @@ final class AppStore: ObservableObject {
     /// to «Авто» when all of them open again. A pick by hand or «Авто · объезды» tapped stay.
     func checkMobileNet() {
         let c = choice
-        guard netCheck == nil, let vpn, cellularDirect, !onWifi, subscription != nil,
+        guard netCheck == nil, let vpn, cellularDirect, !onWifi, subscription != nil, remote.detectionOn,
               c == .bypassDetected || (c == .auto && !detectionDeclined && bypassServer != nil),
               UserDefaults.standard.bool(forKey: PrivacyNoticeView.key),
               UIApplication.shared.applicationState != .background,
@@ -284,8 +300,9 @@ final class AppStore: ObservableObject {
             let verdict = await MobileNetCheck.run()
             mobileNet = (verdict, Date())
             if verdict == .open { detectionDeclined = false }
-            // Still stopped on mobile internet: the answers came straight from it.
-            guard routeStopped(vpn), cellularDirect, !onWifi, subscription != nil else { return }
+            // Still stopped on mobile internet: the answers came straight from it (and the
+            // check still wanted: the config may have come meanwhile).
+            guard routeStopped(vpn), cellularDirect, !onWifi, subscription != nil, remote.detectionOn else { return }
             switch (verdict, choice) {
             case (.restricted, .auto) where !detectionDeclined:
                 guard let to = bypassServer, !blockedOnWifi(to) else { return }
@@ -296,6 +313,83 @@ final class AppStore: ObservableObject {
             default:
                 break
             }
+        }
+    }
+
+    // MARK: The panel's config (RemoteConfig)
+
+    /// After a load of the pass: the config its headers bring. «titan-config-url» wins (its JSON,
+    /// asked with the last ETag), else «titan-config»; with neither, or a URL that didn't answer
+    /// with a config, the one in force stays.
+    private func updateRemote(from info: SubscriptionInfo) {
+        if let url = RemoteConfig.https(info.remoteConfigUrl) {
+            fetchRemote(url)
+        } else if let header = info.remoteConfig, let config = RemoteConfig.parse(header: header) {
+            applyRemote(config, source: RemoteConfig.Source(kind: "header", at: Date()))
+        }
+    }
+
+    /// Back in the app: the config's URL again once a quarter of an hour has passed since its
+    /// last answer (the pass itself comes again after half an hour, RootView). Not before
+    /// Конфиденциальность is accepted.
+    func refreshRemoteIfStale() {
+        guard UserDefaults.standard.bool(forKey: PrivacyNoticeView.key), subscription != nil,
+              let source = RemoteConfig.source, source.kind == "url", let url = RemoteConfig.https(source.url),
+              Date().timeIntervalSince(source.at) >= 900 else { return }
+        fetchRemote(url)
+    }
+
+    private func fetchRemote(_ url: URL) {
+        guard remoteFetch == nil else { return }
+        let saved = RemoteConfig.source
+        // The ETag is only the same URL's.
+        let etag = saved?.url == url.absoluteString ? saved?.etag : nil
+        remoteFetch = Task {
+            defer { remoteFetch = nil }
+            switch await RemoteConfigAPI.fetch(url, etag: etag) {
+            case .config(let config, etag: let tag):
+                applyRemote(config, source: RemoteConfig.Source(kind: "url", url: url.absoluteString, etag: tag, at: Date()))
+            case .unchanged:
+                RemoteConfigCache.noteSource(RemoteConfig.Source(kind: "url", url: url.absoluteString, etag: etag, at: Date()))
+            case .failed:
+                break
+            }
+        }
+    }
+
+    /// Saved, and in force at once: the screens follow `remote`; what isn't on a screen is set here.
+    private func applyRemote(_ config: RemoteConfig, source: RemoteConfig.Source) {
+        let old = remote
+        RemoteConfigCache.save(config, source: source)
+        guard config != old else { return }
+        remote = config
+        let stopped = vpn.map { routeStopped($0) } ?? false
+        fitChoice(stopped: stopped)
+        // «Авто» to the row it means now, while stopped (on the way the route keeps its direction).
+        if old.autoPick != config.autoPick, choice == .auto, stopped { choose(.auto) }
+        // Технический режим turned off: left too (bypass servers on Wi-Fi again locked).
+        if !config.techModeOn { UserDefaults.standard.set(false, forKey: TechMode.key) }
+        // The Live Activity turned off ends; turned on, it starts (LiveActivityController.enabled).
+        if old.liveActivityOn != config.liveActivityOn, let vpn {
+            LiveActivityController.sync(vpn.state, server: selected?.name, paused: vpnPaused)
+        }
+        #if TITAN_PAYMENTS
+        // An endpoint for the first time: the purchases kept for it go now, not at the next launch.
+        if old.purchaseEndpoint == nil, config.purchaseEndpoint != nil {
+            Task { await AppStorePurchases.shared.deliverUnfinished() }
+        }
+        #endif
+    }
+
+    /// The choice as the config allows it: «Авто · объезды» turned off (routes.autoBypass) goes to
+    /// «Авто» while stopped, to the same direction picked by hand on the way; the check's own
+    /// «Авто · объезды» with the check turned off (routes.restrictedDetection), which would never
+    /// go back by itself, to «Авто» while stopped, or stays as if tapped.
+    private func fitChoice(stopped: Bool) {
+        if routeChoice.isBypass && !remote.autoBypassOn {
+            if stopped { choose(.auto) } else { setChoice(.manual) }
+        } else if routeChoice == .bypassDetected && !remote.detectionOn {
+            if stopped { choose(.auto) } else { setChoice(.bypass) }
         }
     }
 
@@ -408,6 +502,10 @@ final class AppStore: ObservableObject {
             // Another key: the old one's account (devices, username) isn't this one's.
             if subscription?.keyToken != sub.keyToken { account = nil }
             subscription = sub
+            // The panel's config first: an inline one is in force before the pick is settled
+            // below, and the choice as the config in force allows it.
+            updateRemote(from: sub.info)
+            fitChoice(stopped: vpn.map { routeStopped($0) } ?? false)
             Task { await Reminders.update(for: sub.info) }
             if let data = try? JSONEncoder().encode(sub) { UserDefaults.standard.set(data, forKey: subKey) }
             if selectedId == nil || !sub.servers.contains(where: { $0.id == selectedId }) {

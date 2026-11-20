@@ -363,6 +363,8 @@ struct TechModeView: View {
                 tricksCard
                 icmpCard
                 card("Dynamic Island", islandRows, caption: Self.islandCaption)
+                card("Удалённые настройки", remoteRows,
+                     caption: "Настройки из панели (docs/BACKEND-CONFIG.md): заголовки подписки titan-config (JSON в base64) и titan-config-url (ссылка на JSON, ETag). Обновляются с каждым обновлением подписки и при открытии приложения не чаще раза в 15 мин; без заголовков действуют последние сохранённые. Ничего не прислано — всё как по умолчанию.")
                 card("Память туннеля", memRows,
                      caption: "Туннелю VPN iOS даёт около 50 МБ и при превышении завершает его. За 8 МБ до лимита Go сначала возвращает свободную память; если не хватило (за 3 МБ до лимита — сразу), туннель перезапускает Xray, не выключая VPN, но только если это освободит хотя бы 3 МБ сверх того, что было после прошлого запуска Xray (в журнале — когда новый Xray проверил серверы, через 5–25 с после перезапуска). Перезапуски, которые не держатся, идут всё реже (до раза в 4 мин), у самого лимита — уже через 10 с после прошлого. При смене сети Xray перезапускается не чаще раза в 20 с; та же сеть после паузы короче 15 с с тем же адресом — без перезапуска. Обновляется каждые 2 с.")
                 journalCard
@@ -555,6 +557,42 @@ struct TechModeView: View {
 
     /// The Live Activity now and its journal (LiveActivityController.diagnostics).
     private var islandRows: [(String, String)] { LiveActivityController.diagnostics }
+
+    /// The panel's config in force (RemoteConfig): where from, and what each switch does now.
+    private var remoteRows: [(String, String)] {
+        let c = store.remote
+        func on(_ b: Bool) -> String { b ? "да" : "нет" }
+        var from = "не приходили — всё по умолчанию"
+        if let src = RemoteConfig.source {
+            let host: String = src.url.flatMap { URL(string: $0)?.host } ?? ""
+            let header = src.kind == "url" ? "titan-config-url (\(host))" : "titan-config"
+            let etag = src.etag.map { ", ETag \($0)" } ?? ""
+            from = "\(header), \(stamp(src.at))\(etag)"
+        }
+        let limits = c.roadLimits
+        var rows: [(String, String)] = [
+            ("Источник", from),
+            ("Схема", c.version.map { "\($0) (приложение читает \(RemoteConfig.schema))" } ?? "не указана"),
+            ("Оплата", "\(on(c.paymentsOn)); App Store \(on(c.appStoreOn)), другие методы \(on(c.otherMethodsOn)), кабинет \(on(c.cabinetOn))"),
+            ("Адрес покупок", c.purchaseEndpoint?.host ?? "нет — покупки ждут"),
+            ("Объявление", c.notice.map { n in "\(n.warning ? "warning" : "info"): \(n.text)" } ?? "нет"),
+            ("Техработы", c.maintenanceText ?? "нет"),
+            ("Сборка", "эта \(RemoteConfig.build); minBuild \(c.update?.minBuild ?? 0), latestBuild \(c.update?.latestBuild ?? 0)"
+                + (c.mustUpdate ? " — нужно обновить" : "")),
+            ("Поддержка", c.supportURL?.host ?? "из подписки или бот"),
+        ]
+        let auto = c.autoPick == .unlimited ? "unlimited" : "best"
+        let list: String
+        switch c.manualList {
+        case .collapsed: list = "collapsed"
+        case .expanded: list = "expanded"
+        case .hidden: list = "hidden"
+        }
+        rows.append(("Маршруты", "auto \(auto), autoBypass \(on(c.autoBypassOn)), manualList \(list), bypassTab \(on(c.bypassTabOn)), restrictedDetection \(on(c.detectionOn))"))
+        rows.append(("Дороги", "свободно < \(limits.good) мс, плотное < \(limits.calm) мс"))
+        rows.append(("Функции", "liveActivity \(on(c.liveActivityOn)), techMode \(on(c.techModeOn)), animations \(on(c.animationsOn)), tabSwipe \(on(c.tabSwipeOn))"))
+        return rows
+    }
 
     private static let islandCaption = "iOS сама завершает Live Activity через 8 часов после запуска и сразу убирает её из Dynamic Island (на экране блокировки карточка остаётся ещё до 4 часов). Запустить новую приложение может, только пока открыто, или по нажатию на Titan VPS в Пункте управления, Siri и кнопки Live Activity, поэтому при открытии приложения Live Activity старше часа заменяется новой. «Завершена iOS» примерно через 8 часов после запуска — это и есть лимит; «убрана с экрана блокировки» — её смахнули или прошли ещё 4 часа. Время — когда приложение это заметило."
 
@@ -834,6 +872,7 @@ struct TechModeView: View {
         if let icmp, icmp.connected { add("ICMP-туннель", icmp.rows()) }
         add("Приёмы против блокировок", trickRows)
         add("Dynamic Island", islandRows)
+        add("Удалённые настройки", remoteRows)
         add("Память туннеля", memRows)
         out += "\n== Журнал ==\n" + (journal.isEmpty ? "пусто" : journal.joined(separator: "\n")) + "\n"
         return out
