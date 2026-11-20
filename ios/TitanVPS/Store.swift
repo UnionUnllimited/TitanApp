@@ -56,8 +56,7 @@ final class AppStore: ObservableObject {
     /// within a few seconds of it). Not published: a screen that shows it redraws by itself.
     private(set) var remoteCheck: RemoteCheck?
     /// The panel's blocks closed by their × (RemoteBlock.dismissible), by id: not shown again here.
-    @Published private(set) var closedBlocks: Set<String> = Set(UserDefaults.standard.stringArray(forKey: AppStore.closedBlocksKey) ?? [])
-    static let closedBlocksKey = "titan.blocksClosed"
+    @Published private(set) var closedBlocks: Set<String> = Set(UserDefaults.standard.stringArray(forKey: RemoteConfigCache.closedBlocksKey) ?? [])
 
     struct RemoteCheck: Equatable {
         enum Result: Equatable {
@@ -389,7 +388,7 @@ final class AppStore: ObservableObject {
         remotePoll = nil
         guard on else { return }
         refreshRemote()
-        remotePoll = Task { [weak self] in
+        remotePoll = Task { @MainActor [weak self] in
             while true {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard !Task.isCancelled, let self else { return }
@@ -531,8 +530,9 @@ final class AppStore: ObservableObject {
     /// A block's ×: not shown on this device again (the last 200 closed are remembered).
     func closeBlock(_ id: String) {
         guard !closedBlocks.contains(id) else { return }
-        let saved = Array(((UserDefaults.standard.stringArray(forKey: Self.closedBlocksKey) ?? []) + [id]).suffix(200))
-        UserDefaults.standard.set(saved, forKey: Self.closedBlocksKey)
+        let key = RemoteConfigCache.closedBlocksKey
+        let saved = Array(((UserDefaults.standard.stringArray(forKey: key) ?? []) + [id]).suffix(200))
+        UserDefaults.standard.set(saved, forKey: key)
         closedBlocks = Set(saved)
     }
 

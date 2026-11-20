@@ -836,6 +836,8 @@ extension RemoteConfig {
 enum RemoteConfigCache {
     static let key = "titan.remoteConfig"
     static let sourceKey = "titan.remoteConfigSource"
+    /// The panel's blocks closed by hand (AppStore.closeBlock): their ids, the last 200.
+    static let closedBlocksKey = "titan.blocksClosed"
     private static let lock = NSLock()
     private static var stored: RemoteConfig = {
         guard let data = UserDefaults.standard.data(forKey: key),
